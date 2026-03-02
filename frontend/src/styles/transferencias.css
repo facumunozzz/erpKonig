@@ -1,0 +1,440 @@
+/* === Página de transferencias === */
+.transferencias-page {
+  padding: 20px;
+}
+
+/* === Acciones (filtros/botones superiores) === */
+.acciones {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+/* === Tabla de transferencias === */
+.tabla-transferencias {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 15px;
+}
+
+.tabla-transferencias th,
+.tabla-transferencias td {
+  border: 1px solid #ccc;
+  padding: 10px;
+  text-align: center;
+}
+
+.tabla-transferencias th {
+  background-color: #f2f2f2;
+}
+
+/* Interacciones (hover/active) */
+.tabla-transferencias tbody tr {
+  transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+.tabla-transferencias tbody tr:hover {
+  background-color: #f0f4ff;
+  transform: scale(1.01);
+  cursor: pointer;
+}
+
+.tabla-transferencias tbody tr:active {
+  background-color: #d9e4ff;
+  transform: scale(0.995);
+}
+
+/* === Modal genérico de formulario === */
+.modal-form {
+  position: fixed;
+  top: 10%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  padding: 30px;
+  border: 1px solid #aaa;
+  box-shadow: 0 0 10px #888;
+  z-index: 10;
+}
+
+.modal-form h3 {
+  margin-top: 0;
+}
+
+/* === Página Nueva Transferencia (nt-*) === */
+.nueva-transferencia-page {
+  display: grid;
+  gap: 14px;
+}
+
+.nt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.nt-volver {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.nt-error {
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.nt-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.nt-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.nt-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nt-field.small {
+  max-width: 160px;
+}
+
+.nt-field input {
+  padding: 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+}
+
+.nt-field input:focus {
+  border-color: #007acc;
+  box-shadow: 0 0 0 3px rgba(0, 122, 204, 0.15);
+}
+
+.nt-picked {
+  font-size: 0.9rem;
+  color: #065f46;
+}
+
+/* Sugerencias/autocomplete */
+.nt-sugs {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  z-index: 10;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.nt-sugs li {
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.nt-sugs li:hover {
+  background: #f3f4f6;
+}
+
+/* Acciones de formulario */
+.nt-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+/* Botones */
+.btn-light {
+  padding: 9px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn-light:hover {
+  background: #f3f4f6;
+}
+
+.btn-primary {
+  padding: 9px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #1f8a36;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* === Título de módulo (h2) === */
+h2.module-title {
+  font-family: 'Poppins', 'Segoe UI', sans-serif;
+  font-size: 1.8rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  background: linear-gradient(90deg, #004080, #0059b3);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 1rem;
+  position: relative;
+  padding-bottom: 0.4rem;
+  text-transform: uppercase;
+  text-shadow: 0 3px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* Línea inferior animada del título */
+h2.module-title::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  height: 3px;
+  background: linear-gradient(90deg, #004080, #0059b3);
+  border-radius: 2px;
+  transition: width 0.4s ease-in-out;
+}
+
+h2.module-title:hover::after {
+  width: 100%;
+}
+
+/* === Tabla de movimientos (detalle) === */
+.tabla-movimientos {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tabla-movimientos th,
+.tabla-movimientos td {
+  border: 1px solid #ccc;
+  padding: 4px 6px;
+  text-align: left;
+}
+
+.tabla-movimientos th {
+  background-color: #f5f5f5;
+  font-weight: bold;
+}
+
+.tabla-movimientos input {
+  width: 90%;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+/* =========================
+   PAGINADO PRO (estilo empresarial)
+   ========================= */
+
+.paginado-pro {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.paginado-pro .paginado-info {
+  font-size: 13px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.paginado-pro .paginado-size select {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 13px;
+  background: #fff;
+}
+
+.paginado-pro .paginado-goto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.paginado-pro .paginado-goto input {
+  width: 56px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 13px;
+}
+
+.paginado-pro .paginado-botones {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.paginado-pro .pg-btn {
+  min-width: 34px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.paginado-pro .pg-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.paginado-pro .pg-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.paginado-pro .pg-btn.activo {
+  border-color: #007acc;
+  background: #007acc;
+  color: #fff;
+  font-weight: 700;
+}
+
+.paginado-pro .pg-dots {
+  padding: 0 6px;
+  color: #64748b;
+}
+
+.clasif-table {
+  width: 100%;
+  margin-top: 20px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 14px;
+}
+
+.clasif-header,
+.clasif-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  align-items: center;
+  padding: 10px 14px;
+}
+
+.clasif-header {
+  background: #f3f6f9;
+  font-weight: 600;
+  border-bottom: 1px solid #ddd;
+}
+
+.clasif-row {
+  border-bottom: 1px solid #eee;
+}
+
+.clasif-row:last-child {
+  border-bottom: none;
+}
+
+.clasif-row:hover {
+  background: #fafafa;
+}
+
+.clasif-row .campo {
+  font-weight: 500;
+}
+
+.clasif-row input[type="checkbox"] {
+  transform: scale(1.1);
+  cursor: pointer;
+}
+
+.clasif-row button {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.btn-light.activo {
+  filter: brightness(0.95);
+  font-weight: 600;
+}
+
+.nt-subtitle {
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.nt-footer {
+  margin-top: 15px;
+  display: flex;
+  gap: 10px;
+}
+
+.nt-btn-primary {
+  background: #1e7f4f;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.nt-btn-primary:hover {
+  background: #17643f;
+}
+
+.nt-btn-secondary {
+  background: #ddd;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.nt-btn-danger {
+  background: #c0392b;
+  color: white;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.nt-btn-danger:hover {
+  background: #a93226;
+}
+
+.nt-field.full {
+  flex: 1;
+}

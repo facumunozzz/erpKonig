@@ -1,0 +1,426 @@
+/* === Contenedor principal === */
+.stock-container {
+  margin-top: 20px;
+}
+
+/* === Acciones (filtros y botones) === */
+.acciones {
+  margin-bottom: 15px;
+  display: flex;
+  gap: 10px;
+}
+
+.acciones input {
+  padding: 6px;
+}
+
+.acciones button {
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  background-color: #007acc;
+  color: white;
+  cursor: pointer;
+}
+
+/* === Tablas === */
+.tabla-stock-container,
+.tabla-articulos-container {
+  overflow-x: auto;          /* Scroll horizontal solo en tablas */
+  margin-top: 10px;
+}
+
+.tabla-stock {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;           /* letra más compacta */
+  white-space: nowrap;       /* evita que se rompan textos */
+}
+
+.tabla-stock th,
+.tabla-stock td {
+  border: 1px solid #ddd;
+  padding: 4px 6px;
+  text-align: left;
+  min-width: 120px;          /* ancho mínimo para columnas */
+}
+
+.tabla-stock th {
+  background: #f4f4f4;
+  font-weight: 600;
+}
+
+.tabla-stock input {
+  width: 100%;
+  padding: 4px;
+  box-sizing: border-box;
+}
+
+.tabla-stock th input {
+  width: 95%;
+  font-size: 12px;
+  padding: 2px;
+}
+
+/* === Paginado === */
+.paginado {
+  margin-top: 15px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.paginado button {
+  padding: 6px 10px;
+  border: 1px solid #007acc;
+  border-radius: 3px;
+  background-color: white;
+  cursor: pointer;
+}
+
+.paginado button.activo {
+  background-color: #007acc;
+  color: white;
+  font-weight: bold;
+}
+
+/* === Modales === */
+.modal {
+  position: fixed;
+  inset: 0;                       /* top:0, left:0, right:0, bottom:0 */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #fff;
+  width: 300px;
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 0 15px rgba(0,0,0,0.2);
+  text-align: center;
+}
+
+.modal-content input {
+  width: 100%;
+  padding: 8px;
+  margin: 15px 0;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+}
+
+.modal-botones {
+  display: flex;
+  justify-content: space-between;
+}
+
+.modal-botones button {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.modal-botones button:first-child {
+  background-color: #007bff;
+  color: white;
+}
+
+.modal-botones button:last-child {
+  background-color: #ccc;
+}
+
+/* === Títulos de módulo === */
+h2.module-title {
+  font-family: 'Poppins', 'Segoe UI', sans-serif;
+  font-size: 1.8rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+  padding-bottom: 0.4rem;
+  position: relative;
+  background: linear-gradient(90deg, #004080, #0059b3);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 3px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* Línea inferior animada */
+h2.module-title::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  height: 3px;
+  background: linear-gradient(90deg, #004080, #0059b3);
+  border-radius: 2px;
+  transition: width 0.4s ease-in-out;
+}
+
+h2.module-title:hover::after {
+  width: 100%;
+}
+
+/* =========================
+   PAGINADO PRO (estilo empresarial)
+   ========================= */
+
+.paginado-pro {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.paginado-pro .paginado-info {
+  font-size: 13px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.paginado-pro .paginado-size select {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 13px;
+  background: #fff;
+}
+
+.paginado-pro .paginado-goto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.paginado-pro .paginado-goto input {
+  width: 56px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 13px;
+}
+
+.paginado-pro .paginado-botones {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.paginado-pro .pg-btn {
+  min-width: 34px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.paginado-pro .pg-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.paginado-pro .pg-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.paginado-pro .pg-btn.activo {
+  border-color: #007acc;
+  background: #007acc;
+  color: #fff;
+  font-weight: 700;
+}
+
+.paginado-pro .pg-dots {
+  padding: 0 6px;
+  color: #64748b;
+}
+
+/* ====== celda almacén + botón detalle ====== */
+.almacen-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.btn-detalle-stock {
+  border: 1px solid #ddd;
+  background: #fff;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.btn-detalle-stock:hover {
+  background: #f3f3f3;
+}
+
+/* ====== panel lateral flotante ====== */
+.stock-panel-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.15);
+  z-index: 999;
+}
+
+.stock-panel {
+  position: fixed;
+  top: 90px;
+  right: 18px;
+  width: 420px;
+  max-height: calc(100vh - 120px);
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.18);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.stock-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #eee;
+}
+
+.stock-panel-title {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.stock-panel-sub {
+  font-size: 12px;
+  color: #444;
+  margin-top: 4px;
+}
+
+.stock-panel-close {
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.stock-panel-body {
+  padding: 10px 14px 14px 14px;
+  overflow: auto;
+}
+
+.stock-panel-info {
+  padding: 12px 14px;
+  color: #444;
+}
+
+.stock-panel-error {
+  padding: 12px 14px;
+  color: #b00020;
+  font-weight: 600;
+}
+
+/* ====== accordion ====== */
+.stock-acc {
+  border: 1px solid #eee;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.stock-acc-head {
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #fafafa;
+  border-bottom: 1px solid #eee;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.stock-acc-item {
+  border-bottom: 1px solid #eee;
+}
+
+.stock-acc-row {
+  width: 100%;
+  border: none;
+  background: #fff;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  gap: 10px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.stock-acc-row:hover {
+  background: #f8f8f8;
+}
+
+.stock-acc-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stock-acc-left .caret {
+  width: 18px;
+  display: inline-block;
+}
+
+.stock-acc-left .label {
+  font-size: 12.5px;
+}
+
+.stock-acc-detail {
+  padding: 8px 12px 12px 38px;
+  background: #fcfcfc;
+}
+
+.stock-acc-detail-head {
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 12px;
+  margin-bottom: 6px;
+  color: #333;
+}
+
+.stock-acc-detail-row {
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 12.5px;
+  border-top: 1px dashed #eee;
+}
+
+.num {
+  text-align: right;
+}
+

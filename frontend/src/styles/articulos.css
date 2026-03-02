@@ -1,0 +1,464 @@
+/* === Contenedor principal === */
+.articulos-container {
+  margin-top: 20px;
+  padding: 0 10px;
+}
+
+/* === Título (idéntico a stock) === */
+h2.module-title {
+  font-family: "Poppins", "Segoe UI", sans-serif;
+  font-size: 1.8rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  padding-bottom: 0.4rem;
+  position: relative;
+  background: linear-gradient(90deg, #004080, #0059b3);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+h2.module-title::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  height: 3px;
+  background: linear-gradient(90deg, #004080, #0059b3);
+  border-radius: 2px;
+  transition: width 0.4s ease-in-out;
+}
+
+h2.module-title:hover::after {
+  width: 100%;
+}
+
+/* === Acciones === */
+.nuevo-btn {
+  padding: 6px 12px;
+  background-color: #007acc;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  margin-right: 8px;
+}
+
+.nuevo-btn:hover {
+  background-color: #0063a6;
+}
+
+/* === Checklist === */
+.checklist-panel {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 8px;
+  margin: 10px 0 15px 0;
+  padding: 10px;
+  background: #f9fafb;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.checklist-panel label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 3px 6px;
+  background: white;
+  border: 1px solid #cbd5e0;
+  border-radius: 5px;
+}
+
+.checklist-panel label:hover {
+  background: #edf2f7;
+}
+
+/* === Tabla Artículos (idéntico a STOCK) === */
+.tabla-articulos-container {
+  overflow-x: auto;
+}
+
+.tabla-articulos {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.tabla-articulos th,
+.tabla-articulos td {
+  border: 1px solid #ddd;
+  padding: 5px 8px;
+  min-width: 140px;
+}
+
+.tabla-articulos th {
+  background: #f4f4f4;
+  font-weight: 600;
+}
+
+.tabla-articulos input {
+  width: 100%;
+  padding: 4px 6px;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+
+/* === Botón borrar === */
+.borrar-btn {
+  padding: 5px 8px;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.borrar-btn:hover {
+  background-color: #bb2d3b;
+}
+
+/* === Paginado === */
+.paginado {
+  margin-top: 15px;
+  display: flex;
+  gap: 5px;
+}
+
+.paginado button {
+  padding: 6px 10px;
+  border: 1px solid #007acc;
+  background-color: white;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.paginado button.activo {
+  background-color: #007acc;
+  color: white;
+  font-weight: bold;
+}
+
+/* === Modal (igual a stock.css) === */
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0,0,0,0.5);
+}
+
+.modal-contenido {
+  background: white;
+  width: 380px;
+  padding: 20px;
+  border-radius: 12px;
+}
+
+.modal-body input {
+  width: 100%;
+  padding: 8px;
+  margin: 8px 0;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+.campo-linea {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 10px;
+}
+
+.campo-linea input {
+  padding: 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+/* ======== MODAL DRAGGABLE Y RESIZABLE ======== */
+
+.modal-contenido {
+  position: absolute !important;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+
+  resize: both;          /* permite redimensionar */
+  overflow: auto;
+  cursor: default;
+
+  max-width: 90%;
+  max-height: 90%;
+}
+
+/* zona para arrastrar */
+.modal-header {
+  cursor: move;
+  user-select: none;
+}
+
+.paginado-empresarial {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 15px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.paginado-empresarial select,
+.paginado-empresarial input {
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  width: 70px;
+}
+
+.pag-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.pag-nav button {
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  background: white;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.pag-nav button.activo {
+  background: #007acc;
+  color: white;
+  font-weight: bold;
+}
+
+.pag-nav button:hover {
+  background: #e6f0fa;
+}
+
+/* =========================
+   PAGINADO PRO (estilo imagen)
+   ========================= */
+.paginado-pro {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.paginado-pro .paginado-info {
+  font-size: 13px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.paginado-pro .paginado-size select {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 13px;
+  background: #fff;
+}
+
+.paginado-pro .paginado-goto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.paginado-pro .paginado-goto input {
+  width: 56px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 13px;
+}
+
+.paginado-pro .paginado-botones {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.paginado-pro .pg-btn {
+  min-width: 34px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.paginado-pro .pg-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.paginado-pro .pg-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.paginado-pro .pg-btn.activo {
+  border-color: #007acc;
+  background: #007acc;
+  color: #fff;
+  font-weight: 700;
+}
+
+.paginado-pro .pg-dots {
+  padding: 0 6px;
+  color: #64748b;
+}
+
+/* ===========================
+   BOTÓN EDITAR EN TABLAS
+=========================== */
+.btn-editar {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid #1f4fd8;
+  background: #ffffff;
+  color: #1f4fd8;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.btn-editar:hover {
+  background: #1f4fd8;
+  color: #ffffff;
+}
+
+.btn-editar:active {
+  transform: scale(0.97);
+}
+
+/* Alineación de la columna acciones */
+.tabla-articulos td:last-child,
+.tabla-articulos th:last-child {
+  text-align: center;
+  width: 90px;
+}
+
+/* =========================
+   PAGINADO PRO (igual a stock.css)
+   ========================= */
+
+.paginado-pro {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.paginado-pro .paginado-info {
+  font-size: 13px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.paginado-pro .paginado-size select {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 13px;
+  background: #fff;
+}
+
+.paginado-pro .paginado-goto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.paginado-pro .paginado-goto input {
+  width: 56px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 13px;
+}
+
+.paginado-pro .paginado-botones {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.paginado-pro .pg-btn {
+  min-width: 34px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.paginado-pro .pg-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.paginado-pro .pg-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.paginado-pro .pg-btn.activo {
+  border-color: #007acc;
+  background: #007acc;
+  color: #fff;
+  font-weight: 700;
+}
+
+.paginado-pro .pg-dots {
+  padding: 0 6px;
+  color: #64748b;
+}
+
+.btn-eliminar {
+  background: #dc2626;
+  color: white;
+  border: 1px solid #b91c1c;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.btn-eliminar:hover {
+  background: #b91c1c;
+}
