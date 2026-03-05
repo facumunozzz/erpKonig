@@ -13,27 +13,59 @@ exports.getAllArticulos = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    const result = await pool.request().query(`
+    // 1) base
+    const base = await pool.request().query(`
       SET NOCOUNT ON;
 
       SELECT 
-        id_articulo,
-        codigo,
-        descripcion,
-        folio,
-        proveedor,
-        ubicacion,
-        cantidad,
-        punto_pedido,
-        tipo
-      FROM articulos
-      ORDER BY codigo
+        a.id_articulo,
+        a.codigo,
+        a.descripcion,
+        a.folio,
+        a.proveedor,
+        a.punto_pedido,
+        a.tipo
+      FROM dbo.articulos a
+      ORDER BY a.codigo;
     `);
 
-    res.json(result.recordset);
+    const rows = base.recordset || [];
+    if (!rows.length) return res.json([]);
+
+    // 2) valores de clasificaciones SOLO de activas
+    const vals = await pool.request().query(`
+      SET NOCOUNT ON;
+
+      SELECT
+        ac.id_articulo,
+        LTRIM(RTRIM(c.nombre)) AS nombre_clasif,
+        ac.valor
+      FROM dbo.articulo_clasificaciones ac
+      INNER JOIN dbo.clasificaciones c
+        ON c.id_clasificacion = ac.id_clasificacion
+      WHERE c.activa = 1;
+    `);
+
+    // indexar por id_articulo
+    const map = new Map();
+    for (const v of vals.recordset || []) {
+      const id = Number(v.id_articulo);
+      if (!map.has(id)) map.set(id, {});
+      const key = String(v.nombre_clasif ?? "").trim();
+      if (key) map.get(id)[key] = v.valor ?? "";
+    }
+
+    const out = rows.map((a) => ({
+      ...a,
+      clasificaciones: map.get(Number(a.id_articulo)) || {},
+    }));
+
+    return res.json(out);
   } catch (err) {
     console.error("Error en getAllArticulos:", err);
-    res.status(500).json({ error: "Error al obtener artículos", detalle: err.message });
+    return res
+      .status(500)
+      .json({ error: "Error al obtener artículos", detalle: err.message });
   }
 };
 

@@ -424,3 +424,258 @@ h2.module-title:hover::after {
   text-align: right;
 }
 
+.modal-wide {
+  max-width: 720px;
+}
+
+.mini-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.mini-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #eee;
+  vertical-align: middle;
+}
+
+.mini-name { width: 60%; font-weight: 600; }
+.mini-actions { width: 40%; text-align: right; }
+
+.mini-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+.btn-edit, .btn-del, .btn-cancel {
+  border: none;
+  padding: 7px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-left: 8px;
+  font-weight: 600;
+}
+
+.btn-edit { background: #bfe0ff; }
+.btn-del  { background: #ffbf9c; }
+.btn-cancel { background: #eee; }
+
+.ubis-grid {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.ubis-left {
+  border-right: 1px solid #eee;
+  padding-right: 10px;
+}
+
+.ubis-dep {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 8px 6px;
+  cursor: pointer;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ubis-dep.open { background: #f5f8ff; border-radius: 6px; }
+
+.ubis-dep .tri { width: 18px; display: inline-block; }
+.ubis-dep .label { flex: 1; }
+
+.ubis-right {
+  padding-left: 6px;
+}
+
+.ubis-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.ubis-name { font-weight: 600; }
+.ubis-actions { text-align: right; white-space: nowrap; }
+
+.ubis-empty {
+  padding: 14px 10px;
+  color: #666;
+}
+
+/* =========================
+   MODALES: tamaño + scroll
+   ========================= */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;              /* evita que pegue contra bordes */
+  z-index: 9999;
+}
+
+.modal-content.modal-wide {
+  width: min(900px, 95vw);
+  max-height: 85vh;           /* clave: limita altura */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;           /* el scroll va adentro */
+}
+
+/* Header del modal (opcional sticky) */
+.modal-content.modal-wide h3 {
+  margin: 0;
+  padding: 14px 18px;
+  font-size: 18px;
+  font-weight: 800;
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 2;
+  border-bottom: 1px solid #eee;
+}
+
+/* Contenedor scrolleable del contenido */
+.modal-scroll {
+  padding: 12px 18px;
+  overflow-y: auto;           /* clave: permite bajar */
+  max-height: calc(85vh - 120px); /* deja lugar para header + botones */
+}
+
+/* Footer fijo con botones */
+.modal-footer {
+  padding: 12px 18px;
+  border-top: 1px solid #eee;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  background: #fff;
+}
+
+/* =========================
+   Listado compacto (DEPÓSITOS)
+   ========================= */
+
+.mini-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;            /* más chico */
+}
+
+.mini-table tr td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: middle;
+}
+
+.mini-name {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 340px;           /* evita que empuje botones */
+}
+
+.mini-actions {
+  width: 220px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Botones compactos */
+.btn-edit, .btn-del, .btn-cancel {
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+/* =========================
+   UBICACIONES: layout + scroll
+   ========================= */
+
+.ubis-grid {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 18px;
+}
+
+.ubis-left {
+  border-right: 1px solid #eee;
+  padding-right: 12px;
+  max-height: 60vh;          /* scroll independiente si hay muchos depósitos */
+  overflow-y: auto;
+}
+
+.ubis-right {
+  max-height: 60vh;          /* scroll independiente si hay muchas ubicaciones */
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.ubis-dep {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ubis-dep .tri {
+  width: 18px;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.ubis-row {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 14px;
+}
+
+.ubis-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mini-input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 14px;
+}
+
+.almacen-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.almacen-cell span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

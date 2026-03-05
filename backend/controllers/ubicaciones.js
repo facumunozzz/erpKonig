@@ -273,6 +273,13 @@ exports.update = async (req, res) => {
 // DELETE /ubicaciones/:id
 // (si preferís, lo podés cambiar por "activa=0" en vez de borrar)
 // ============================================================================
+// ============================================================================
+// DELETE /ubicaciones/:id
+// BORRADO REAL + borra stock asociado a ESA ubicación (NO borra la tabla)
+// - borra dbo.stock_ubicaciones donde id_ubicacion = :id
+// - borra dbo.stock donde id_ubicacion = :id (si existe esa columna)
+// - borra dbo.ubicaciones (la fila)
+// ============================================================================
 exports.remove = async (req, res) => {
   const id = asInt(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: "ID inválido" });
@@ -281,21 +288,12 @@ exports.remove = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    // soft delete: activa = 0
-    const r = await pool
-      .request()
+    await pool.request()
       .input("id", sql.Int, id)
-      .query(`
-        UPDATE dbo.ubicaciones SET activa = 0 WHERE id_ubicacion = @id;
-        SELECT @@ROWCOUNT AS affected;
-      `);
-
-    const affected = Number(r.recordset?.[0]?.affected || 0);
-    if (!affected) return res.status(404).json({ error: "Ubicación no encontrada" });
+      .query(`EXEC dbo.sp_borrar_ubicacion @id_ubicacion = @id;`);
 
     return res.json({ ok: true });
   } catch (err) {
-    console.error("ubicaciones.remove:", err);
     return res.status(500).json({ error: "Error al eliminar ubicación", detalle: err.message });
   }
 };

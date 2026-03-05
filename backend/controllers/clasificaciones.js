@@ -29,7 +29,7 @@ exports.getObligatorias = async (_req, res) => {
     res.json(result.recordset);
   } catch (err) {
     console.error("clasificaciones.getObligatorias:", err);
-    res.status(500).json({ error: "Error al obtener clasificacioens obligatorias" });
+    res.status(500).json({ error: "Error al obtener clasificaciones obligatorias" });
   }
 };
 

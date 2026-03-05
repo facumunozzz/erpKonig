@@ -6,15 +6,27 @@ import ArticuloCrearModal from "../components/ArticuloCrearModal";
 import ArticuloEditarModal from "../components/ArticuloEditarModal";
 import ArticuloEliminarModal from "../components/ArticuloEliminarModal";
 
-const CAMPOS_OCULTOS = ["almacen", "cantidad", "traspasa", "ubicacion"]; // traspasa fuera
+const CAMPOS_OCULTOS = ["almacen", "cantidad", "traspasa", "ubicacion"];
+
+// ✅ columnas base fijas (las del artículo)
+const BASE_COLS = [
+  "id_articulo",
+  "codigo",
+  "descripcion",
+  "folio",
+  "proveedor",
+  "punto_pedido",
+  "tipo",
+];
 
 export default function Articulos() {
   const [articulos, setArticulos] = useState([]);
   const [filtered, setFiltered] = useState([]);
+
   const [openEliminar, setOpenEliminar] = useState(false);
   const [rowEliminar, setRowEliminar] = useState(null);
 
-  // ================= PAGINADO PRO (copiado de Stock) =================
+  // ================= PAGINADO PRO =================
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [goTo, setGoTo] = useState("");
@@ -23,47 +35,112 @@ export default function Articulos() {
   const [openEditar, setOpenEditar] = useState(false);
   const [rowEditar, setRowEditar] = useState(null);
 
+  // ✅ clasificaciones activas (definen columnas dinámicas)
+  const [clasifActivas, setClasifActivas] = useState([]); // [{id_clasificacion,nombre,...}]
+
   useEffect(() => {
     fetchArticulos();
+    fetchClasifActivas();
   }, []);
 
-  const fetchArticulos = () => {
-    api
-      .get("/articulos")
-      .then((res) => {
-        setArticulos(res.data || []);
-        setFiltered(res.data || []);
-        setCurrentPage(1); // reset
-      })
-      .catch((err) => console.error(err));
+  const fetchArticulos = async () => {
+    try {
+      const res = await api.get("/articulos");
+      const rows = res.data || [];
+      setArticulos(rows);
+      setFiltered(rows);
+      setCurrentPage(1);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
-  // columnas: union de keys + "tipo" forzado
-  const columnas = useMemo(() => {
-    if (!articulos?.length) return [];
-    const cols = Object.keys(articulos[0] || {})
-      .filter((c) => !CAMPOS_OCULTOS.includes(String(c).toLowerCase()));
-
-    // forzar "tipo"
-    const tieneTipo = cols.some((c) => String(c).toLowerCase() === "tipo");
-    if (!tieneTipo) {
-      const idxDesc = cols.findIndex((c) => String(c).toLowerCase() === "descripcion");
-      if (idxDesc >= 0) cols.splice(idxDesc + 1, 0, "tipo");
-      else cols.push("tipo");
+  const fetchClasifActivas = async () => {
+    try {
+      // ⚠️ Asegurate que exista: GET /clasificaciones/activas
+      const res = await api.get("/clasificaciones/activas");
+      setClasifActivas(res.data || []);
+    } catch (err) {
+      console.error("No se pudieron cargar clasificaciones activas:", err);
+      setClasifActivas([]);
     }
+  };
 
-    return cols;
-  }, [articulos]);
+  // ✅ columnas = base + dinámicas (clasificaciones activas)
+  const columnas = useMemo(() => {
+    // base: usar las que existan en la data (por si el backend no manda todas)
+    const baseSet = new Set(BASE_COLS.map((x) => String(x).toLowerCase()));
+
+    // si el backend trae más keys, agregarlas (excepto ocultas y "clasificaciones")
+    const extraBase =
+      articulos?.length
+        ? Object.keys(articulos[0] || {})
+            .filter((k) => {
+              const kk = String(k).toLowerCase();
+              if (kk === "clasificaciones") return false;
+              if (CAMPOS_OCULTOS.includes(kk)) return false;
+              return !baseSet.has(kk);
+            })
+        : [];
+
+    const base = [...BASE_COLS, ...extraBase].filter((k) => {
+      const kk = String(k).toLowerCase();
+      if (kk === "clasificaciones") return false;
+      return !CAMPOS_OCULTOS.includes(kk);
+    });
+
+    // dinámicas: nombres de clasificaciones activas
+    const dyn = (clasifActivas || [])
+      .map((c) => String(c?.nombre ?? "").trim())
+      .filter(Boolean);
+
+    // evitar duplicados si una clasificación se llama igual que una base
+    const baseNames = new Set(base.map((b) => String(b).toLowerCase()));
+    const dynClean = dyn.filter((d) => !baseNames.has(String(d).toLowerCase()));
+
+    return [...base, ...dynClean];
+  }, [articulos, clasifActivas]);
+
+  const isBaseCol = (k) => {
+    const kk = String(k).toLowerCase();
+    // si existe como propiedad directa del objeto artículo => base
+    // (esto permite que extraBase también funcione)
+    return articulos?.length ? Object.prototype.hasOwnProperty.call(articulos[0] || {}, k) : BASE_COLS.includes(kk);
+  };
+
+  const getCellValue = (a, k) => {
+  if (Object.prototype.hasOwnProperty.call(a || {}, k)) return a?.[k];
+
+  const obj = a?.clasificaciones || {};
+  const key = String(k ?? "").trim();
+
+  if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+
+  // fallback por mayúsculas (por si quedó data vieja guardada en UPPER)
+  const up = key.toUpperCase();
+  if (Object.prototype.hasOwnProperty.call(obj, up)) return obj[up];
+
+  // fallback por búsqueda case-insensitive (último recurso)
+  const found = Object.keys(obj).find((x) => String(x).trim().toLowerCase() === key.toLowerCase());
+  if (found) return obj[found];
+
+  return "";
+};
 
   const handleFilter = (e, key) => {
-    const val = e.target.value.toLowerCase();
+    const val = String(e.target.value ?? "").toLowerCase();
+
     setFiltered(
-      articulos.filter((a) => String(a[key] ?? "").toLowerCase().includes(val))
+      (articulos || []).filter((a) => {
+        const v = getCellValue(a, key);
+        return String(v ?? "").toLowerCase().includes(val);
+      })
     );
+
     setCurrentPage(1);
   };
 
-  // ================= PAGINADO PRO (copiado de Stock) =================
+  // ================= PAGINADO PRO =================
   const totalItems = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
@@ -112,7 +189,10 @@ export default function Articulos() {
         isOpen={openCrear}
         onClose={() => setOpenCrear(false)}
         articulos={articulos}
-        onSaved={fetchArticulos}
+        onSaved={() => {
+          fetchArticulos();
+          fetchClasifActivas(); // por si cambió algo
+        }}
       />
 
       <ArticuloEditarModal
@@ -120,14 +200,20 @@ export default function Articulos() {
         onClose={() => setOpenEditar(false)}
         articuloRow={rowEditar}
         articulos={articulos}
-        onSaved={fetchArticulos}
+        onSaved={() => {
+          fetchArticulos();
+          fetchClasifActivas();
+        }}
       />
 
       <ArticuloEliminarModal
         isOpen={openEliminar}
         onClose={() => setOpenEliminar(false)}
         articuloRow={rowEliminar}
-        onDeleted={fetchArticulos}
+        onDeleted={() => {
+          fetchArticulos();
+          fetchClasifActivas();
+        }}
       />
 
       <div className="tabla-articulos-container">
@@ -139,6 +225,7 @@ export default function Articulos() {
               ))}
               <th>ACCIONES</th>
             </tr>
+
             <tr>
               {columnas.map((col) => (
                 <th key={col}>
@@ -154,10 +241,11 @@ export default function Articulos() {
 
           <tbody>
             {paginated.map((a, i) => (
-              <tr key={i}>
+              <tr key={a?.id_articulo ?? i}>
                 {columnas.map((k) => (
-                  <td key={k}>{String(a[k] ?? "")}</td>
+                  <td key={k}>{String(getCellValue(a, k) ?? "")}</td>
                 ))}
+
                 <td>
                   <button
                     className="btn-editar"
@@ -168,6 +256,7 @@ export default function Articulos() {
                   >
                     Editar
                   </button>
+
                   <button
                     className="btn-eliminar"
                     onClick={() => {
@@ -185,7 +274,7 @@ export default function Articulos() {
         </table>
       </div>
 
-      {/* ================= PAGINADO PRO (copiado de Stock) ================= */}
+      {/* ================= PAGINADO PRO ================= */}
       <div className="paginado-pro">
         <div className="paginado-info">
           Total <b>{totalItems}</b> registros
@@ -237,7 +326,9 @@ export default function Articulos() {
 
           {pageButtons.map((p, idx) =>
             p === "…" ? (
-              <span key={idx} className="pg-dots">…</span>
+              <span key={idx} className="pg-dots">
+                …
+              </span>
             ) : (
               <button
                 key={p}

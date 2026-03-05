@@ -3,6 +3,23 @@ import api from "../api/axiosConfig";
 import * as XLSX from "xlsx";
 import "./../styles/stock.css";
 
+const normalizeHeader = (txt) => {
+  const clean = String(txt || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[.,/]/g, "")       // también saca /
+    .trim();
+
+  const parts = clean.split(/\s+/);
+  return parts
+    .map((p, i) =>
+      i === 0
+        ? p.toLowerCase()
+        : p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()
+    )
+    .join("");
+};
+
 function Stock() {
   const [stock, setStock] = useState([]);
   const [filtered, setFiltered] = useState([]);
@@ -24,6 +41,24 @@ function Stock() {
   const [depositosList, setDepositosList] = useState([]);
   const [depSel, setDepSel] = useState(""); // id_deposito seleccionado
   const [nuevaUbic, setNuevaUbic] = useState(""); // nombre ubicación
+
+  // =========================
+  // MODAL VER DEPÓSITOS
+  // =========================
+  const [modalVerDepositos, setModalVerDepositos] = useState(false);
+  const [depositosVer, setDepositosVer] = useState([]);
+  const [depEditId, setDepEditId] = useState(null);
+  const [depEditNombre, setDepEditNombre] = useState("");
+
+  // =========================
+  // MODAL VER UBICACIONES
+  // =========================
+  const [modalVerUbicaciones, setModalVerUbicaciones] = useState(false);
+  const [depListUbi, setDepListUbi] = useState([]);
+  const [depOpenUbi, setDepOpenUbi] = useState(null); // id_deposito abierto
+  const [ubisPorDep, setUbisPorDep] = useState({}); // { [id_deposito]: ubicaciones[] }
+  const [ubiEditId, setUbiEditId] = useState(null);
+  const [ubiEditNombre, setUbiEditNombre] = useState("");
 
   // =========================
   // PANEL LATERAL (detalle)
@@ -51,6 +86,11 @@ function Stock() {
         setFiltered(rows);
       })
       .catch((err) => console.error(err));
+  };
+
+  const refreshAll = async () => {
+    fetchStock();
+    setDetalleCache({});
   };
 
   const handleFilter = (e, key) => {
@@ -135,7 +175,7 @@ function Stock() {
       alert("Depósito creado correctamente.");
       setNuevoDeposito("");
       setMostrarModal(false);
-      fetchStock();
+      await refreshAll();
     } catch (err) {
       alert("Error al crear el depósito.");
       console.error(err);
@@ -150,7 +190,6 @@ function Stock() {
     const arr = res.data || [];
     setDepositosList(arr);
 
-    // Si no hay selección previa, seteo el primero
     if (arr.length && !depSel) setDepSel(String(arr[0].id_deposito));
   };
 
@@ -178,12 +217,8 @@ function Stock() {
       return;
     }
 
-    // Validación rápida en frontend (opcional): evitar duplicado por lista
-    // (igual el backend lo vuelve a validar y devuelve 409)
     try {
-      const resUb = await api.get("/ubicaciones", {
-        params: { deposito_id },
-      });
+      const resUb = await api.get("/ubicaciones", { params: { deposito_id } });
       const existe = (resUb.data || []).some(
         (u) =>
           String(u.nombre || "").trim().toLowerCase() ===
@@ -194,7 +229,7 @@ function Stock() {
         return;
       }
     } catch {
-      // si falla el GET, seguimos igual (el backend bloquea duplicados)
+      // si falla el GET, seguimos igual
     }
 
     try {
@@ -202,11 +237,7 @@ function Stock() {
       alert("Ubicación creada correctamente.");
       setMostrarModalUbic(false);
       setNuevaUbic("");
-
-      // Si tenés panel abierto y querés ver cambios en el futuro,
-      // esto no afecta cantidades, por eso no refresco stock.
-      // Si preferís, podés dejarlo:
-      // fetchStock();
+      // no refresco stock porque no cambia cantidades
     } catch (err) {
       if (err.response?.status === 409) {
         alert("Esa ubicación ya existe dentro del depósito seleccionado.");
@@ -218,68 +249,237 @@ function Stock() {
   };
 
   // =========================
-  // EXPORTAR EXCEL
+  // VER DEPÓSITOS (modal)
   // =========================
-  // =========================
-// EXPORTAR EXCEL (dinámico por depósitos)
-// =========================
-const exportarExcel = () => {
-  // depósitos existentes según lo que haya en la grilla filtrada
-  const almacenes = Array.from(
-    new Set(
-      (filtered || []).flatMap((it) =>
-        (it.depositos || []).map((d) => String(d.almacen || "").trim()).filter(Boolean)
-      )
-    )
-  ).sort((a, b) => a.localeCompare(b));
+  const abrirVerDepositos = async () => {
+    try {
+      const r = await api.get("/depositos");
+      setDepositosVer(r.data || []);
+      setDepEditId(null);
+      setDepEditNombre("");
+      setModalVerDepositos(true);
+    } catch (e) {
+      alert("No se pudieron cargar los depósitos.");
+      console.error(e);
+    }
+  };
 
-  const headers = [
-    "Código",
-    "Descripción",
-    "Folio",
-    "Proveedor",
-    "Punto Ped",
-    "Tipo",
-    "Cant. Total",
-    ...almacenes.flatMap((alm) => [`Cant. ${alm}`, `Ubicaciones ${alm}`]),
-  ];
+  const iniciarEditarDeposito = (dep) => {
+    setDepEditId(dep.id_deposito);
+    setDepEditNombre(dep.nombre || "");
+  };
 
-  const aoa = [headers];
+  const cancelarEditarDeposito = () => {
+    setDepEditId(null);
+    setDepEditNombre("");
+  };
 
-  (filtered || []).forEach((it) => {
-    const depMap = new Map(
-      (it.depositos || []).map((d) => [String(d.almacen || "").trim(), d])
+  const guardarDeposito = async (id) => {
+    const nombre = String(depEditNombre || "").trim();
+    if (!nombre) return alert("El nombre no puede estar vacío.");
+
+    try {
+      await api.put(`/depositos/${id}`, { nombre });
+      const r = await api.get("/depositos");
+      setDepositosVer(r.data || []);
+      cancelarEditarDeposito();
+      // no afecta stock directo, pero refrescamos por consistencia
+      await refreshAll();
+    } catch (e) {
+      if (e.response?.status === 409)
+        return alert(e.response.data?.error || "Nombre duplicado.");
+      alert("Error al editar depósito.");
+      console.error(e);
+    }
+  };
+
+  const eliminarDeposito = async (dep) => {
+    const ok = window.confirm(
+      `Vas a eliminar el depósito "${dep.nombre}".\n\nATENCIÓN: se borrará TODO el stock dentro de ese depósito (incluyendo ubicaciones).\n\n¿Seguro que querés continuar?`
     );
+    if (!ok) return;
 
-    const row = [
-      it.codigo ?? "",
-      it.descripcion ?? "",
-      it.folio ?? "",
-      it.proveedor ?? "",
-      it.punto_pedido ?? "",
-      it.tipo ?? "",
-      Number(it.cantidad_total ?? 0),
-    ];
+    try {
+      await api.delete(`/depositos/${dep.id_deposito}`, { timeout: 180000 }); // 3 min
+      const r = await api.get("/depositos");
+      setDepositosVer(r.data || []);
+      await refreshAll();
+    } catch (e) {
+      alert("Error al eliminar depósito.");
+      console.error(e);
+    }
+  };
 
-    almacenes.forEach((alm) => {
-      const d = depMap.get(alm);
-      row.push(d ? Number(d.cantidad ?? 0) : 0);
-      row.push(d ? String(d.ubicaciones ?? "") : "");
+  // =========================
+  // VER UBICACIONES (modal)
+  // =========================
+  const abrirVerUbicaciones = async () => {
+    try {
+      const r = await api.get("/depositos");
+      const deps = r.data || [];
+      setDepListUbi(deps);
+      setDepOpenUbi(null);
+      setUbisPorDep({});
+      setUbiEditId(null);
+      setUbiEditNombre("");
+      setModalVerUbicaciones(true);
+    } catch (e) {
+      alert("No se pudieron cargar depósitos.");
+      console.error(e);
+    }
+  };
+
+  const toggleDepositoUbi = async (id_deposito) => {
+    if (depOpenUbi === id_deposito) {
+      setDepOpenUbi(null);
+      return;
+    }
+
+    setDepOpenUbi(id_deposito);
+
+    if (ubisPorDep[id_deposito]) return;
+
+    try {
+      const r = await api.get("/ubicaciones", {
+        params: { deposito_id: id_deposito },
+      });
+      setUbisPorDep((prev) => ({ ...prev, [id_deposito]: r.data || [] }));
+    } catch (e) {
+      alert("No se pudieron cargar ubicaciones.");
+      console.error(e);
+    }
+  };
+
+  const iniciarEditarUbi = (ubi) => {
+    setUbiEditId(ubi.id_ubicacion);
+    setUbiEditNombre(ubi.nombre || "");
+  };
+
+  const cancelarEditarUbi = () => {
+    setUbiEditId(null);
+    setUbiEditNombre("");
+  };
+
+  const guardarUbi = async (id_ubicacion) => {
+    const nombre = String(ubiEditNombre || "").trim();
+    if (!nombre) return alert("El nombre no puede estar vacío.");
+
+    try {
+      await api.put(`/ubicaciones/${id_ubicacion}`, { nombre });
+
+      if (depOpenUbi) {
+        const r = await api.get("/ubicaciones", {
+          params: { deposito_id: depOpenUbi },
+        });
+        setUbisPorDep((prev) => ({ ...prev, [depOpenUbi]: r.data || [] }));
+      }
+
+      cancelarEditarUbi();
+      await refreshAll();
+    } catch (e) {
+      if (e.response?.status === 409)
+        return alert(e.response.data?.error || "Nombre duplicado.");
+      alert("Error al editar ubicación.");
+      console.error(e);
+    }
+  };
+
+  const eliminarUbi = async (ubi) => {
+    const ok = window.confirm(
+      `Vas a eliminar la ubicación "${ubi.nombre}".\n\nATENCIÓN: se borrará TODO el stock asociado a esta ubicación.\n\n¿Seguro que querés continuar?`
+    );
+    if (!ok) return;
+
+    try {
+      await api.delete(`/ubicaciones/${ubi.id_ubicacion}`);
+
+      if (depOpenUbi) {
+        const r = await api.get("/ubicaciones", {
+          params: { deposito_id: depOpenUbi },
+        });
+        setUbisPorDep((prev) => ({ ...prev, [depOpenUbi]: r.data || [] }));
+      }
+
+      await refreshAll();
+    } catch (e) {
+      alert("Error al eliminar ubicación.");
+      console.error(e);
+    }
+  };
+
+  // =========================
+  // EXPORTAR EXCEL (dinámico por depósitos)
+  // =========================
+  const exportarExcel = () => {
+    const almacenes = Array.from(
+      new Set(
+        (filtered || []).flatMap((it) =>
+          (it.depositos || [])
+            .map((d) => String(d.almacen || "").trim())
+            .filter(Boolean)
+        )
+      )
+    ).sort((a, b) => a.localeCompare(b));
+
+    const headers = [
+  normalizeHeader("Código"),
+  normalizeHeader("Descripción"),
+  normalizeHeader("Folio"),
+  normalizeHeader("Proveedor"),
+  normalizeHeader("Punto ped"),
+  normalizeHeader("Tipo"),
+
+  normalizeHeader("Categoría recuento"),
+  normalizeHeader("Próxima fecha recuento"),
+  normalizeHeader("Recuento SI/NO"),
+
+  normalizeHeader("Cant. Total"),
+  ...almacenes.flatMap((alm) => [
+    normalizeHeader(`Cant ${alm}`),
+    normalizeHeader(`Ubicaciones ${alm}`),
+  ]),
+];
+
+    const aoa = [headers];
+
+    (filtered || []).forEach((it) => {
+      const depMap = new Map(
+        (it.depositos || []).map((d) => [String(d.almacen || "").trim(), d])
+      );
+
+      const row = [
+  it.codigo ?? "",
+  it.descripcion ?? "",
+  it.folio ?? "",
+  it.proveedor ?? "",
+  it.punto_pedido ?? "",
+  it.tipo ?? "",
+
+  it.categoriaRecuento ?? "",
+  it.proximaFechaRecuento ?? "",
+  it.recuentoSiNo ?? "",
+
+  Number(it.cantidad_total ?? 0),
+];
+
+      almacenes.forEach((alm) => {
+        const d = depMap.get(alm);
+        row.push(d ? Number(d.cantidad ?? 0) : 0);
+        row.push(d ? String(d.ubicaciones ?? "") : "");
+      });
+
+      aoa.push(row);
     });
 
-    aoa.push(row);
-  });
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = headers.map((h) => ({
+      wch: Math.min(Math.max(h.length + 2, 12), 40),
+    }));
 
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-
-  // (Opcional) ancho de columnas razonable
-  ws["!cols"] = headers.map((h) => ({ wch: Math.min(Math.max(h.length + 2, 12), 40) }));
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Stock");
-  XLSX.writeFile(wb, "stock.xlsx");
-};
-
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Stock");
+    XLSX.writeFile(wb, "stock.xlsx");
+  };
 
   // =========================
   // Abrir panel detalle (▶)
@@ -373,6 +573,10 @@ const exportarExcel = () => {
       <div className="acciones">
         <button onClick={() => setMostrarModal(true)}>Crear depósito</button>
         <button onClick={abrirModalUbic}>Crear ubicación</button>
+
+        <button onClick={abrirVerDepositos}>Ver depósitos</button>
+        <button onClick={abrirVerUbicaciones}>Ver ubicaciones</button>
+
         <button onClick={exportarExcel}>Exportar a Excel</button>
       </div>
 
@@ -405,9 +609,7 @@ const exportarExcel = () => {
           <div className="modal-content">
             <h3>Crear Ubicación</h3>
 
-            <label style={{ display: "block", marginBottom: 6 }}>
-              Almacén:
-            </label>
+            <label style={{ display: "block", marginBottom: 6 }}>Almacén:</label>
             <select
               value={depSel}
               onChange={(e) => setDepSel(e.target.value)}
@@ -432,13 +634,148 @@ const exportarExcel = () => {
 
             <div className="modal-botones">
               <button onClick={handleCrearUbicacion}>Confirmar</button>
-              <button onClick={() => setMostrarModalUbic(false)}>
-                Cancelar
-              </button>
+              <button onClick={() => setMostrarModalUbic(false)}>Cancelar</button>
             </div>
           </div>
         </div>
       )}
+
+      {modalVerDepositos && (
+      <div className="modal">
+        <div className="modal-content modal-wide">
+          <h3>VER DEPÓSITOS</h3>
+
+          <div className="modal-scroll">
+            <table className="mini-table">
+              <tbody>
+                {depositosVer.map((dep) => (
+                  <tr key={dep.id_deposito}>
+                    <td className="mini-name">
+                      {depEditId === dep.id_deposito ? (
+                        <input
+                          value={depEditNombre}
+                          onChange={(e) => setDepEditNombre(e.target.value)}
+                          className="mini-input"
+                          autoFocus
+                        />
+                      ) : (
+                        dep.nombre
+                      )}
+                    </td>
+
+                    <td className="mini-actions">
+                      {depEditId === dep.id_deposito ? (
+                        <>
+                          <button className="btn-edit" onClick={() => guardarDeposito(dep.id_deposito)}>
+                            Guardar
+                          </button>
+                          <button className="btn-cancel" onClick={cancelarEditarDeposito}>
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button className="btn-edit" onClick={() => iniciarEditarDeposito(dep)}>
+                            Editar
+                          </button>
+                          <button className="btn-del" onClick={() => eliminarDeposito(dep)}>
+                            Eliminar
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="modal-footer">
+            <button onClick={() => setModalVerDepositos(false)}>Cerrar</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+      {modalVerUbicaciones && (
+      <div className="modal">
+        <div className="modal-content modal-wide">
+          <h3>VER UBICACIONES</h3>
+
+          <div className="modal-scroll">
+            <div className="ubis-grid">
+              <div className="ubis-left">
+                {depListUbi.map((d) => (
+                  <button
+                    key={d.id_deposito}
+                    className={`ubis-dep ${depOpenUbi === d.id_deposito ? "open" : ""}`}
+                    onClick={() => toggleDepositoUbi(d.id_deposito)}
+                  >
+                    <span className="tri">{depOpenUbi === d.id_deposito ? "▼" : "▶"}</span>
+                    <span className="label">{d.nombre}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="ubis-right">
+                {!depOpenUbi ? (
+                  <div className="ubis-empty">Seleccioná un depósito para ver sus ubicaciones.</div>
+                ) : (
+                  <>
+                    {(ubisPorDep[depOpenUbi] || []).map((u) => (
+                      <div key={u.id_ubicacion} className="ubis-row">
+                        <div className="ubis-name">
+                          {ubiEditId === u.id_ubicacion ? (
+                            <input
+                              value={ubiEditNombre}
+                              onChange={(e) => setUbiEditNombre(e.target.value)}
+                              className="mini-input"
+                              autoFocus
+                            />
+                          ) : (
+                            u.nombre
+                          )}
+                        </div>
+
+                        <div className="ubis-actions">
+                          {ubiEditId === u.id_ubicacion ? (
+                            <>
+                              <button className="btn-edit" onClick={() => guardarUbi(u.id_ubicacion)}>
+                                Guardar
+                              </button>
+                              <button className="btn-cancel" onClick={cancelarEditarUbi}>
+                                Cancelar
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button className="btn-edit" onClick={() => iniciarEditarUbi(u)}>
+                                Editar
+                              </button>
+                              <button className="btn-del" onClick={() => eliminarUbi(u)}>
+                                Eliminar
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    {(ubisPorDep[depOpenUbi] || []).length === 0 && (
+                      <div className="ubis-empty">Este depósito no tiene ubicaciones.</div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="modal-footer">
+            <button onClick={() => setModalVerUbicaciones(false)}>Cerrar</button>
+          </div>
+        </div>
+      </div>
+    )}
 
       <div className="tabla-stock-container">
         <table className="tabla-stock">
@@ -480,6 +817,23 @@ const exportarExcel = () => {
                 <input onChange={(e) => handleFilter(e, "tipo")} />
               </th>
               <th>
+                Categoria recuento
+                <br />
+                <input onChange={(e) => handleFilter(e, "categoriaRecuento")} />
+              </th>
+
+              <th>
+                Proxima fecha recuento
+                <br />
+                <input onChange={(e) => handleFilter(e, "proximaFechaRecuento")} />
+              </th>
+
+              <th>
+                Recuento
+                <br />
+                <input onChange={(e) => handleFilter(e, "recuentoSiNo")} />
+              </th>
+              <th>
                 Almacén
                 <br />
                 <input onChange={(e) => handleFilter(e, "almacen")} />
@@ -500,7 +854,10 @@ const exportarExcel = () => {
                   <td className="num">{item.punto_pedido ?? ""}</td>
                   <td>{item.tipo ?? ""}</td>
 
-                  {/* ✅ Solo texto + triangulito (▶). Nada de dropdown. */}
+                  <td>{item.categoriaRecuento ?? ""}</td>
+                  <td>{item.proximaFechaRecuento ? String(item.proximaFechaRecuento) : ""}</td>
+                  <td>{item.recuentoSiNo ?? ""}</td>
+
                   <td className="almacen-cell">
                     <span title={item.almacen_label || ""}>
                       {item.almacen_label || ""}
@@ -572,9 +929,7 @@ const exportarExcel = () => {
 
           {pageButtons.map((p, i) =>
             p === "…" ? (
-              <span key={i} className="pg-dots">
-                …
-              </span>
+              <span key={i} className="pg-dots">…</span>
             ) : (
               <button
                 key={p}
@@ -626,9 +981,7 @@ const exportarExcel = () => {
             </div>
 
             {panelLoading && <div className="stock-panel-info">Cargando…</div>}
-            {panelError && (
-              <div className="stock-panel-error">{panelError}</div>
-            )}
+            {panelError && <div className="stock-panel-error">{panelError}</div>}
 
             {!panelLoading && !panelError && (
               <div className="stock-panel-body">
@@ -650,9 +1003,7 @@ const exportarExcel = () => {
                             onClick={() => toggleAcc(dep.almacen)}
                           >
                             <div className="stock-acc-left">
-                              <span className="caret">
-                                {abierto ? "▼" : "▶"}
-                              </span>
+                              <span className="caret">{abierto ? "▼" : "▶"}</span>
                               <span className="label">{dep.almacen}</span>
                             </div>
                             <div className="num">{dep.total}</div>
