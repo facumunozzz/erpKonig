@@ -19,8 +19,8 @@ function toNumber0(v) {
   const cleaned = s
     .replace(/\s/g, "")
     .replace(/\.(?=\d{3}(\D|$))/g, "") // quita miles con punto
-    .replace(/,(?=\d{3}(\D|$))/g, "")  // quita miles con coma
-    .replace(",", ".");                // decimal coma -> punto
+    .replace(/,(?=\d{3}(\D|$))/g, "") // quita miles con coma
+    .replace(",", "."); // decimal coma -> punto
 
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : 0;
@@ -128,7 +128,6 @@ async function tryDescontarStock(trans, { depositoId, articuloId, ubicacionId, d
 
 // UPSERT atómico (evita UQ_stock_art_dep en concurrencia)
 // Ajusta cantidad = cantidad + @delta
-// IMPORTANTE: id_ubicacion NO puede ser NULL en tu tabla => se incluye en el INSERT
 async function upsertStockDelta(trans, { depositoId, articuloId, ubicacionId, delta }) {
   const rq = new sql.Request(trans);
   await rq
@@ -152,6 +151,196 @@ async function upsertStockDelta(trans, { depositoId, articuloId, ubicacionId, de
     `);
 }
 
+// Detecta si existe columna "usuario" en dbo.ajustes_detalles, para no romper tu DB si no la tiene
+async function detallesTieneUsuario(trans) {
+  const r = await new sql.Request(trans).query(`
+    SELECT TOP 1 1 AS ok
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = 'dbo'
+      AND TABLE_NAME = 'ajustes_detalles'
+      AND COLUMN_NAME = 'usuario'
+  `);
+  return r.recordset.length > 0;
+}
+
+// Inserta detalle con o sin usuario según exista la columna
+async function insertDetalle(trans, { ajusteId, cod, desc, cantidad, usuario }) {
+  const conUsuario = await detallesTieneUsuario(trans);
+
+  const rq = new sql.Request(trans)
+    .input("nro", sql.Int, ajusteId)
+    .input("cod", sql.VarChar, cod)
+    .input("desc", sql.VarChar, desc || "")
+    .input("cant", sql.Int, cantidad);
+
+  if (conUsuario) rq.input("usr", sql.VarChar, usuario ?? null);
+
+  await rq.query(
+    conUsuario
+      ? `
+        INSERT INTO dbo.ajustes_detalles (ajuste_id, cod_articulo, descripcion, cantidad, usuario)
+        VALUES (@nro, @cod, @desc, @cant, @usr)
+      `
+      : `
+        INSERT INTO dbo.ajustes_detalles (ajuste_id, cod_articulo, descripcion, cantidad)
+        VALUES (@nro, @cod, @desc, @cant)
+      `
+  );
+}
+
+// Busca motivo por id (valida activo)
+async function requireMotivoActivo(trans, motivoId) {
+  const r = await new sql.Request(trans)
+    .input("id", sql.Int, motivoId)
+    .query(`
+      SELECT id_motivo, nombre, activo
+      FROM dbo.ajustes_motivos WITH (UPDLOCK, HOLDLOCK)
+      WHERE id_motivo = @id
+    `);
+
+  if (!r.recordset.length) throw new Error("Motivo inválido");
+  if (!r.recordset[0].activo) throw new Error("Motivo inactivo");
+
+  return {
+    id_motivo: Number(r.recordset[0].id_motivo),
+    nombre: String(r.recordset[0].nombre || ""),
+  };
+}
+
+// Busca motivo por nombre (para import/dropbox)
+async function getMotivoIdByNombreActivo(trans, nombreExactoUpper) {
+  const r = await new sql.Request(trans)
+    .input("n", sql.VarChar, nombreExactoUpper)
+    .query(`
+      SELECT TOP 1 id_motivo
+      FROM dbo.ajustes_motivos WITH (UPDLOCK, HOLDLOCK)
+      WHERE UPPER(LTRIM(RTRIM(nombre))) = @n
+        AND activo = 1
+      ORDER BY id_motivo
+    `);
+
+  if (!r.recordset.length) return null;
+  return Number(r.recordset[0].id_motivo);
+}
+
+// ========================================================
+// MOTIVOS (ABM)
+// ========================================================
+exports.getMotivos = async (_req, res) => {
+  try {
+    await poolConnect;
+    const pool = await getPool();
+    const r = await pool.request().query(`
+      SELECT id_motivo, nombre, activo
+      FROM dbo.ajustes_motivos
+      ORDER BY activo DESC, nombre ASC
+    `);
+    res.json(r.recordset || []);
+  } catch (err) {
+    console.error("ajustes.getMotivos:", err);
+    res.status(500).json({ error: "Error al listar motivos", detalle: err.message });
+  }
+};
+
+exports.createMotivo = async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "Nombre obligatorio" });
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const r = await pool
+      .request()
+      .input("n", sql.VarChar, nombre)
+      .query(`
+        INSERT INTO dbo.ajustes_motivos (nombre, activo)
+        VALUES (@n, 1);
+        SELECT SCOPE_IDENTITY() AS id_motivo;
+      `);
+
+    return res.status(201).json({ ok: true, id_motivo: Number(r.recordset[0].id_motivo) });
+  } catch (err) {
+    if (String(err.message || "").toLowerCase().includes("unique")) {
+      return res.status(400).json({ error: "Ya existe un motivo con ese nombre" });
+    }
+    console.error("ajustes.createMotivo:", err);
+    res.status(500).json({ error: "Error al crear motivo", detalle: err.message });
+  }
+};
+
+exports.updateMotivo = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: "ID inválido" });
+
+    const nombre = req.body?.nombre != null ? String(req.body.nombre).trim() : null;
+    const activo = req.body?.activo;
+
+    if (nombre != null && !nombre) return res.status(400).json({ error: "Nombre inválido" });
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const rq = pool.request().input("id", sql.Int, id);
+    if (nombre != null) rq.input("n", sql.VarChar, nombre);
+    if (activo != null) rq.input("a", sql.Bit, activo ? 1 : 0);
+
+    const r = await rq.query(`
+      UPDATE dbo.ajustes_motivos
+      SET
+        nombre = COALESCE(@n, nombre),
+        activo = COALESCE(@a, activo)
+      WHERE id_motivo = @id;
+
+      SELECT @@ROWCOUNT AS affected;
+    `);
+
+    if (Number(r.recordset[0].affected) !== 1)
+      return res.status(404).json({ error: "Motivo no encontrado" });
+    return res.json({ ok: true });
+  } catch (err) {
+    if (String(err.message || "").toLowerCase().includes("unique")) {
+      return res.status(400).json({ error: "Ya existe un motivo con ese nombre" });
+    }
+    console.error("ajustes.updateMotivo:", err);
+    res.status(500).json({ error: "Error al actualizar motivo", detalle: err.message });
+  }
+};
+
+exports.deleteMotivo = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: "ID inválido" });
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const used = await pool.request().input("id", sql.Int, id).query(`
+      SELECT TOP 1 1 AS used
+      FROM dbo.ajustes
+      WHERE motivo_id = @id
+    `);
+    if (used.recordset.length) {
+      return res.status(400).json({
+        error:
+          "No se puede borrar: el motivo ya fue usado en ajustes. Desactiválo (activo=0).",
+      });
+    }
+
+    const r = await pool.request().input("id", sql.Int, id).query(`
+      DELETE FROM dbo.ajustes_motivos WHERE id_motivo = @id;
+      SELECT @@ROWCOUNT AS affected;
+    `);
+
+    if (Number(r.recordset[0].affected) !== 1)
+      return res.status(404).json({ error: "Motivo no encontrado" });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("ajustes.deleteMotivo:", err);
+    res.status(500).json({ error: "Error al borrar motivo", detalle: err.message });
+  }
+};
 
 // ========================================================
 // GET /ajustes - lista cabeceras
@@ -162,13 +351,14 @@ exports.getAll = async (_req, res) => {
     const pool = await getPool();
     const r = await pool.request().query(`
       SELECT 
-        numero_ajuste AS id,
-        numero_ajuste,
-        deposito,
-        motivo,
-        fecha
-      FROM dbo.ajustes
-      ORDER BY fecha DESC, numero_ajuste DESC
+        a.numero_ajuste AS id,
+        a.numero_ajuste,
+        a.deposito,
+        m.nombre AS motivo,
+        a.fecha
+      FROM dbo.ajustes a
+      LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
+      ORDER BY a.fecha DESC, a.numero_ajuste DESC
     `);
     res.json(r.recordset || []);
   } catch (err) {
@@ -190,13 +380,16 @@ exports.getById = async (req, res) => {
 
     const cab = await pool.request().input("n", sql.Int, nro).query(`
       SELECT 
-        numero_ajuste AS id,
-        numero_ajuste,
-        deposito,
-        motivo,
-        fecha
-      FROM dbo.ajustes
-      WHERE numero_ajuste = @n
+        a.numero_ajuste AS id,
+        a.numero_ajuste,
+        a.deposito,
+        a.motivo_id,
+        m.nombre AS motivo,
+        a.fecha,
+        a.usuario
+      FROM dbo.ajustes a
+      LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
+      WHERE a.numero_ajuste = @n
     `);
     if (!cab.recordset.length) return res.status(404).json({ error: "Ajuste no encontrado" });
 
@@ -223,28 +416,29 @@ exports.getById = async (req, res) => {
  * body: {
  *   deposito_id: number,
  *   id_ubicacion?: number|null,
- *   motivo: string|null,
+ *   motivo_id: number,
  *   items: [{ cod_articulo: string, cantidad: number }]
  * }
  */
 exports.create = async (req, res) => {
-  // ✅ IMPORTANTE: usuario se define DENTRO del handler (afuera no existe req)
-  const usuario =
-    req.user?.username ??
-    req.user?.email ??
-    req.user?.name ??
-    null;
+  const usuario = req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
 
   const depositoId = asInt(req.body?.deposito_id);
   const ubicacionIdBody = req.body?.id_ubicacion ?? null;
-  const motivo = req.body?.motivo ?? null;
-  const items = Array.isArray(req.body?.items) ? req.body.items : [];
 
-  if (!Number.isFinite(depositoId) || !items.length) {
-    return res.status(400).json({ error: "Datos incompletos: depósito e items son obligatorios" });
+  const motivoId = asInt(req.body?.motivo_id);
+  if (!Number.isFinite(motivoId) || motivoId <= 0) {
+    return res.status(400).json({ error: "Motivo obligatorio" });
   }
 
-  // Consolidar items por código (evita duplicados dentro del mismo ajuste)
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!Number.isFinite(depositoId) || !items.length) {
+    return res
+      .status(400)
+      .json({ error: "Datos incompletos: depósito e items son obligatorios" });
+  }
+
+  // Consolidar items por código
   const agg = new Map();
   for (const it of items) {
     const cod = up(it?.cod_articulo);
@@ -262,7 +456,7 @@ exports.create = async (req, res) => {
     trans = new sql.Transaction(pool);
     await trans.begin();
 
-    // 1) Validar depósito y obtener nombre
+    // 1) Validar depósito
     const dep = await new sql.Request(trans)
       .input("d", sql.Int, depositoId)
       .query(`
@@ -275,9 +469,19 @@ exports.create = async (req, res) => {
       await trans.rollback();
       return res.status(400).json({ error: `Depósito inexistente: ${depositoId}` });
     }
-    const nombreDeposito = dep.recordset[0].nombre;
+    const nombreDeposito = String(dep.recordset[0].nombre || "");
 
-    // 2) Resolver ubicación (NO NULL) para este ajuste
+    // 1.b) Validar motivo
+    let motivoNombre = "";
+    try {
+      const mot = await requireMotivoActivo(trans, motivoId);
+      motivoNombre = mot.nombre;
+    } catch (e) {
+      await trans.rollback();
+      return res.status(400).json({ error: e.message || "Motivo inválido" });
+    }
+
+    // 2) Resolver ubicación
     const ubicacionId = await resolveUbicacionId(trans, {
       depositoId,
       ubicacionId: ubicacionIdBody,
@@ -299,7 +503,10 @@ exports.create = async (req, res) => {
     `);
 
     const byCode = new Map(
-      arts.recordset.map((r) => [r.cod, { id_articulo: r.id_articulo, descripcion: r.descripcion }])
+      arts.recordset.map((r) => [
+        r.cod,
+        { id_articulo: Number(r.id_articulo), descripcion: String(r.descripcion || "") },
+      ])
     );
 
     const faltantes = normItems.filter((i) => !byCode.has(i.cod)).map((i) => i.cod);
@@ -317,45 +524,46 @@ exports.create = async (req, res) => {
         await trans.rollback();
         return res.status(400).json({
           error: "Stock insuficiente para ajustar",
-          detalle: { cod_articulo: it.cod, disponible, intento_ajuste: it.cant, quedaría: proyectado },
+          detalle: {
+            cod_articulo: it.cod,
+            disponible,
+            intento_ajuste: it.cant,
+            quedaría: proyectado,
+          },
         });
       }
     }
 
-    // 5) Generar próximo numero_ajuste
+    // 5) Próximo nro
     const nroRes = await new sql.Request(trans).query(`
       SELECT ISNULL(MAX(numero_ajuste), 0) + 1 AS nextNro
       FROM dbo.ajustes WITH (UPDLOCK, HOLDLOCK)
     `);
     const nextNro = Number(nroRes.recordset[0].nextNro);
 
-    // 6) Insert cabecera ✅ (antes faltaba @usr en VALUES)
+    // 6) Cabecera
     await new sql.Request(trans)
       .input("nro", sql.Int, nextNro)
       .input("depNom", sql.VarChar, nombreDeposito)
-      .input("mot", sql.VarChar, toDb(motivo))
+      .input("motId", sql.Int, motivoId)
+      .input("motNom", sql.VarChar, motivoNombre) // legacy
       .input("usr", sql.VarChar, usuario)
       .query(`
-        INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo, fecha, usuario)
-        VALUES (@nro, @depNom, @mot, GETDATE(), @usr)
+        INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo_id, motivo, fecha, usuario)
+        VALUES (@nro, @depNom, @motId, @motNom, GETDATE(), @usr)
       `);
 
-    // 7) Detalle + aplicar ajustes al stock (MERGE atómico)
-    // ⚠️ OJO: solo agrego "usuario" en detalles si tu tabla lo tiene.
-    // Si NO existe esa columna en dbo.ajustes_detalles, COMENTÁ usuario y dejá el INSERT sin usuario.
+    // 7) Detalles + stock
     for (const it of normItems) {
       const { id_articulo, descripcion } = byCode.get(it.cod);
 
-      await new sql.Request(trans)
-        .input("nro", sql.Int, nextNro)
-        .input("cod", sql.VarChar, it.cod)
-        .input("desc", sql.VarChar, descripcion || "")
-        .input("cant", sql.Int, it.cant)
-        .input("usr", sql.VarChar, usuario)
-        .query(`
-          INSERT INTO dbo.ajustes_detalles (ajuste_id, cod_articulo, descripcion, cantidad, usuario)
-          VALUES (@nro, @cod, @desc, @cant, @usr)
-        `);
+      await insertDetalle(trans, {
+        ajusteId: nextNro,
+        cod: it.cod,
+        desc: descripcion || "",
+        cantidad: it.cant,
+        usuario,
+      });
 
       await upsertStockDelta(trans, {
         depositoId,
@@ -372,19 +580,22 @@ exports.create = async (req, res) => {
       .input("n", sql.Int, nextNro)
       .query(`
         SELECT 
-          numero_ajuste AS id,
-          numero_ajuste,
-          deposito,
-          motivo,
-          fecha
-        FROM dbo.ajustes
-        WHERE numero_ajuste = @n
+          a.numero_ajuste AS id,
+          a.numero_ajuste,
+          a.deposito,
+          m.nombre AS motivo,
+          a.fecha
+        FROM dbo.ajustes a
+        LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
+        WHERE a.numero_ajuste = @n
       `);
 
     return res.status(201).json({ message: "Ajuste creado", ajuste: creado.recordset[0] });
   } catch (err) {
     console.error("ajustes.create:", err);
-    try { if (trans) await trans.rollback(); } catch {}
+    try {
+      if (trans) await trans.rollback();
+    } catch {}
     return res.status(500).json({ error: "Error al crear ajuste", detalle: err.message });
   }
 };
@@ -394,8 +605,6 @@ exports.create = async (req, res) => {
 // ==========================
 exports.downloadTemplate = (_req, res) => {
   try {
-    // No agrego Ubicación para no romper tu flujo actual:
-    // el backend resuelve GENERAL automáticamente.
     const data = [["Código", "Tipo de movimiento", "Depósito", "Ubicación", "Cantidad"]];
     const ws = XLSX.utils.aoa_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -403,7 +612,10 @@ exports.downloadTemplate = (_req, res) => {
     const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
     res.setHeader("Content-Disposition", 'attachment; filename="Plantilla_Ajustes.xlsx"');
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
     return res.status(200).send(buffer);
   } catch (err) {
     return res.status(500).json({ error: "Error al generar plantilla" });
@@ -446,7 +658,6 @@ exports.importarDesdeExcel = async (req, res) => {
     const tipo = String(tipoRaw || "").trim().toUpperCase();
     const cant = toNumber0(cantRaw);
 
-    // Validaciones duras: depósito y ubicación son obligatorios
     if (!cod) return errores.push({ fila, error: "Código vacío" });
     if (!dep) return errores.push({ fila, error: "Depósito vacío (obligatorio)" });
     if (!ub) return errores.push({ fila, error: "Ubicación vacía (obligatoria)" });
@@ -461,7 +672,7 @@ exports.importarDesdeExcel = async (req, res) => {
 
   if (errores.length) return res.status(400).json({ errores });
 
-  // Agrupar por depósito + ubicación (porque ahora ubicación importa)
+  // Agrupar por depósito + ubicación
   const porKey = {};
   movimientos.forEach((m) => {
     const key = `${m.dep}||${m.ub}`;
@@ -476,12 +687,17 @@ exports.importarDesdeExcel = async (req, res) => {
     trans = new sql.Transaction(pool);
     await trans.begin();
 
+    const motivoIdExcel = await getMotivoIdByNombreActivo(trans, "IMPORTACIÓN EXCEL");
+    if (!motivoIdExcel) {
+      throw new Error('Falta motivo "IMPORTACIÓN EXCEL" en dbo.ajustes_motivos (o está inactivo)');
+    }
+
     const ajustes = [];
 
     for (const key of Object.keys(porKey)) {
       const [depNom, ubNom] = key.split("||");
 
-      // 1) resolver depósito por nombre
+      // 1) depósito por nombre
       const d = await new sql.Request(trans)
         .input("n", sql.VarChar, depNom)
         .query(`
@@ -490,13 +706,10 @@ exports.importarDesdeExcel = async (req, res) => {
           WHERE nombre = @n
         `);
 
-      if (!d.recordset.length) {
-        throw new Error(`Depósito inexistente: ${depNom}`);
-      }
-
+      if (!d.recordset.length) throw new Error(`Depósito inexistente: ${depNom}`);
       const depId = Number(d.recordset[0].id_deposito);
 
-      // 2) resolver ubicación por NOMBRE dentro de ese depósito (OBLIGATORIA)
+      // 2) ubicación por nombre (obligatoria)
       const ubRes = await new sql.Request(trans)
         .input("dep", sql.Int, depId)
         .input("ubNom", sql.VarChar, ubNom)
@@ -510,10 +723,9 @@ exports.importarDesdeExcel = async (req, res) => {
       if (!ubRes.recordset.length) {
         throw new Error(`Ubicación inexistente: "${ubNom}" para depósito "${depNom}"`);
       }
-
       const ubId = Number(ubRes.recordset[0].id_ubicacion);
 
-      // 3) generar nro_ajuste
+      // 3) nro ajuste
       const rN = await new sql.Request(trans).query(`
         SELECT ISNULL(MAX(numero_ajuste),0)+1 AS n
         FROM dbo.ajustes WITH (UPDLOCK, HOLDLOCK)
@@ -523,13 +735,14 @@ exports.importarDesdeExcel = async (req, res) => {
       await new sql.Request(trans)
         .input("n", sql.Int, nro)
         .input("d", sql.VarChar, depNom)
+        .input("mid", sql.Int, motivoIdExcel)
         .input("m", sql.VarChar, `IMPORTACIÓN EXCEL (${ubNom})`)
         .query(`
-          INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo, fecha)
-          VALUES(@n,@d,@m,GETDATE())
+          INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo_id, motivo, fecha, usuario)
+          VALUES(@n,@d,@mid,@m,GETDATE(),'sistema')
         `);
 
-      // 4) Consolidar por código (dentro de ese depósito+ubicación)
+      // 4) consolidar por código
       const agg = new Map();
       for (const it of porKey[key]) {
         const sign = it.tipo === "SALIDA" ? -it.cant : it.cant;
@@ -541,7 +754,6 @@ exports.importarDesdeExcel = async (req, res) => {
         .filter((x) => x.delta !== 0);
 
       for (const it of merged) {
-        // artículo por código
         const art = await new sql.Request(trans)
           .input("c", sql.VarChar, it.cod)
           .query(`
@@ -552,9 +764,9 @@ exports.importarDesdeExcel = async (req, res) => {
 
         if (!art.recordset.length) throw new Error(`Código inexistente: ${it.cod}`);
         const idArt = Number(art.recordset[0].id_articulo);
-        const desc = art.recordset[0].descripcion || "";
+        const desc = String(art.recordset[0].descripcion || "");
 
-        // validar stock SOLO para salidas (delta negativo)
+        // validar stock para salidas
         if (it.delta < 0) {
           const disponible = await getStockActual(trans, {
             depositoId: depId,
@@ -566,18 +778,14 @@ exports.importarDesdeExcel = async (req, res) => {
           }
         }
 
-        // detalle
-        await new sql.Request(trans)
-          .input("n", sql.Int, nro)
-          .input("c", sql.VarChar, it.cod)
-          .input("d", sql.VarChar, desc)
-          .input("q", sql.Int, it.delta)
-          .query(`
-            INSERT INTO dbo.ajustes_detalles (ajuste_id, cod_articulo, descripcion, cantidad)
-            VALUES(@n,@c,@d,@q)
-          `);
+        await insertDetalle(trans, {
+          ajusteId: nro,
+          cod: it.cod,
+          desc,
+          cantidad: it.delta,
+          usuario: "sistema",
+        });
 
-        // aplicar delta al stock (en ESA ubicación)
         await upsertStockDelta(trans, {
           depositoId: depId,
           articuloId: idArt,
@@ -600,7 +808,7 @@ exports.importarDesdeExcel = async (req, res) => {
 };
 
 // ==========================
-// CONSUMIR PRODUCCIÓN (DROPBOX)  ✅ motor reusable
+// CONSUMIR PRODUCCIÓN (DROPBOX)
 // ==========================
 async function runConsumoProduccion() {
   let trans = null;
@@ -611,7 +819,8 @@ async function runConsumoProduccion() {
 
   try {
     // 0) leer fileRef (id:) desde DB
-    const idRes = await pool.request()
+    const idRes = await pool
+      .request()
       .input("k", sql.VarChar, "DROPBOX_PRODUCCION_FILE_ID")
       .query(`SELECT valor FROM dbo.app_settings WHERE clave = @k`);
 
@@ -622,7 +831,7 @@ async function runConsumoProduccion() {
     const fileRef = String(idRes.recordset[0].valor || "").trim();
     if (!fileRef) return { ok: false, error: "DROPBOX_PRODUCCION_FILE_ID vacío" };
 
-    // 1) descargar excel (Dropbox API)
+    // 1) descargar excel
     const buffer = await downloadByPath(fileRef);
     const workbook = XLSX.read(buffer, { type: "buffer" });
 
@@ -635,14 +844,26 @@ async function runConsumoProduccion() {
     const header = rows[0];
     const dataRows = rows.slice(1);
 
-    // 2) transacción (un ajuste por corrida)
+    // 2) transacción
     trans = new sql.Transaction(pool);
     await trans.begin();
 
-    // 2.1) resolver depósito "Producción"
+    const motivoIdDropbox = await getMotivoIdByNombreActivo(trans, "CONSUMO PRODUCCIÓN (DROPBOX)");
+    if (!motivoIdDropbox) {
+      await trans.rollback();
+      return {
+        ok: false,
+        error:
+          'Falta motivo "CONSUMO PRODUCCIÓN (DROPBOX)" en dbo.ajustes_motivos (o está inactivo)',
+      };
+    }
+
+    // 2.1) depósito Producción
     const depRes = await new sql.Request(trans)
       .input("n", sql.VarChar, "Producción")
-      .query(`SELECT id_deposito, nombre FROM dbo.depositos WITH (UPDLOCK, HOLDLOCK) WHERE nombre = @n`);
+      .query(
+        `SELECT id_deposito, nombre FROM dbo.depositos WITH (UPDLOCK, HOLDLOCK) WHERE nombre = @n`
+      );
 
     if (!depRes.recordset.length) {
       await trans.rollback();
@@ -650,9 +871,9 @@ async function runConsumoProduccion() {
     }
 
     const depositoId = Number(depRes.recordset[0].id_deposito);
-    const depositoNombre = depRes.recordset[0].nombre;
+    const depositoNombre = String(depRes.recordset[0].nombre || "");
 
-    // 2.2) resolver ubicación GENERAL (obligatoria)
+    // 2.2) ubicación GENERAL
     const ubRes = await new sql.Request(trans)
       .input("dep", sql.Int, depositoId)
       .query(`
@@ -666,13 +887,13 @@ async function runConsumoProduccion() {
       await trans.rollback();
       return {
         ok: false,
-        error: 'Ubicación "GENERAL" no existe para depósito "Producción". Creala para continuar.'
+        error: 'Ubicación "GENERAL" no existe para depósito "Producción". Creala para continuar.',
       };
     }
 
     const ubicacionId = Number(ubRes.recordset[0].id_ubicacion);
 
-    // 3) procesar filas (primero acumulamos y actualizamos stock)
+    // 3) procesar filas
     const okItems = [];
     const failItems = [];
     const agg = new Map(); // codigo -> { desc, deltaNegativo }
@@ -681,18 +902,15 @@ async function runConsumoProduccion() {
       const excelRowIndex = i + 2;
       const r = dataRows[i];
 
-      // "columna A siempre tiene algo" -> usamos A como fin si vacío
       const colA = String(r[0] ?? "").trim();
       if (!colA) break;
 
-      // código en columna B (index 1)
       const codigo = up(r[1]);
       if (!codigo) {
         failItems.push({ row: excelRowIndex, codigo: null, reason: "Código vacío (col B)" });
         continue;
       }
 
-      // F y G
       const f = toNumber0(r[5]);
       const g = toNumber0(r[6]);
 
@@ -701,7 +919,6 @@ async function runConsumoProduccion() {
       const delta = Math.trunc(f - g);
       if (delta <= 0) continue;
 
-      // resolver artículo
       const artRes = await new sql.Request(trans)
         .input("c", sql.VarChar, codigo)
         .query(`
@@ -730,7 +947,11 @@ async function runConsumoProduccion() {
         `);
 
       if (!existsStock.recordset.length) {
-        failItems.push({ row: excelRowIndex, codigo, reason: "No existe registro en dbo.stock para Producción/GENERAL (no se crea)" });
+        failItems.push({
+          row: excelRowIndex,
+          codigo,
+          reason: "No existe registro en dbo.stock para Producción/GENERAL (no se crea)",
+        });
         continue;
       }
 
@@ -740,21 +961,24 @@ async function runConsumoProduccion() {
           row: excelRowIndex,
           codigo,
           reason: "Stock insuficiente (negativo prohibido)",
-          faltante: delta - disponible
+          faltante: delta - disponible,
         });
         continue;
       }
 
-      // descuento seguro
       const ok = await tryDescontarStock(trans, {
         depositoId,
         articuloId: idArt,
         ubicacionId,
-        deltaNegativo: -delta
+        deltaNegativo: -delta,
       });
 
       if (!ok) {
-        failItems.push({ row: excelRowIndex, codigo, reason: "No se pudo descontar (condición de stock/registro)" });
+        failItems.push({
+          row: excelRowIndex,
+          codigo,
+          reason: "No se pudo descontar (condición de stock/registro)",
+        });
         continue;
       }
 
@@ -763,15 +987,14 @@ async function runConsumoProduccion() {
 
       okItems.push({ row: excelRowIndex, codigo, idArt, desc, delta });
 
-      // consolidar detalle (negativo)
       const prev = agg.get(codigo);
       agg.set(codigo, {
         desc,
-        delta: (prev?.delta || 0) - delta
+        delta: (prev?.delta || 0) - delta,
       });
     }
 
-    // Si no hay nada para ajustar: rollback y listo (NO generamos ajuste)
+    // si no hay nada: rollback
     if (okItems.length === 0) {
       await trans.rollback();
       return {
@@ -779,11 +1002,11 @@ async function runConsumoProduccion() {
         message: "No hay diferencias para ajustar",
         ajustados: 0,
         fallidos: failItems.length,
-        resumen_fallidos: failItems.slice(0, 50)
+        resumen_fallidos: failItems.slice(0, 50),
       };
     }
 
-    // 4) crear cabecera de ajuste (1 por corrida) SOLO si hubo ajustes
+    // 4) cabecera ajuste
     const nroRes = await new sql.Request(trans).query(`
       SELECT ISNULL(MAX(numero_ajuste), 0) + 1 AS nextNro
       FROM dbo.ajustes WITH (UPDLOCK, HOLDLOCK)
@@ -793,26 +1016,23 @@ async function runConsumoProduccion() {
     await new sql.Request(trans)
       .input("nro", sql.Int, nextNro)
       .input("depNom", sql.VarChar, depositoNombre)
+      .input("motId", sql.Int, motivoIdDropbox)
       .input("mot", sql.VarChar, "CONSUMO PRODUCCIÓN (DROPBOX)")
       .input("usr", sql.VarChar, "sistema")
       .query(`
-        INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo, fecha, usuario)
-        VALUES (@nro, @depNom, @mot, GETDATE(), @usr)
+        INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo_id, motivo, fecha, usuario)
+        VALUES (@nro, @depNom, @motId, @mot, GETDATE(), @usr)
       `);
 
-    // 5) insertar detalles del ajuste (consolidado)
-    // ✅ igual que arriba: guardamos usuario en cabecera, detalle sin usuario/sistema
+    // 5) detalles consolidado
     for (const [codigo, v] of agg.entries()) {
-      await new sql.Request(trans)
-        .input("nro", sql.Int, nextNro)
-        .input("cod", sql.VarChar, codigo)
-        .input("desc", sql.VarChar, v.desc || "")
-        .input("cant", sql.Int, v.delta)
-        .input("usr", sql.VarChar, "sistema")
-        .query(`
-          INSERT INTO dbo.ajustes_detalles (ajuste_id, cod_articulo, descripcion, cantidad)
-          VALUES (@nro, @cod, @desc, @cant)
-        `);
+      await insertDetalle(trans, {
+        ajusteId: nextNro,
+        cod: codigo,
+        desc: v.desc || "",
+        cantidad: v.delta,
+        usuario: "sistema",
+      });
     }
 
     // 6) re-escribir excel
@@ -833,10 +1053,11 @@ async function runConsumoProduccion() {
       fallidos: failItems.length,
       resumen_fallidos: failItems.slice(0, 50),
     };
-
   } catch (err) {
     if (trans) {
-      try { await trans.rollback(); } catch {}
+      try {
+        await trans.rollback();
+      } catch {}
     }
     throw err;
   }

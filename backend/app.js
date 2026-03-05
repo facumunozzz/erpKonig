@@ -93,7 +93,13 @@ const API_PREFIXES = [
   "/ubicaciones",
   "/__routes",
   "/health",
+  "/__test500",
 ];
+
+app.get("/__test500", (_req, res) => {
+  res.status(500).json({ok: false, detalle: "funciona"})
+})
+
 
 // SPA fallback: si NO es una ruta del backend, devolvemos index.html ✅ NUEVO
 app.get("*", (req, res, next) => {
@@ -120,3 +126,9 @@ app.listen(PORT, "0.0.0.0", () => {
     console.error("[JOB] No se pudo iniciar consumoProduccion:", e.message);
   }
 });
+
+app.use((err, req, res, _next) => {
+  console.log("[GLOBAL ERROR]", err?.message || err);
+  return res.status(500).json({ error: "Error interno", detalle: err.message });
+});
+

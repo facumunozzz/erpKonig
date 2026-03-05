@@ -4,7 +4,7 @@ const { _runConsumoProduccion } = require("../controllers/ajustes");
 
 function startConsumoProduccionJobs() {
   // 12:00 (hora local del server)
-  cron.schedule("00 12 * * *", async () => {
+  cron.schedule("00 21 * * *", async () => {
     try {
       const r = await _runConsumoProduccion();
       console.log("[JOB] consumoProduccion 12:00 ->", r);
@@ -14,7 +14,7 @@ function startConsumoProduccionJobs() {
   });
 
   // 15:30
-  cron.schedule("30 15 * * *", async () => {
+  cron.schedule("30 22 * * *", async () => {
     try {
       const r = await _runConsumoProduccion();
       console.log("[JOB] consumoProduccion 15:30 ->", r);

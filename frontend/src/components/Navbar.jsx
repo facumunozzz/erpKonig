@@ -26,7 +26,7 @@ function Navbar() {
           <li><NavLink to="/transferencias" className={linkClass}>Transferencias</NavLink></li>
         )}
         {hasUtilidad('Ajustes') && (
-          <li><NavLink to="/ajustes" className={linkClass}>Ajustes</NavLink></li>
+          <li><NavLink to="/ajustes" className={linkClass}>Ajustes/Movimientos varios</NavLink></li>
         )}
         {hasUtilidad('Movimientos') && (
           <li><NavLink to="/movimientos" className={linkClass}>Movimientos</NavLink></li>

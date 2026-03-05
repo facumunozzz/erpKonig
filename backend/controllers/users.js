@@ -60,7 +60,7 @@ exports.create = async (req, res) => {
     const insU = await rqUser.query(`
       INSERT INTO usuarios (username, nombre, email, password_hash, is_active, created_at)
       OUTPUT INSERTED.id_usuario, INSERTED.username, INSERTED.nombre, INSERTED.email, INSERTED.created_at
-      VALUES (@un, @nm, @em, @ph, 1, SYSDATETIME)
+      VALUES (@un, @nm, @em, @ph, 1, SYSDATETIME())
     `);
 
     const user = insU.recordset[0];
@@ -98,7 +98,11 @@ exports.create = async (req, res) => {
     } catch (err) {
       try { if (trans) await trans.rollback(); } catch {}
       console.error('users.create:', err);
-      res.status(500).json({error: 'Error al crear usuario'});
+      res.status(500).json({
+        error: 'Error al crear usuario', 
+        detalle: err.message, 
+        code: err.code, 
+        number: err.number});
     }
 };
 

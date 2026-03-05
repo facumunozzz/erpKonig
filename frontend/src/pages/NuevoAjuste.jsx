@@ -19,11 +19,15 @@ export default function NuevoAjuste() {
   const [ubicacionId, setUbicacionId] = useState(""); // id_ubicacion
   const [errorUbicaciones, setErrorUbicaciones] = useState("");
 
+  // Motivos
+  const [motivos, setMotivos] = useState([]);
+  const [motivoId, setMotivoId] = useState("");
+  const [errorMotivos, setErrorMotivos] = useState("");
+
   const [codigo, setCodigo] = useState("");
   const [descripcion, setDescripcion] = useState("");
   const [cantidad, setCantidad] = useState(""); // puede ser negativa
 
-  const [motivo, setMotivo] = useState("");
   const [items, setItems] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
   const [errorDepositos, setErrorDepositos] = useState("");
@@ -37,15 +41,11 @@ export default function NuevoAjuste() {
 
   const ubicacionSeleccionada = useMemo(() => {
     if (!ubicacionId) return null;
-    return (
-      ubicaciones.find(
-        (u) => String(u.id_ubicacion) === String(ubicacionId)
-      ) || null
-    );
+    return ubicaciones.find((u) => String(u.id_ubicacion) === String(ubicacionId)) || null;
   }, [ubicacionId, ubicaciones]);
 
   // =========================
-  // Cargar depósitos (con cancelación)
+  // Cargar depósitos
   // =========================
   useEffect(() => {
     let alive = true;
@@ -69,7 +69,32 @@ export default function NuevoAjuste() {
   }, []);
 
   // =========================
-  // Cuando cambia depósito => cargar ubicaciones (con cancelación)
+  // Cargar motivos
+  // =========================
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        const res = await api.get("/ajustes/motivos");
+        if (!alive) return;
+        const activos = (res.data || []).filter((m) => m.activo);
+        setMotivos(activos);
+        setErrorMotivos("");
+      } catch (err) {
+        if (!alive) return;
+        console.error(err);
+        setErrorMotivos("No se pudieron cargar los motivos.");
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // =========================
+  // Cuando cambia depósito => cargar ubicaciones
   // =========================
   useEffect(() => {
     let alive = true;
@@ -98,9 +123,7 @@ export default function NuevoAjuste() {
       } catch (err) {
         if (!alive) return;
         console.error(err);
-        setErrorUbicaciones(
-          "No se pudo cargar la lista de ubicaciones del depósito."
-        );
+        setErrorUbicaciones("No se pudo cargar la lista de ubicaciones del depósito.");
       }
     })();
 
@@ -110,7 +133,7 @@ export default function NuevoAjuste() {
   }, [depositoId]);
 
   // =========================
-  // Resolver descripción por código (debounce + cancel)
+  // Resolver descripción por código (debounce)
   // =========================
   useEffect(() => {
     let alive = true;
@@ -127,9 +150,7 @@ export default function NuevoAjuste() {
         try {
           res = await api.get(`/articulos/codigo/${encodeURIComponent(c)}`);
         } catch {
-          res = await api.get(
-            `/articulos/articulo?codigo=${encodeURIComponent(c)}`
-          );
+          res = await api.get(`/articulos/articulo?codigo=${encodeURIComponent(c)}`);
         }
 
         if (!alive) return;
@@ -148,7 +169,7 @@ export default function NuevoAjuste() {
   }, [codigo]);
 
   // =========================
-  // Agregar item (id estable)
+  // Agregar item
   // =========================
   const cargarYContinuar = () => {
     setErrorMsg("");
@@ -156,7 +177,9 @@ export default function NuevoAjuste() {
     const dId = Number(depositoId);
     if (!dId) return setErrorMsg("Seleccioná el DEPÓSITO.");
 
-    // Si el depósito tiene ubicaciones, exigir selección (GENERAL suele autoseleccionarse)
+    if (!Number(motivoId)) return setErrorMsg("Seleccioná el MOTIVO.");
+
+    // Si el depósito tiene ubicaciones, exigir selección
     if (ubicaciones.length > 0 && !Number(ubicacionId)) {
       return setErrorMsg("Seleccioná la UBICACIÓN (o dejá GENERAL).");
     }
@@ -166,9 +189,7 @@ export default function NuevoAjuste() {
 
     if (!c) return setErrorMsg("Ingresá el CÓDIGO.");
     if (!Number.isFinite(q) || q === 0) {
-      return setErrorMsg(
-        "La CANTIDAD no puede ser 0 (puede ser negativa o positiva)."
-      );
+      return setErrorMsg("La CANTIDAD no puede ser 0 (puede ser negativa o positiva).");
     }
 
     setItems((prev) => [
@@ -194,16 +215,16 @@ export default function NuevoAjuste() {
 
       const dId = Number(depositoId);
       if (!dId) return setErrorMsg("Seleccioná el DEPÓSITO.");
-      if (items.length === 0)
-        return setErrorMsg('Agregá ítems con "Cargar y continuar".');
+      if (!Number(motivoId)) return setErrorMsg("Seleccioná el MOTIVO.");
+
+      if (items.length === 0) return setErrorMsg('Agregá ítems con "Cargar y continuar".');
 
       const ubId = ubicacionId ? Number(ubicacionId) : null;
 
       const body = {
         deposito_id: dId,
-        // si no mandás id_ubicacion, el backend puede resolver GENERAL
         id_ubicacion: ubId || null,
-        motivo: motivo || null,
+        motivo_id: Number(motivoId),
         items: items.map((it) => ({
           cod_articulo: it.cod_articulo,
           cantidad: it.cantidad,
@@ -222,9 +243,7 @@ export default function NuevoAjuste() {
       console.error(err);
       const msg =
         err.response?.data?.error ||
-        (typeof err.response?.data?.detalle === "string"
-          ? err.response.data.detalle
-          : null) ||
+        (typeof err.response?.data?.detalle === "string" ? err.response.data.detalle : null) ||
         err.message ||
         "Error al confirmar el ajuste";
       setErrorMsg(msg);
@@ -242,6 +261,7 @@ export default function NuevoAjuste() {
 
       {errorDepositos && <div className="nt-error">{errorDepositos}</div>}
       {errorUbicaciones && <div className="nt-error">{errorUbicaciones}</div>}
+      {errorMotivos && <div className="nt-error">{errorMotivos}</div>}
       {errorMsg && <div className="nt-error">{errorMsg}</div>}
 
       <div className="nt-card">
@@ -271,9 +291,7 @@ export default function NuevoAjuste() {
               title={!depositoId ? "Primero elegí depósito" : ""}
             >
               <option value="">
-                {ubicaciones.length === 0
-                  ? "-- (sin ubicaciones) --"
-                  : "-- Seleccioná ubicación --"}
+                {ubicaciones.length === 0 ? "-- (sin ubicaciones) --" : "-- Seleccioná ubicación --"}
               </option>
               {ubicaciones.map((u) => (
                 <option key={u.id_ubicacion} value={u.id_ubicacion}>
@@ -290,13 +308,19 @@ export default function NuevoAjuste() {
           </div>
 
           <div className="nt-field grow">
-            <label>Motivo</label>
-            <input
-              type="text"
-              value={motivo}
-              placeholder="Escribí el motivo del ajuste…"
-              onChange={(e) => setMotivo(e.target.value)}
-            />
+            <label>Motivo *</label>
+            <select
+              value={motivoId}
+              onChange={(e) => setMotivoId(e.target.value)}
+              disabled={bloqueadoCabecera}
+            >
+              <option value="">-- Seleccioná motivo --</option>
+              {motivos.map((m) => (
+                <option key={m.id_motivo} value={m.id_motivo}>
+                  {m.nombre}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -341,10 +365,12 @@ export default function NuevoAjuste() {
             <button
               className="btn-primary"
               onClick={confirmar}
-              disabled={!depositoId || items.length === 0}
+              disabled={!depositoId || items.length === 0 || !Number(motivoId)}
               title={
                 !depositoId
                   ? "Seleccioná depósito"
+                  : !Number(motivoId)
+                  ? "Seleccioná motivo"
                   : items.length === 0
                   ? "Cargá al menos un ítem"
                   : ""
@@ -387,10 +413,7 @@ export default function NuevoAjuste() {
                     <td>{it.descripcion}</td>
                     <td style={{ textAlign: "right" }}>{it.cantidad}</td>
                     <td>
-                      <button
-                        className="borrar-btn"
-                        onClick={() => quitarItem(it.id)}
-                      >
+                      <button className="borrar-btn" onClick={() => quitarItem(it.id)}>
                         Quitar
                       </button>
                     </td>

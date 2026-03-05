@@ -11,6 +11,12 @@ router.get("/plantilla", authRequired, controller.downloadTemplate);
 router.post("/importar", authRequired, upload.single("file"), controller.importarDesdeExcel);
 router.post("/consumir-produccion", authRequired, controller.consumirProduccionDropbox);
 
+// motivos (ABM)
+router.get("/motivos", authRequired, controller.getMotivos);
+router.post("/motivos", authRequired, controller.createMotivo);
+router.put("/motivos/:id", authRequired, controller.updateMotivo);
+router.delete("/motivos/:id", authRequired, controller.deleteMotivo);
+
 // listados
 router.get("/", authRequired, controller.getAll);
 router.get("/:id", authRequired, controller.getById);

@@ -28,7 +28,7 @@ const fallback =
 const API_BASE = fromVite || fromWindow || fromLS || fallback;
 
 const api = axios.create({
-  baseURL: API_BASE,
+  baseURL: "",
   timeout: 20000,
 });
 
