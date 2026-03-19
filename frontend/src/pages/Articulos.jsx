@@ -1,16 +1,17 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import api from "../api/axiosConfig";
 import "./../styles/articulos.css";
+import CatalogoModal from "../components/CatalogoModal";
 
 import ArticuloCrearModal from "../components/ArticuloCrearModal";
 import ArticuloEditarModal from "../components/ArticuloEditarModal";
 import ArticuloEliminarModal from "../components/ArticuloEliminarModal";
 
+const STORAGE_KEY = "articulos_col_widths_v1";
 const CAMPOS_OCULTOS = ["almacen", "cantidad", "traspasa", "ubicacion"];
 
 // ✅ columnas base fijas (las del artículo)
 const BASE_COLS = [
-  "id_articulo",
   "codigo",
   "descripcion",
   "folio",
@@ -26,14 +27,76 @@ export default function Articulos() {
   const [openEliminar, setOpenEliminar] = useState(false);
   const [rowEliminar, setRowEliminar] = useState(null);
 
+  const [openProv, setOpenProv] = useState(false);
+  const [openFolio, setOpenFolio] = useState(false);
+  const [openTipo, setOpenTipo] = useState(false);
+
   // ================= PAGINADO PRO =================
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [goTo, setGoTo] = useState("");
+  const [filtros, setFiltros] = useState({});
 
   const [openCrear, setOpenCrear] = useState(false);
   const [openEditar, setOpenEditar] = useState(false);
   const [rowEditar, setRowEditar] = useState(null);
+
+  const limpiarFiltros = () => {
+    setFiltros({});
+    setFiltered(articulos || []);
+    setCurrentPage(1);
+    setGoTo("");
+  };
+
+  const [colWidths, setColWidths] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  const resizingRef = useRef(null);
+
+  const startResize = (e, colKey) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const startX = e.clientX;
+    const startWidth = colWidths[colKey] || 160;
+
+    resizingRef.current = {
+      colKey,
+      startX,
+      startWidth,
+    };
+
+    const onMouseMove = (ev) => {
+      if (!resizingRef.current) return;
+
+      const diff = ev.clientX - resizingRef.current.startX;
+      const newWidth = Math.max(20, resizingRef.current.startWidth + diff);
+
+      setColWidths((prev) => ({
+        ...prev,
+        [colKey]: newWidth,
+      }));
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      resizingRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  };
 
   // ✅ clasificaciones activas (definen columnas dinámicas)
   const [clasifActivas, setClasifActivas] = useState([]); // [{id_clasificacion,nombre,...}]
@@ -42,6 +105,14 @@ export default function Articulos() {
     fetchArticulos();
     fetchClasifActivas();
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(colWidths));
+    } catch (err) {
+      console.error("No se pudo guardar el ancho de columnas:", err);
+    }
+  }, [colWidths]);
 
   const fetchArticulos = async () => {
     try {
@@ -101,6 +172,34 @@ export default function Articulos() {
     return [...base, ...dynClean];
   }, [articulos, clasifActivas]);
 
+  useEffect(() => {
+    setColWidths((prev) => {
+      const next = { ...prev };
+
+      columnas.forEach((col) => {
+        if (next[col] == null) {
+          if (String(col).toLowerCase() === "descripcion") {
+            next[col] = 280;
+          } else {
+            next[col] = 160;
+          }
+        }
+      });
+
+      if (next["ACCIONES"] == null) {
+        next["ACCIONES"] = 170;
+      }
+
+      Object.keys(next).forEach((k) => {
+        if (![...columnas, "ACCIONES"].includes(k)) {
+          delete next[k];
+        }
+      });
+
+      return next;
+    });
+  }, [columnas]);
+
   const isBaseCol = (k) => {
     const kk = String(k).toLowerCase();
     // si existe como propiedad directa del objeto artículo => base
@@ -129,11 +228,16 @@ export default function Articulos() {
 
   const handleFilter = (e, key) => {
     const val = String(e.target.value ?? "").toLowerCase();
+    const nuevosFiltros = { ...filtros, [key]: val };
+
+    setFiltros(nuevosFiltros);
 
     setFiltered(
       (articulos || []).filter((a) => {
-        const v = getCellValue(a, key);
-        return String(v ?? "").toLowerCase().includes(val);
+        return Object.keys(nuevosFiltros).every((k) => {
+          const v = getCellValue(a, k);
+          return String(v ?? "").toLowerCase().includes(nuevosFiltros[k]);
+        });
       })
     );
 
@@ -178,12 +282,75 @@ export default function Articulos() {
   const pageButtons = buildPageButtons();
 
   return (
-    <div className="articulos-container">
+      <div
+        className="articulos-container"
+        style={{
+          width: "100%",
+          maxWidth: "100%",
+          minWidth: 0,
+          margin: 0,
+          boxSizing: "border-box",
+          overflow: "hidden",
+        }}
+      >
       <h2 className="module-title">ARTÍCULOS</h2>
+        <div>
+          <button className="nuevo-btn" onClick={() => setOpenCrear(true)}>
+            Crear nuevo artículo
+          </button>
 
-      <button className="nuevo-btn" onClick={() => setOpenCrear(true)}>
-        Crear nuevo artículo
-      </button>
+          <button className="nuevo-btn" onClick={limpiarFiltros}>
+            Limpiar filtros
+          </button>
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+
+          <button className="nuevo-btn" onClick={() => setOpenProv(true)}>
+            Administrar proveedores
+          </button>
+
+          <button className="nuevo-btn" onClick={() => setOpenFolio(true)}>
+            Administrar folios
+          </button>
+
+          <button className="nuevo-btn" onClick={() => setOpenTipo(true)}>
+            Administrar tipos
+          </button>
+        </div>
+
+        <CatalogoModal
+          isOpen={openProv}
+          onClose={() => setOpenProv(false)}
+          tipo="proveedores"
+          titulo="Proveedores"
+          singular="Proveedor"
+          onSaved={() => {
+            fetchArticulos();
+          }}
+        />
+
+        <CatalogoModal
+          isOpen={openFolio}
+          onClose={() => setOpenFolio(false)}
+          tipo="folios"
+          titulo="Folios"
+          singular="Folio"
+          onSaved={() => {
+            fetchArticulos();
+          }}
+        />
+
+        <CatalogoModal
+          isOpen={openTipo}
+          onClose={() => setOpenTipo(false)}
+          tipo="tipos"
+          titulo="Tipos"
+          singular="Tipo"
+          onSaved={() => {
+            fetchArticulos();
+          }}
+        />
 
       <ArticuloCrearModal
         isOpen={openCrear}
@@ -216,26 +383,151 @@ export default function Articulos() {
         }}
       />
 
-      <div className="tabla-articulos-container">
-        <table className="tabla-articulos">
+      <div
+        className="tabla-articulos-container"
+        style={{
+          width: "100%",
+          maxWidth: "100%",
+          minWidth: 0,
+          overflowX: "auto",
+          overflowY: "auto",
+          boxSizing: "border-box",
+        }}
+      >
+        <table
+          className="tabla-articulos"
+          style={{
+            width: "max-content",
+            minWidth: "100%",
+            tableLayout: "fixed",
+          }}
+        >
+          <colgroup>
+            {columnas.map((col) => (
+              <col key={col} style={{ width: `${colWidths[col] || 160}px` }} />
+            ))}
+            <col style={{ width: `${colWidths["ACCIONES"] || 170}px` }} />
+          </colgroup>
+
           <thead>
             <tr>
               {columnas.map((col) => (
-                <th key={col}>{String(col).toUpperCase()}</th>
+                <th
+                  key={col}
+                  style={{
+                    position: "relative",
+                    overflow: "hidden",
+                    whiteSpace: "nowrap",
+                    textOverflow: "ellipsis",
+                    minWidth: 0,
+                    width: `${colWidths[col] || 160}px`,
+                    maxWidth: `${colWidths[col] || 160}px`,
+                    boxSizing: "border-box",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      width: "100%",
+                    }}
+                  >
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        paddingRight: "10px",
+                      }}
+                      title={String(col).toUpperCase()}
+                    >
+                      {String(col).toUpperCase()}
+                    </span>
+
+                    <div
+                      onMouseDown={(e) => startResize(e, col)}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        right: 0,
+                        width: "10px",
+                        height: "100%",
+                        cursor: "col-resize",
+                        userSelect: "none",
+                        zIndex: 2,
+                      }}
+                      title="Arrastrar para cambiar ancho"
+                    />
+                  </div>
+                </th>
               ))}
-              <th>ACCIONES</th>
+
+              <th
+                style={{
+                  position: "relative",
+                  overflow: "hidden",
+                  whiteSpace: "nowrap",
+                  textOverflow: "ellipsis",
+                  minWidth: 0,
+                  width: `${colWidths["ACCIONES"] || 170}px`,
+                  maxWidth: `${colWidths["ACCIONES"] || 170}px`,
+                  boxSizing: "border-box",
+                }}
+              >
+                <span>ACCIONES</span>
+
+                <div
+                  onMouseDown={(e) => startResize(e, "ACCIONES")}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    right: 0,
+                    width: "10px",
+                    height: "100%",
+                    cursor: "col-resize",
+                    userSelect: "none",
+                    zIndex: 2,
+                  }}
+                  title="Arrastrar para cambiar ancho"
+                />
+              </th>
             </tr>
 
             <tr>
               {columnas.map((col) => (
-                <th key={col}>
+                <th
+                  key={col}
+                  style={{
+                    minWidth: 0,
+                    width: `${colWidths[col] || 160}px`,
+                    maxWidth: `${colWidths[col] || 160}px`,
+                    boxSizing: "border-box",
+                    overflow: "hidden",
+                  }}
+                >
                   <input
                     placeholder="Filtrar..."
+                    value={filtros[col] ?? ""}
                     onChange={(e) => handleFilter(e, col)}
+                    style={{
+                      width: "100%",
+                      maxWidth: "100%",
+                      minWidth: 0,
+                      boxSizing: "border-box",
+                    }}
                   />
                 </th>
               ))}
-              <th></th>
+              <th
+              style={{
+                minWidth: 0,
+                width: `${colWidths["ACCIONES"] || 170}px`,
+                maxWidth: `${colWidths["ACCIONES"] || 170}px`,
+                boxSizing: "border-box",
+                overflow: "hidden",
+              }}>
+              </th>
             </tr>
           </thead>
 
@@ -243,10 +535,33 @@ export default function Articulos() {
             {paginated.map((a, i) => (
               <tr key={a?.id_articulo ?? i}>
                 {columnas.map((k) => (
-                  <td key={k}>{String(getCellValue(a, k) ?? "")}</td>
+                  <td
+                    key={k}
+                    title={String(getCellValue(a, k) ?? "")}
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      minWidth: 0,
+                      width: `${colWidths[k] || 160}px`,
+                      maxWidth: `${colWidths[k] || 160}px`,
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    {String(getCellValue(a, k) ?? "")}
+                  </td>
                 ))}
 
-                <td>
+                <td
+                  style={{
+                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                    width: `${colWidths["ACCIONES"] || 170}px`,
+                    maxWidth: `${colWidths["ACCIONES"] || 170}px`,
+                    overflow: "hidden",
+                    boxSizing: "border-box",
+                  }}
+                >
                   <button
                     className="btn-editar"
                     onClick={() => {

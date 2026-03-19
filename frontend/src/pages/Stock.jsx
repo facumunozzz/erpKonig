@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/axiosConfig";
 import * as XLSX from "xlsx";
 import "./../styles/stock.css";
@@ -7,7 +7,7 @@ const normalizeHeader = (txt) => {
   const clean = String(txt || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[.,/]/g, "")       // también saca /
+    .replace(/[.,/]/g, "")
     .trim();
 
   const parts = clean.split(/\s+/);
@@ -20,6 +20,36 @@ const normalizeHeader = (txt) => {
     .join("");
 };
 
+const STOCK_WIDTHS_KEY = "stock_col_widths_v1";
+
+const STOCK_COLS = [
+  "codigo",
+  "descripcion",
+  "folio",
+  "proveedor",
+  "cantidad_total",
+  "punto_pedido",
+  "tipo",
+  "categoriaRecuento",
+  "proximaFechaRecuento",
+  "recuentoSiNo",
+  "almacen",
+];
+
+const STOCK_HEADERS = [
+  ["codigo", "Código"],
+  ["descripcion", "Descripción"],
+  ["folio", "Folio"],
+  ["proveedor", "Proveedor"],
+  ["cantidad_total", "Cantidad"],
+  ["punto_pedido", "Punto ped"],
+  ["tipo", "Tipo"],
+  ["categoriaRecuento", "Categoria recuento"],
+  ["proximaFechaRecuento", "Proxima fecha recuento"],
+  ["recuentoSiNo", "Recuento"],
+  ["almacen", "Almacén"],
+];
+
 function Stock() {
   const [stock, setStock] = useState([]);
   const [filtered, setFiltered] = useState([]);
@@ -27,6 +57,31 @@ function Stock() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [goTo, setGoTo] = useState("");
+
+  const [filtros, setFiltros] = useState({
+    codigo: "",
+    descripcion: "",
+    folio: "",
+    proveedor: "",
+    cantidad_total: "",
+    punto_pedido: "",
+    tipo: "",
+    categoriaRecuento: "",
+    proximaFechaRecuento: "",
+    recuentoSiNo: "",
+    almacen: "",
+  });
+
+  const [colWidths, setColWidths] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STOCK_WIDTHS_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const resizingRef = useRef(null);
 
   // =========================
   // MODAL CREAR DEPÓSITO
@@ -39,8 +94,8 @@ function Stock() {
   // =========================
   const [mostrarModalUbic, setMostrarModalUbic] = useState(false);
   const [depositosList, setDepositosList] = useState([]);
-  const [depSel, setDepSel] = useState(""); // id_deposito seleccionado
-  const [nuevaUbic, setNuevaUbic] = useState(""); // nombre ubicación
+  const [depSel, setDepSel] = useState("");
+  const [nuevaUbic, setNuevaUbic] = useState("");
 
   // =========================
   // MODAL VER DEPÓSITOS
@@ -55,8 +110,8 @@ function Stock() {
   // =========================
   const [modalVerUbicaciones, setModalVerUbicaciones] = useState(false);
   const [depListUbi, setDepListUbi] = useState([]);
-  const [depOpenUbi, setDepOpenUbi] = useState(null); // id_deposito abierto
-  const [ubisPorDep, setUbisPorDep] = useState({}); // { [id_deposito]: ubicaciones[] }
+  const [depOpenUbi, setDepOpenUbi] = useState(null);
+  const [ubisPorDep, setUbisPorDep] = useState({});
   const [ubiEditId, setUbiEditId] = useState(null);
   const [ubiEditNombre, setUbiEditNombre] = useState("");
 
@@ -70,12 +125,80 @@ function Stock() {
   const [panelLoading, setPanelLoading] = useState(false);
   const [panelError, setPanelError] = useState("");
 
-  // cache por código para no pegarle siempre al backend
-  const [detalleCache, setDetalleCache] = useState({}); // { [codigo]: rows[] }
+  // cache por código
+  const [detalleCache, setDetalleCache] = useState({});
 
   useEffect(() => {
     fetchStock();
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STOCK_WIDTHS_KEY, JSON.stringify(colWidths));
+    } catch (err) {
+      console.error("No se pudo guardar el ancho de columnas de stock:", err);
+    }
+  }, [colWidths]);
+
+  useEffect(() => {
+    setColWidths((prev) => {
+      const next = { ...prev };
+
+      STOCK_COLS.forEach((col) => {
+        if (next[col] == null) {
+          if (col === "descripcion") next[col] = 260;
+          else if (col === "almacen") next[col] = 220;
+          else next[col] = 140;
+        }
+      });
+
+      Object.keys(next).forEach((k) => {
+        if (!STOCK_COLS.includes(k)) delete next[k];
+      });
+
+      return next;
+    });
+  }, []);
+
+  const startResize = (e, colKey) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const startX = e.clientX;
+    const startWidth = colWidths[colKey] || 140;
+
+    resizingRef.current = {
+      colKey,
+      startX,
+      startWidth,
+    };
+
+    const onMouseMove = (ev) => {
+      if (!resizingRef.current) return;
+
+      const diff = ev.clientX - resizingRef.current.startX;
+      const newWidth = Math.max(40, resizingRef.current.startWidth + diff);
+
+      setColWidths((prev) => ({
+        ...prev,
+        [colKey]: newWidth,
+      }));
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      resizingRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  };
 
   const fetchStock = () => {
     api
@@ -95,23 +218,56 @@ function Stock() {
 
   const handleFilter = (e, key) => {
     const value = String(e.target.value ?? "").toLowerCase();
+    const nuevosFiltros = { ...filtros, [key]: value };
+
+    setFiltros(nuevosFiltros);
 
     setFiltered(
       stock.filter((item) => {
-        if (key === "cantidad_total") {
-          return String(item.cantidad_total ?? 0)
-            .toLowerCase()
-            .includes(value);
-        }
-        if (key === "almacen") {
-          const label = String(item.almacen_label ?? "").toLowerCase();
-          return label.includes(value);
-        }
-        return String(item[key] ?? "").toLowerCase().includes(value);
+        const valores = {
+          codigo: String(item.codigo ?? ""),
+          descripcion: String(item.descripcion ?? ""),
+          folio: String(item.folio ?? ""),
+          proveedor: String(item.proveedor ?? ""),
+          cantidad_total: String(item.cantidad_total ?? 0),
+          punto_pedido: String(item.punto_pedido ?? ""),
+          tipo: String(item.tipo ?? ""),
+          categoriaRecuento: String(item.categoriaRecuento ?? ""),
+          proximaFechaRecuento: item.proximaFechaRecuento
+            ? String(item.proximaFechaRecuento)
+            : "",
+          recuentoSiNo: String(item.recuentoSiNo ?? ""),
+          almacen: String(item.almacen_label ?? ""),
+        };
+
+        return Object.keys(nuevosFiltros).every((k) =>
+          valores[k].toLowerCase().includes(nuevosFiltros[k])
+        );
       })
     );
 
     setCurrentPage(1);
+  };
+
+  const limpiarFiltros = () => {
+    const vacios = {
+      codigo: "",
+      descripcion: "",
+      folio: "",
+      proveedor: "",
+      cantidad_total: "",
+      punto_pedido: "",
+      tipo: "",
+      categoriaRecuento: "",
+      proximaFechaRecuento: "",
+      recuentoSiNo: "",
+      almacen: "",
+    };
+
+    setFiltros(vacios);
+    setFiltered(stock || []);
+    setCurrentPage(1);
+    setGoTo("");
   };
 
   // ================= PAGINADO PRO =================
@@ -221,8 +377,7 @@ function Stock() {
       const resUb = await api.get("/ubicaciones", { params: { deposito_id } });
       const existe = (resUb.data || []).some(
         (u) =>
-          String(u.nombre || "").trim().toLowerCase() ===
-          nombre.toLowerCase()
+          String(u.nombre || "").trim().toLowerCase() === nombre.toLowerCase()
       );
       if (existe) {
         alert("Esa ubicación ya existe dentro del depósito seleccionado.");
@@ -237,7 +392,6 @@ function Stock() {
       alert("Ubicación creada correctamente.");
       setMostrarModalUbic(false);
       setNuevaUbic("");
-      // no refresco stock porque no cambia cantidades
     } catch (err) {
       if (err.response?.status === 409) {
         alert("Esa ubicación ya existe dentro del depósito seleccionado.");
@@ -283,7 +437,6 @@ function Stock() {
       const r = await api.get("/depositos");
       setDepositosVer(r.data || []);
       cancelarEditarDeposito();
-      // no afecta stock directo, pero refrescamos por consistencia
       await refreshAll();
     } catch (e) {
       if (e.response?.status === 409)
@@ -300,7 +453,7 @@ function Stock() {
     if (!ok) return;
 
     try {
-      await api.delete(`/depositos/${dep.id_deposito}`, { timeout: 180000 }); // 3 min
+      await api.delete(`/depositos/${dep.id_deposito}`, { timeout: 180000 });
       const r = await api.get("/depositos");
       setDepositosVer(r.data || []);
       await refreshAll();
@@ -422,23 +575,21 @@ function Stock() {
     ).sort((a, b) => a.localeCompare(b));
 
     const headers = [
-  normalizeHeader("Código"),
-  normalizeHeader("Descripción"),
-  normalizeHeader("Folio"),
-  normalizeHeader("Proveedor"),
-  normalizeHeader("Punto ped"),
-  normalizeHeader("Tipo"),
-
-  normalizeHeader("Categoría recuento"),
-  normalizeHeader("Próxima fecha recuento"),
-  normalizeHeader("Recuento SI/NO"),
-
-  normalizeHeader("Cant. Total"),
-  ...almacenes.flatMap((alm) => [
-    normalizeHeader(`Cant ${alm}`),
-    normalizeHeader(`Ubicaciones ${alm}`),
-  ]),
-];
+      normalizeHeader("Código"),
+      normalizeHeader("Descripción"),
+      normalizeHeader("Folio"),
+      normalizeHeader("Proveedor"),
+      normalizeHeader("Punto ped"),
+      normalizeHeader("Tipo"),
+      normalizeHeader("Categoría recuento"),
+      normalizeHeader("Próxima fecha recuento"),
+      normalizeHeader("Recuento SI/NO"),
+      normalizeHeader("Cant. Total"),
+      ...almacenes.flatMap((alm) => [
+        normalizeHeader(`Cant ${alm}`),
+        normalizeHeader(`Ubicaciones ${alm}`),
+      ]),
+    ];
 
     const aoa = [headers];
 
@@ -448,19 +599,17 @@ function Stock() {
       );
 
       const row = [
-  it.codigo ?? "",
-  it.descripcion ?? "",
-  it.folio ?? "",
-  it.proveedor ?? "",
-  it.punto_pedido ?? "",
-  it.tipo ?? "",
-
-  it.categoriaRecuento ?? "",
-  it.proximaFechaRecuento ?? "",
-  it.recuentoSiNo ?? "",
-
-  Number(it.cantidad_total ?? 0),
-];
+        it.codigo ?? "",
+        it.descripcion ?? "",
+        it.folio ?? "",
+        it.proveedor ?? "",
+        it.punto_pedido ?? "",
+        it.tipo ?? "",
+        it.categoriaRecuento ?? "",
+        it.proximaFechaRecuento ?? "",
+        it.recuentoSiNo ?? "",
+        Number(it.cantidad_total ?? 0),
+      ];
 
       almacenes.forEach((alm) => {
         const d = depMap.get(alm);
@@ -556,7 +705,7 @@ function Stock() {
     return out;
   }, [panelData]);
 
-  const [openAcc, setOpenAcc] = useState({}); // { [almacen]: true/false }
+  const [openAcc, setOpenAcc] = useState({});
 
   useEffect(() => {
     setOpenAcc({});
@@ -567,22 +716,27 @@ function Stock() {
   };
 
   return (
-    <div className="stock-container">
+    <div
+      className="stock-container"
+      style={{
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
+        overflow: "hidden",
+      }}
+    >
       <h2 className="module-title">Stock en Depósitos</h2>
 
       <div className="acciones">
         <button onClick={() => setMostrarModal(true)}>Crear depósito</button>
         <button onClick={abrirModalUbic}>Crear ubicación</button>
-
         <button onClick={abrirVerDepositos}>Ver depósitos</button>
         <button onClick={abrirVerUbicaciones}>Ver ubicaciones</button>
-
         <button onClick={exportarExcel}>Exportar a Excel</button>
+        <button onClick={limpiarFiltros}>Limpiar filtros</button>
       </div>
 
-      {/* =========================
-          MODAL CREAR DEPÓSITO
-         ========================= */}
       {mostrarModal && (
         <div className="modal">
           <div className="modal-content">
@@ -601,9 +755,6 @@ function Stock() {
         </div>
       )}
 
-      {/* =========================
-          MODAL CREAR UBICACIÓN
-         ========================= */}
       {mostrarModalUbic && (
         <div className="modal">
           <div className="modal-content">
@@ -641,224 +792,419 @@ function Stock() {
       )}
 
       {modalVerDepositos && (
-      <div className="modal">
-        <div className="modal-content modal-wide">
-          <h3>VER DEPÓSITOS</h3>
+        <div className="modal">
+          <div className="modal-content modal-wide">
+            <h3>VER DEPÓSITOS</h3>
 
-          <div className="modal-scroll">
-            <table className="mini-table">
-              <tbody>
-                {depositosVer.map((dep) => (
-                  <tr key={dep.id_deposito}>
-                    <td className="mini-name">
-                      {depEditId === dep.id_deposito ? (
-                        <input
-                          value={depEditNombre}
-                          onChange={(e) => setDepEditNombre(e.target.value)}
-                          className="mini-input"
-                          autoFocus
-                        />
-                      ) : (
-                        dep.nombre
-                      )}
-                    </td>
+            <div className="modal-scroll">
+              <table className="mini-table">
+                <tbody>
+                  {depositosVer.map((dep) => (
+                    <tr key={dep.id_deposito}>
+                      <td className="mini-name">
+                        {depEditId === dep.id_deposito ? (
+                          <input
+                            value={depEditNombre}
+                            onChange={(e) => setDepEditNombre(e.target.value)}
+                            className="mini-input"
+                            autoFocus
+                          />
+                        ) : (
+                          dep.nombre
+                        )}
+                      </td>
 
-                    <td className="mini-actions">
-                      {depEditId === dep.id_deposito ? (
-                        <>
-                          <button className="btn-edit" onClick={() => guardarDeposito(dep.id_deposito)}>
-                            Guardar
-                          </button>
-                          <button className="btn-cancel" onClick={cancelarEditarDeposito}>
-                            Cancelar
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button className="btn-edit" onClick={() => iniciarEditarDeposito(dep)}>
-                            Editar
-                          </button>
-                          <button className="btn-del" onClick={() => eliminarDeposito(dep)}>
-                            Eliminar
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      <td className="mini-actions">
+                        {depEditId === dep.id_deposito ? (
+                          <>
+                            <button
+                              className="btn-edit"
+                              onClick={() => guardarDeposito(dep.id_deposito)}
+                            >
+                              Guardar
+                            </button>
+                            <button
+                              className="btn-cancel"
+                              onClick={cancelarEditarDeposito}
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              className="btn-edit"
+                              onClick={() => iniciarEditarDeposito(dep)}
+                            >
+                              Editar
+                            </button>
+                            <button
+                              className="btn-del"
+                              onClick={() => eliminarDeposito(dep)}
+                            >
+                              Eliminar
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-          <div className="modal-footer">
-            <button onClick={() => setModalVerDepositos(false)}>Cerrar</button>
-          </div>
-        </div>
-      </div>
-    )}
-
-      {modalVerUbicaciones && (
-      <div className="modal">
-        <div className="modal-content modal-wide">
-          <h3>VER UBICACIONES</h3>
-
-          <div className="modal-scroll">
-            <div className="ubis-grid">
-              <div className="ubis-left">
-                {depListUbi.map((d) => (
-                  <button
-                    key={d.id_deposito}
-                    className={`ubis-dep ${depOpenUbi === d.id_deposito ? "open" : ""}`}
-                    onClick={() => toggleDepositoUbi(d.id_deposito)}
-                  >
-                    <span className="tri">{depOpenUbi === d.id_deposito ? "▼" : "▶"}</span>
-                    <span className="label">{d.nombre}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div className="ubis-right">
-                {!depOpenUbi ? (
-                  <div className="ubis-empty">Seleccioná un depósito para ver sus ubicaciones.</div>
-                ) : (
-                  <>
-                    {(ubisPorDep[depOpenUbi] || []).map((u) => (
-                      <div key={u.id_ubicacion} className="ubis-row">
-                        <div className="ubis-name">
-                          {ubiEditId === u.id_ubicacion ? (
-                            <input
-                              value={ubiEditNombre}
-                              onChange={(e) => setUbiEditNombre(e.target.value)}
-                              className="mini-input"
-                              autoFocus
-                            />
-                          ) : (
-                            u.nombre
-                          )}
-                        </div>
-
-                        <div className="ubis-actions">
-                          {ubiEditId === u.id_ubicacion ? (
-                            <>
-                              <button className="btn-edit" onClick={() => guardarUbi(u.id_ubicacion)}>
-                                Guardar
-                              </button>
-                              <button className="btn-cancel" onClick={cancelarEditarUbi}>
-                                Cancelar
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button className="btn-edit" onClick={() => iniciarEditarUbi(u)}>
-                                Editar
-                              </button>
-                              <button className="btn-del" onClick={() => eliminarUbi(u)}>
-                                Eliminar
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-
-                    {(ubisPorDep[depOpenUbi] || []).length === 0 && (
-                      <div className="ubis-empty">Este depósito no tiene ubicaciones.</div>
-                    )}
-                  </>
-                )}
-              </div>
+            <div className="modal-footer">
+              <button onClick={() => setModalVerDepositos(false)}>Cerrar</button>
             </div>
           </div>
+        </div>
+      )}
 
-          <div className="modal-footer">
-            <button onClick={() => setModalVerUbicaciones(false)}>Cerrar</button>
+      {modalVerUbicaciones && (
+        <div className="modal">
+          <div className="modal-content modal-wide">
+            <h3>VER UBICACIONES</h3>
+
+            <div className="modal-scroll">
+              <div className="ubis-grid">
+                <div className="ubis-left">
+                  {depListUbi.map((d) => (
+                    <button
+                      key={d.id_deposito}
+                      className={`ubis-dep ${depOpenUbi === d.id_deposito ? "open" : ""}`}
+                      onClick={() => toggleDepositoUbi(d.id_deposito)}
+                    >
+                      <span className="tri">
+                        {depOpenUbi === d.id_deposito ? "▼" : "▶"}
+                      </span>
+                      <span className="label">{d.nombre}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="ubis-right">
+                  {!depOpenUbi ? (
+                    <div className="ubis-empty">
+                      Seleccioná un depósito para ver sus ubicaciones.
+                    </div>
+                  ) : (
+                    <>
+                      {(ubisPorDep[depOpenUbi] || []).map((u) => (
+                        <div key={u.id_ubicacion} className="ubis-row">
+                          <div className="ubis-name">
+                            {ubiEditId === u.id_ubicacion ? (
+                              <input
+                                value={ubiEditNombre}
+                                onChange={(e) => setUbiEditNombre(e.target.value)}
+                                className="mini-input"
+                                autoFocus
+                              />
+                            ) : (
+                              u.nombre
+                            )}
+                          </div>
+
+                          <div className="ubis-actions">
+                            {ubiEditId === u.id_ubicacion ? (
+                              <>
+                                <button
+                                  className="btn-edit"
+                                  onClick={() => guardarUbi(u.id_ubicacion)}
+                                >
+                                  Guardar
+                                </button>
+                                <button
+                                  className="btn-cancel"
+                                  onClick={cancelarEditarUbi}
+                                >
+                                  Cancelar
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className="btn-edit"
+                                  onClick={() => iniciarEditarUbi(u)}
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  className="btn-del"
+                                  onClick={() => eliminarUbi(u)}
+                                >
+                                  Eliminar
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+
+                      {(ubisPorDep[depOpenUbi] || []).length === 0 && (
+                        <div className="ubis-empty">
+                          Este depósito no tiene ubicaciones.
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button onClick={() => setModalVerUbicaciones(false)}>Cerrar</button>
+            </div>
           </div>
         </div>
-      </div>
-    )}
+      )}
 
-      <div className="tabla-stock-container">
-        <table className="tabla-stock">
+      <div
+        className="tabla-stock-container"
+        style={{
+          width: "100%",
+          maxWidth: "100%",
+          minWidth: 0,
+          overflowX: "auto",
+          overflowY: "auto",
+          boxSizing: "border-box",
+        }}
+      >
+        <table
+          className="tabla-stock"
+          style={{
+            width: "max-content",
+            minWidth: "100%",
+            tableLayout: "fixed",
+          }}
+        >
+          <colgroup>
+            {STOCK_COLS.map((col) => (
+              <col key={col} style={{ width: `${colWidths[col] || 140}px` }} />
+            ))}
+          </colgroup>
+
           <thead>
             <tr>
-              <th>
-                Código
-                <br />
-                <input onChange={(e) => handleFilter(e, "codigo")} />
-              </th>
-              <th>
-                Descripción
-                <br />
-                <input onChange={(e) => handleFilter(e, "descripcion")} />
-              </th>
-              <th>
-                Folio
-                <br />
-                <input onChange={(e) => handleFilter(e, "folio")} />
-              </th>
-              <th>
-                Proveedor
-                <br />
-                <input onChange={(e) => handleFilter(e, "proveedor")} />
-              </th>
-              <th>
-                Cantidad
-                <br />
-                <input onChange={(e) => handleFilter(e, "cantidad_total")} />
-              </th>
-              <th>
-                Punto ped
-                <br />
-                <input onChange={(e) => handleFilter(e, "punto_pedido")} />
-              </th>
-              <th>
-                Tipo
-                <br />
-                <input onChange={(e) => handleFilter(e, "tipo")} />
-              </th>
-              <th>
-                Categoria recuento
-                <br />
-                <input onChange={(e) => handleFilter(e, "categoriaRecuento")} />
-              </th>
+              {STOCK_HEADERS.map(([key, label]) => (
+                <th
+                  key={key}
+                  style={{
+                    position: "relative",
+                    overflow: "hidden",
+                    whiteSpace: "nowrap",
+                    textOverflow: "ellipsis",
+                    minWidth: 0,
+                    width: `${colWidths[key] || 140}px`,
+                    maxWidth: `${colWidths[key] || 140}px`,
+                    boxSizing: "border-box",
+                  }}
+                >
+                  <div style={{ paddingRight: "10px" }}>
+                    {label}
+                    <br />
+                    <input
+                      value={filtros[key] ?? ""}
+                      onChange={(e) => handleFilter(e, key)}
+                      style={{
+                        width: "100%",
+                        maxWidth: "100%",
+                        minWidth: 0,
+                        boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
 
-              <th>
-                Proxima fecha recuento
-                <br />
-                <input onChange={(e) => handleFilter(e, "proximaFechaRecuento")} />
-              </th>
-
-              <th>
-                Recuento
-                <br />
-                <input onChange={(e) => handleFilter(e, "recuentoSiNo")} />
-              </th>
-              <th>
-                Almacén
-                <br />
-                <input onChange={(e) => handleFilter(e, "almacen")} />
-              </th>
+                  <div
+                    onMouseDown={(e) => startResize(e, key)}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      right: 0,
+                      width: "10px",
+                      height: "100%",
+                      cursor: "col-resize",
+                      userSelect: "none",
+                      zIndex: 2,
+                    }}
+                    title="Arrastrar para cambiar ancho"
+                  />
+                </th>
+              ))}
             </tr>
           </thead>
 
           <tbody>
             {paginated.map((item) => {
               const codKey = String(item.codigo || "").trim().toUpperCase();
+
               return (
                 <tr key={codKey}>
-                  <td>{item.codigo}</td>
-                  <td>{item.descripcion}</td>
-                  <td>{item.folio}</td>
-                  <td>{item.proveedor}</td>
-                  <td className="num">{item.cantidad_total ?? 0}</td>
-                  <td className="num">{item.punto_pedido ?? ""}</td>
-                  <td>{item.tipo ?? ""}</td>
+                  <td
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.codigo || 140}px`,
+                      maxWidth: `${colWidths.codigo || 140}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                    title={item.codigo || ""}
+                  >
+                    {item.codigo}
+                  </td>
 
-                  <td>{item.categoriaRecuento ?? ""}</td>
-                  <td>{item.proximaFechaRecuento ? String(item.proximaFechaRecuento) : ""}</td>
-                  <td>{item.recuentoSiNo ?? ""}</td>
+                  <td
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.descripcion || 260}px`,
+                      maxWidth: `${colWidths.descripcion || 260}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                    title={item.descripcion || ""}
+                  >
+                    {item.descripcion}
+                  </td>
 
-                  <td className="almacen-cell">
+                  <td
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.folio || 140}px`,
+                      maxWidth: `${colWidths.folio || 140}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                    title={item.folio || ""}
+                  >
+                    {item.folio}
+                  </td>
+
+                  <td
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.proveedor || 140}px`,
+                      maxWidth: `${colWidths.proveedor || 140}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                    title={item.proveedor || ""}
+                  >
+                    {item.proveedor}
+                  </td>
+
+                  <td
+                    className="num"
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.cantidad_total || 140}px`,
+                      maxWidth: `${colWidths.cantidad_total || 140}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    {item.cantidad_total ?? 0}
+                  </td>
+
+                  <td
+                    className="num"
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.punto_pedido || 140}px`,
+                      maxWidth: `${colWidths.punto_pedido || 140}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    {item.punto_pedido ?? ""}
+                  </td>
+
+                  <td
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.tipo || 140}px`,
+                      maxWidth: `${colWidths.tipo || 140}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                    title={item.tipo ?? ""}
+                  >
+                    {item.tipo ?? ""}
+                  </td>
+
+                  <td
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.categoriaRecuento || 140}px`,
+                      maxWidth: `${colWidths.categoriaRecuento || 140}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                    title={item.categoriaRecuento ?? ""}
+                  >
+                    {item.categoriaRecuento ?? ""}
+                  </td>
+
+                  <td
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.proximaFechaRecuento || 140}px`,
+                      maxWidth: `${colWidths.proximaFechaRecuento || 140}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                    title={
+                      item.proximaFechaRecuento
+                        ? String(item.proximaFechaRecuento)
+                        : ""
+                    }
+                  >
+                    {item.proximaFechaRecuento
+                      ? String(item.proximaFechaRecuento)
+                      : ""}
+                  </td>
+
+                  <td
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.recuentoSiNo || 140}px`,
+                      maxWidth: `${colWidths.recuentoSiNo || 140}px`,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }}
+                    title={item.recuentoSiNo ?? ""}
+                  >
+                    {item.recuentoSiNo ?? ""}
+                  </td>
+
+                  <td
+                    className="almacen-cell"
+                    style={{
+                      minWidth: 0,
+                      width: `${colWidths.almacen || 220}px`,
+                      maxWidth: `${colWidths.almacen || 220}px`,
+                      overflow: "hidden",
+                      boxSizing: "border-box",
+                    }}
+                  >
                     <span title={item.almacen_label || ""}>
                       {item.almacen_label || ""}
                     </span>
@@ -877,7 +1223,6 @@ function Stock() {
         </table>
       </div>
 
-      {/* ================= PAGINADO PRO ================= */}
       <div className="paginado-pro">
         <div className="paginado-info">
           Total <b>{totalItems}</b> registros
@@ -929,7 +1274,9 @@ function Stock() {
 
           {pageButtons.map((p, i) =>
             p === "…" ? (
-              <span key={i} className="pg-dots">…</span>
+              <span key={i} className="pg-dots">
+                …
+              </span>
             ) : (
               <button
                 key={p}
@@ -958,9 +1305,6 @@ function Stock() {
         </div>
       </div>
 
-      {/* =========================
-          PANEL LATERAL
-         ========================= */}
       {panelOpen && (
         <>
           <div className="stock-panel-overlay" onClick={cerrarPanel} />

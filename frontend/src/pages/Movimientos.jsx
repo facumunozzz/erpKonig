@@ -24,6 +24,24 @@ function Movimientos() {
     num_movimiento: '',
   });
 
+  const limpiarFiltros = () => {
+    const vacios = {
+      fecha: "",
+      codigo: "",
+      descripcion: "",
+      cantidad: "",
+      deposito: "",
+      usuario: "",
+      movimiento: "",
+      num_movimiento: "",
+    };
+
+    setFiltros(vacios);
+    setFiltered(rows || []);
+    setCurrentPage(1);
+    setGotoPage("");
+  };
+
   useEffect(() => {
     api.get('/movimientos')
       .then(res => {
@@ -101,20 +119,77 @@ function Movimientos() {
 
       <div className="acciones" style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button onClick={exportarExcel}>Exportar a Excel</button>
+        <button onClick={limpiarFiltros}>Limpiar filtros</button>
       </div>
 
       <div className="tabla-articulos-container">
         <table className="tabla-movimientos">
           <thead>
             <tr>
-              <th>Fecha<br /><input onChange={e => onFilterChange('fecha', e.target.value)} /></th>
-              <th>Código<br /><input onChange={e => onFilterChange('codigo', e.target.value)} /></th>
-              <th>Descripción<br /><input onChange={e => onFilterChange('descripcion', e.target.value)} /></th>
-              <th style={{ textAlign: 'right' }}>Cantidad<br /><input onChange={e => onFilterChange('cantidad', e.target.value)} /></th>
-              <th>Depósito<br /><input onChange={e => onFilterChange('deposito', e.target.value)} /></th>
-              <th>Usuario<br /><input onChange={e => onFilterChange('usuario', e.target.value)} /></th>
-              <th>Movimiento<br /><input onChange={e => onFilterChange('movimiento', e.target.value)} /></th>
-              <th>Num. Movimiento<br /><input onChange={e => onFilterChange('num_movimiento', e.target.value)} /></th>
+              <th>
+                Fecha
+                <br />
+                <input
+                  value={filtros.fecha}
+                  onChange={e => onFilterChange('fecha', e.target.value)}
+                />
+              </th>
+              <th>
+                Código
+                <br />
+                <input
+                  value={filtros.codigo}
+                  onChange={e => onFilterChange('codigo', e.target.value)}
+                />
+              </th>
+              <th>
+                Descripción
+                <br />
+                <input
+                  value={filtros.descripcion}
+                  onChange={e => onFilterChange('descripcion', e.target.value)}
+                />
+              </th>
+              <th style={{ textAlign: 'right' }}>
+                Cantidad
+                <br />
+                <input
+                  value={filtros.cantidad}
+                  onChange={e => onFilterChange('cantidad', e.target.value)}
+                />
+              </th>
+              <th>
+                Depósito
+                <br />
+                <input
+                  value={filtros.deposito}
+                  onChange={e => onFilterChange('deposito', e.target.value)}
+                />
+              </th>
+              <th>
+                Usuario
+                <br />
+                <input
+                  value={filtros.usuario}
+                  onChange={e => onFilterChange('usuario', e.target.value)}
+                />
+              </th>
+              <th>
+                Movimiento
+                <br />
+                <input
+                  value={filtros.movimiento}
+                  onChange={e => onFilterChange('movimiento', e.target.value)}
+                />
+              </th>
+              <th>
+                Num. Movimiento
+                <br />
+                <input
+                  value={filtros.num_movimiento}
+                  onChange={e => onFilterChange('num_movimiento', e.target.value)}
+                />
+              </th>
             </tr>
           </thead>
           <tbody>

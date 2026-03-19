@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/axiosConfig.js";
 import "./../styles/articulos.css";
 
@@ -7,9 +7,9 @@ function normKey(nombre) {
     .trim()
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")     // quita tildes
-    .replace(/[^\w\s-]/g, "")           // quita símbolos raros
-    .replace(/\s+/g, "_")               // espacios -> _
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "_")
     .replace(/_+/g, "_");
 }
 
@@ -20,18 +20,33 @@ export default function ArticuloCrearModal({
   onSaved
 }) {
   const [clasificaciones, setClasificaciones] = useState([]);
-  const [form, setForm] = useState({ codigo: "", descripcion: "", tipo: "" });
+  const [proveedores, setProveedores] = useState([]);
+  const [folios, setFolios] = useState([]);
+  const [tipos, setTipos] = useState([]);
+
+  const [form, setForm] = useState({
+    codigo: "",
+    descripcion: "",
+    tipo: "",
+    proveedor: "",
+    folio: "",
+    punto_pedido: ""
+  });
+
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Todo lo que NO debe renderizarse como "clasificación"
-  // (porque es campo base u oculto, o porque no existe más en UI)
+  const inputCodigoRef = useRef(null);
+
   const CLASIF_BLOQUEADAS = useMemo(
     () =>
       new Set([
         "codigo",
         "descripcion",
         "tipo",
-        "traspasa",     // <- NO debe aparecer
+        "proveedor",
+        "folio",
+        "punto_pedido",
+        "traspasa",
         "almacen",
         "cantidad",
         "ubicacion"
@@ -43,28 +58,61 @@ export default function ArticuloCrearModal({
     if (!isOpen) return;
 
     setErrorMsg("");
-    setForm({ codigo: "", descripcion: "", tipo: "" });
     setClasificaciones([]);
+    setProveedores([]);
+    setFolios([]);
+    setTipos([]);
 
     (async () => {
       try {
-        const res = await api.get("/clasificaciones");
-        const activas = (res.data || []).filter((c) => c.activa == 1);
+        const [resClasif, resProv, resFol, resTip] = await Promise.all([
+          api.get("/clasificaciones"),
+          api.get("/catalogos/proveedores"),
+          api.get("/catalogos/folios"),
+          api.get("/catalogos/tipos")
+        ]);
 
-        // armamos modelo con keys dinámicas (por nombre normalizado)
-        const modelo = { codigo: "", descripcion: "", tipo: "" };
+        const activas = (resClasif.data || []).filter(
+          (c) => Number(c.activa) === 1
+        );
+
+        const modelo = {
+          codigo: "",
+          descripcion: "",
+          tipo: "",
+          proveedor: "",
+          folio: "",
+          punto_pedido: ""
+        };
+
         activas.forEach((c) => {
           const k = normKey(c.nombre);
-          modelo[k] = "";
+          if (!(k in modelo)) modelo[k] = "";
         });
 
         setClasificaciones(activas);
+        setProveedores(resProv.data || []);
+        setFolios(resFol.data || []);
+        setTipos(resTip.data || []);
         setForm(modelo);
       } catch (err) {
         console.error(err);
-        setErrorMsg("Error al cargar clasificaciones");
+        setErrorMsg("Error al cargar datos del modal");
       }
     })();
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const timer = setTimeout(() => {
+      if (inputCodigoRef.current) {
+        inputCodigoRef.current.focus();
+        inputCodigoRef.current.select?.();
+      }
+    }, 0);
+
+    return () => clearTimeout(timer);
   }, [isOpen]);
 
   const onChange = (campo, valor) => {
@@ -74,64 +122,72 @@ export default function ArticuloCrearModal({
   const guardar = async () => {
     setErrorMsg("");
 
-    // Validación base
-    if (!form.codigo?.trim() || !form.descripcion?.trim()) {
-      return setErrorMsg("Debe indicar código y descripción");
+    if (!String(form.codigo || "").trim() || !String(form.descripcion || "").trim()) {
+      setErrorMsg("Debe indicar código y descripción");
+      return;
     }
 
-    // Duplicados
     const existeCod = articulos.some(
-      (a) => String(a.codigo).toLowerCase() === String(form.codigo).toLowerCase()
+      (a) =>
+        String(a.codigo || "").trim().toLowerCase() ===
+        String(form.codigo || "").trim().toLowerCase()
     );
-    if (existeCod) return setErrorMsg("El código ya existe");
+    if (existeCod) {
+      setErrorMsg("El código ya existe");
+      return;
+    }
 
     const existeDesc = articulos.some(
       (a) =>
-        String(a.descripcion).toLowerCase() ===
-        String(form.descripcion).toLowerCase()
+        String(a.descripcion || "").trim().toLowerCase() ===
+        String(form.descripcion || "").trim().toLowerCase()
     );
-    if (existeDesc) return setErrorMsg("La descripción ya existe");
+    if (existeDesc) {
+      setErrorMsg("La descripción ya existe");
+      return;
+    }
 
-    // Obligatorios de clasificaciones (bloqueadas NO cuentan)
     for (const c of clasificaciones) {
       const k = normKey(c.nombre);
       if (CLASIF_BLOQUEADAS.has(k)) continue;
 
-      if (c.es_obligatoria === 1 && !String(form[k] || "").trim()) {
-        return setErrorMsg(`El campo "${c.nombre}" es obligatorio`);
+      if (Number(c.es_obligatoria) === 1 && !String(form[k] || "").trim()) {
+        setErrorMsg(`El campo "${c.nombre}" es obligatorio`);
+        return;
       }
     }
 
     try {
-      // 1) Crear artículo base (SIN traspasa)
       const articuloBase = {
-        codigo: form.codigo.trim(),
-        descripcion: form.descripcion.trim(),
+        codigo: String(form.codigo || "").trim(),
+        descripcion: String(form.descripcion || "").trim(),
         tipo: String(form.tipo || "").trim() || null,
-
-        // Mantengo compatibilidad con tu backend actual (si existen en DB)
-        folio: form.folio || null,
-        proveedor: form.proveedor || null,
-        punto_pedido: form.punto_pedido || null,
-
+        proveedor: String(form.proveedor || "").trim() || null,
+        folio: String(form.folio || "").trim() || null,
+        punto_pedido:
+          String(form.punto_pedido || "").trim() === ""
+            ? null
+            : String(form.punto_pedido).trim(),
         ubicacion: null,
         cantidad: 0
       };
 
       const resArticulo = await api.post("/articulos", articuloBase);
       const idArticulo = resArticulo.data?.id_articulo;
-      if (!idArticulo) throw new Error("El backend no devolvió id_articulo");
 
-      // 2) Guardar clasificaciones (solo las válidas)
-      const payload = clasificaciones
+      if (!idArticulo) {
+        throw new Error("El backend no devolvió id_articulo");
+      }
+
+      const payloadClasif = clasificaciones
         .filter((c) => !CLASIF_BLOQUEADAS.has(normKey(c.nombre)))
         .map((c) => ({
           id_clasificacion: c.id_clasificacion,
-          valor: String(form[normKey(c.nombre)] ?? "")
+          valor: String(form[normKey(c.nombre)] ?? "").trim()
         }));
 
       await api.post(`/articulos/${idArticulo}/clasificaciones`, {
-        clasificaciones: payload
+        clasificaciones: payloadClasif
       });
 
       onSaved?.();
@@ -139,7 +195,9 @@ export default function ArticuloCrearModal({
     } catch (err) {
       console.error(err);
       setErrorMsg(
-        err.response?.data?.error || err.message || "Error al guardar el artículo"
+        err.response?.data?.error ||
+          err.message ||
+          "Error al guardar el artículo"
       );
     }
   };
@@ -154,10 +212,10 @@ export default function ArticuloCrearModal({
         </div>
 
         <div className="modal-body">
-          {/* Campos base: SOLO una vez */}
           <div className="campo-linea">
             <label>Código</label>
             <input
+              ref={inputCodigoRef}
               type="text"
               value={form.codigo || ""}
               onChange={(e) => onChange("codigo", e.target.value)}
@@ -174,17 +232,61 @@ export default function ArticuloCrearModal({
           </div>
 
           <div className="campo-linea">
+            <label>Proveedor</label>
+            <select
+              value={form.proveedor || ""}
+              onChange={(e) => onChange("proveedor", e.target.value)}
+            >
+              <option value="">Seleccione...</option>
+              {proveedores.map((p) => (
+                <option key={p.id} value={p.nombre}>
+                  {p.nombre}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="campo-linea">
+            <label>Folio</label>
+            <select
+              value={form.folio || ""}
+              onChange={(e) => onChange("folio", e.target.value)}
+            >
+              <option value="">Seleccione...</option>
+              {folios.map((f) => (
+                <option key={f.id} value={f.nombre}>
+                  {f.nombre}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="campo-linea">
             <label>Tipo</label>
-            <input
-              type="text"
+            <select
               value={form.tipo || ""}
               onChange={(e) => onChange("tipo", e.target.value)}
+            >
+              <option value="">Seleccione...</option>
+              {tipos.map((t) => (
+                <option key={t.id} value={t.nombre}>
+                  {t.nombre}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="campo-linea">
+            <label>Punto de pedido</label>
+            <input
+              type="number"
+              value={form.punto_pedido || ""}
+              onChange={(e) => onChange("punto_pedido", e.target.value)}
             />
           </div>
 
           <hr />
 
-          {/* Clasificaciones: SIN codigo/descripcion/tipo/traspasa/almacen/cantidad/ubicacion */}
           {clasificaciones
             .filter((c) => !CLASIF_BLOQUEADAS.has(normKey(c.nombre)))
             .map((c) => {
@@ -193,7 +295,7 @@ export default function ArticuloCrearModal({
                 <div className="campo-linea" key={c.id_clasificacion}>
                   <label>
                     {c.nombre}
-                    {c.es_obligatoria === 1 && (
+                    {Number(c.es_obligatoria) === 1 && (
                       <span style={{ color: "red" }}> *</span>
                     )}
                   </label>

@@ -32,6 +32,7 @@ const remitosRouter = require("./routes/remitos");
 const ubicacionesRouter = require("./routes/ubicaciones");
 const dropboxMetaUsers = require("./routes/dropboxMeta");
 
+
 // =====================
 // 1) BACKEND ROUTES (igual que hoy)
 // =====================
@@ -52,6 +53,7 @@ app.use("/articulo-clasificaciones", articuloClasifRouter);
 app.use("/clasificaciones", clasificacionesRouter);
 app.use("/remitos", remitosRouter);
 app.use("/ubicaciones", ubicacionesRouter);
+app.use("/catalogos", require("./routes/catalogos"));
 
 // Endpoint para listar rutas instaladas (útil para debug; podés borrarlo luego)
 app.get("/__routes", (req, res) => {
