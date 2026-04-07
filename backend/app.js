@@ -31,6 +31,8 @@ const clasificacionesRouter = require("./routes/clasificaciones");
 const remitosRouter = require("./routes/remitos");
 const ubicacionesRouter = require("./routes/ubicaciones");
 const dropboxMetaUsers = require("./routes/dropboxMeta");
+const dropboxRegistroRoutes = require("./routes/dropboxRegistro");
+const dashboardObrasRoutes = require("./routes/dashboardObras");
 
 
 // =====================
@@ -54,6 +56,8 @@ app.use("/clasificaciones", clasificacionesRouter);
 app.use("/remitos", remitosRouter);
 app.use("/ubicaciones", ubicacionesRouter);
 app.use("/catalogos", require("./routes/catalogos"));
+app.use("/api/dropbox", dropboxRegistroRoutes);
+app.use("/api/dashboard-obras", dashboardObrasRoutes);
 
 // Endpoint para listar rutas instaladas (útil para debug; podés borrarlo luego)
 app.get("/__routes", (req, res) => {
@@ -96,6 +100,7 @@ const API_PREFIXES = [
   "/__routes",
   "/health",
   "/__test500",
+  "/api/dashboard-obras",
 ];
 
 app.get("/__test500", (_req, res) => {

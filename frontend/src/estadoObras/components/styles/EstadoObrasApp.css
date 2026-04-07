@@ -1,0 +1,39 @@
+.estado-obras-container {
+  padding: 24px 28px;
+  background: #f5f7fb;
+  min-height: calc(100vh - 60px);
+  box-sizing: border-box;
+}
+
+.estado-obras-navbar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.estado-obras-navbar a {
+  text-decoration: none;
+  color: #1f2937;
+  background: #ffffff;
+  border: 1px solid #dbe3ee;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.estado-obras-navbar a:hover {
+  background: #eef4ff;
+  border-color: #b9d0ff;
+}
+
+.estado-obras-navbar a.active {
+  background: #0b5ed7;
+  color: #fff;
+  border-color: #0b5ed7;
+}
+
+.estado-obras-content {
+  width: 100%;
+}

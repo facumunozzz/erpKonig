@@ -1,0 +1,73 @@
+.roles-demo {
+  background: #f9fafb;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.1);
+  margin: 20px;
+}
+
+.selector-rol {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.selector-rol select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+}
+
+.rol-view {
+  background: white;
+  padding: 16px;
+  border-radius: 10px;
+}
+
+.stats {
+  display: flex;
+  gap: 10px;
+  justify-content: space-around;
+  margin-bottom: 12px;
+}
+
+.card {
+  background: #f3f4f6;
+  border-radius: 8px;
+  padding: 12px;
+  flex: 1;
+  text-align: center;
+}
+
+.card.alert {
+  background: #fee2e2;
+}
+
+.obra-item {
+  background: #f9fafb;
+  margin-bottom: 8px;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+
+.barra {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
+.barra-interna {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: #555;
+  margin-top: 10px;
+  font-style: italic;
+}

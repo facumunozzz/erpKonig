@@ -20,6 +20,7 @@ import CrearFormula from './pages/CrearFormula';
 import EditarFormula from './pages/EditarFormula';
 import Fabrica from './pages/Fabrica';
 import ArticuloClasificaciones from './pages/DefinirArticulos';
+import EstadoObrasApp from './estadoObras/EstadoObrasApp';
 
 // 👇 nuevas páginas de administración
 import Administracion from './pages/Administracion';
@@ -77,6 +78,7 @@ function AppRoutes() {
             <Route path="/remitos" element={<Remitos />} />
             <Route path="/remitos/nuevo" element={<NuevoRemito />} />
             <Route path="/remitos/:id" element={<DetalleRemito />} />
+            <Route path="/estado-obras/*" element={<EstadoObrasApp />} />
           </Route>
 
           {/* Solo administradores */}

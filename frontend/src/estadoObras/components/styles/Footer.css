@@ -1,0 +1,22 @@
+.footer {
+  margin-top: 60px;
+  padding: 20px;
+  background: #f3f4f6;
+  border-top: 1px solid #e5e7eb;
+  text-align: center;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.footer-logos {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  margin-bottom: 10px;
+}
+
+.footer-logo {
+  height: 40px;
+  object-fit: contain;
+  filter: grayscale(0.2);
+}

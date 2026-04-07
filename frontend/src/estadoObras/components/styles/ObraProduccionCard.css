@@ -1,0 +1,40 @@
+.obra-prod-card {
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: white;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+
+.obra-prod-card .header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.badge-ok {
+  background: #4CAF50;
+  color: white;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.obra-prod-card table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.obra-prod-card th,
+.obra-prod-card td {
+  border: 1px solid #ccc;
+  padding: 8px;
+  text-align: center;
+}
+
+.obra-prod-card tr.ok {
+  background-color: #4CAF50;
+  color: white;
+}

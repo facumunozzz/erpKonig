@@ -16,6 +16,9 @@ function Navbar() {
       <img src={logoSZ} alt="SZ Consultores" className="logo-sz" />
 
       <ul className="navbar-menu">
+        {isAuth && (
+          <li><NavLink to="/estado-obras" className={linkClass}>Estado de Obras</NavLink></li>
+        )}
         {hasUtilidad('Artículos') && (
           <li><NavLink to="/articulos" className={linkClass}>Artículos</NavLink></li>
         )}

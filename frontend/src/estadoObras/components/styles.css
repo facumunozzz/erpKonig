@@ -1,0 +1,274 @@
+body {
+  font-family: "Segoe UI", sans-serif;
+  background-color: #f3f4f6;
+  margin: 0;
+  padding: 0;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 20px auto;
+  padding: 10px;
+}
+
+/* ====== DASHBOARD ====== */
+.dashboard-container {
+  padding: 10px;
+}
+
+.titulo-seccion {
+  color: #1e3a8a;
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+.alerta {
+  background-color: #fff8e1;
+  border-left: 5px solid #f59e0b;
+  color: #92400e;
+  padding: 10px 15px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.whatsapp-btn {
+  background-color: #25d366;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: 0.2s;
+}
+.whatsapp-btn:hover {
+  background-color: #1da851;
+}
+
+.dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 15px;
+}
+
+/* ====== OBRA CARD ====== */
+.obra-card {
+  background-color: white;
+  border-radius: 10px;
+  padding: 15px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.obra-header h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.direccion {
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.fecha {
+  color: #888;
+  font-size: 0.8rem;
+  margin-bottom: 10px;
+}
+
+/* ====== TIMELINE ====== */
+.timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.timeline-step {
+  flex: 1 1 calc(33% - 6px);
+  text-align: center;
+}
+
+.timeline-step .circle {
+  width: 10px;
+  height: 10px;
+  background-color: #ccc;
+  border-radius: 50%;
+  margin: 0 auto 4px;
+}
+
+.timeline-step.active .circle {
+  background-color: #4CAF50;
+}
+
+.timeline-step span {
+  font-size: 0.7rem;
+  color: #333;
+}
+
+/* ====== PREDICCIÓN ====== */
+.prediccion {
+  font-size: 0.8rem;
+  margin-top: 6px;
+}
+
+.barra-pred {
+  background: #eee;
+  border-radius: 5px;
+  height: 6px;
+  width: 100%;
+}
+
+.barra-interna {
+  height: 6px;
+  border-radius: 5px;
+  transition: width 0.5s ease;
+}
+
+/* ====== BOTONES ====== */
+.btn-alerta {
+  background-color: #f87171;
+  border: none;
+  color: white;
+  padding: 6px 10px;
+  margin-top: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: bold;
+  transition: 0.2s;
+}
+
+.btn-alerta:hover {
+  background-color: #ef4444;
+}
+
+/* === OCR DEMO === */
+.ocr-demo {
+  background: #fff;
+  border-radius: 10px;
+  padding: 15px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+.ocr-demo input {
+  margin: 10px 0;
+}
+.ocr-preview {
+  width: 100%;
+  max-width: 300px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+.ocr-result table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+.ocr-result th, .ocr-result td {
+  border-bottom: 1px solid #ddd;
+  padding: 4px;
+}
+
+/* === KPIS === */
+.kpi-panel {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-around;
+  margin: 15px 0;
+}
+.kpi-item {
+  flex: 1 1 150px;
+  margin: 8px;
+  border-radius: 10px;
+  color: white;
+  padding: 10px;
+  text-align: center;
+}
+.kpi-item h3 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+.azul { background: #2563eb; }
+.verde { background: #16a34a; }
+.rojo { background: #dc2626; }
+.amarillo { background: #ca8a04; }
+
+/* === FILTROS === */
+.filtros {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+.filtros input, .filtros select {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  font-size: 0.9rem;
+}
+
+/* === EXPORTAR === */
+.export-btn {
+  background-color: #0284c7;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: bold;
+  margin: 10px 0;
+}
+.export-btn:hover {
+  background-color: #0369a1;
+}
+
+.obra-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.obra-codigo {
+  color: #333;
+  font-size: 0.9rem;
+  margin-top: 2px;
+}
+
+.riesgo {
+  color: white;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+.navbar {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  background: #f3f4f6;
+  padding: 12px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+}
+
+.navbar a {
+  text-decoration: none;
+  color: #333;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.navbar a:hover {
+  color: #2563eb;
+}
+
+.kpi-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+}
