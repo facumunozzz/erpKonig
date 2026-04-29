@@ -203,10 +203,6 @@ export default function Ajustes() {
     <div className="transferencias-page">
       <h2 className="module-title">Ajustes</h2>
 
-      <button className="btn-primary" onClick={consumirProduccion}>
-        ⚙️ Ajustar Registro de Producción
-      </button>
-
       <div className="acciones">
         <button onClick={() => navigate("/ajustes/nuevo")}>Nuevo ajuste</button>
 
@@ -233,6 +229,11 @@ export default function Ajustes() {
             setCurrentPage(1);
           }}
         />
+
+      <button className="btn-primary btn-ajuste-produccion" onClick={consumirProduccion}>
+        ⚙️ Ajustar Registro de Producción
+      </button>
+
       </div>
 
       <table className="tabla-transferencias">

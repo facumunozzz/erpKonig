@@ -4,39 +4,29 @@ import * as XLSX from 'xlsx';
 import './../styles/transferencias.css';
 
 function Movimientos() {
-
   const [rows, setRows] = useState([]);
   const [filtered, setFiltered] = useState([]);
 
-  // paginado PRO
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [gotoPage, setGotoPage] = useState("");
 
-  const [filtros, setFiltros] = useState({
+  const filtrosIniciales = {
     fecha: '',
     codigo: '',
     descripcion: '',
     cantidad: '',
-    deposito: '',
+    deposito_origen: '',
+    deposito_destino: '',
     usuario: '',
     movimiento: '',
     num_movimiento: '',
-  });
+  };
+
+  const [filtros, setFiltros] = useState(filtrosIniciales);
 
   const limpiarFiltros = () => {
-    const vacios = {
-      fecha: "",
-      codigo: "",
-      descripcion: "",
-      cantidad: "",
-      deposito: "",
-      usuario: "",
-      movimiento: "",
-      num_movimiento: "",
-    };
-
-    setFiltros(vacios);
+    setFiltros(filtrosIniciales);
     setFiltered(rows || []);
     setCurrentPage(1);
     setGotoPage("");
@@ -62,11 +52,13 @@ function Movimientos() {
         codigo: r.codigo ?? '',
         descripcion: r.descripcion ?? '',
         cantidad: String(r.cantidad ?? ''),
-        deposito: r.deposito ?? '',
+        deposito_origen: r.deposito_origen ?? '',
+        deposito_destino: r.deposito_destino ?? '',
         usuario: r.usuario ?? '',
         movimiento: r.movimiento ?? '',
         num_movimiento: r.num_movimiento ?? '',
       };
+
       return Object.keys(nf).every(k =>
         String(v[k]).toLowerCase().includes(nf[k])
       );
@@ -76,9 +68,6 @@ function Movimientos() {
     setCurrentPage(1);
   };
 
-  // =======================
-  // Paginado PRO
-  // =======================
   const totalPages = Math.ceil(filtered.length / pageSize) || 1;
 
   const paginated = filtered.slice(
@@ -91,17 +80,17 @@ function Movimientos() {
     setCurrentPage(p);
   };
 
-  const from = (currentPage - 1) * pageSize + 1;
+  const from = filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const to = Math.min(currentPage * pageSize, filtered.length);
 
-  // ===== Exportar a Excel =====
   const exportarExcel = () => {
     const data = (filtered.length ? filtered : rows).map(r => ({
       Fecha: r.fecha ? new Date(r.fecha).toLocaleString('es-AR') : '',
       Código: r.codigo ?? '',
       Descripción: r.descripcion ?? '',
       Cantidad: r.cantidad ?? '',
-      Depósito: r.deposito ?? '',
+      'Depósito Origen': r.deposito_origen ?? '',
+      'Depósito Destino': r.deposito_destino ?? '',
       Usuario: r.usuario ?? '',
       Movimiento: r.movimiento ?? '',
       'Num. Movimiento': r.num_movimiento ?? '',
@@ -126,82 +115,29 @@ function Movimientos() {
         <table className="tabla-movimientos">
           <thead>
             <tr>
-              <th>
-                Fecha
-                <br />
-                <input
-                  value={filtros.fecha}
-                  onChange={e => onFilterChange('fecha', e.target.value)}
-                />
-              </th>
-              <th>
-                Código
-                <br />
-                <input
-                  value={filtros.codigo}
-                  onChange={e => onFilterChange('codigo', e.target.value)}
-                />
-              </th>
-              <th>
-                Descripción
-                <br />
-                <input
-                  value={filtros.descripcion}
-                  onChange={e => onFilterChange('descripcion', e.target.value)}
-                />
-              </th>
-              <th style={{ textAlign: 'right' }}>
-                Cantidad
-                <br />
-                <input
-                  value={filtros.cantidad}
-                  onChange={e => onFilterChange('cantidad', e.target.value)}
-                />
-              </th>
-              <th>
-                Depósito
-                <br />
-                <input
-                  value={filtros.deposito}
-                  onChange={e => onFilterChange('deposito', e.target.value)}
-                />
-              </th>
-              <th>
-                Usuario
-                <br />
-                <input
-                  value={filtros.usuario}
-                  onChange={e => onFilterChange('usuario', e.target.value)}
-                />
-              </th>
-              <th>
-                Movimiento
-                <br />
-                <input
-                  value={filtros.movimiento}
-                  onChange={e => onFilterChange('movimiento', e.target.value)}
-                />
-              </th>
-              <th>
-                Num. Movimiento
-                <br />
-                <input
-                  value={filtros.num_movimiento}
-                  onChange={e => onFilterChange('num_movimiento', e.target.value)}
-                />
-              </th>
+              <th>Fecha<br /><input value={filtros.fecha} onChange={e => onFilterChange('fecha', e.target.value)} /></th>
+              <th>Código<br /><input value={filtros.codigo} onChange={e => onFilterChange('codigo', e.target.value)} /></th>
+              <th>Descripción<br /><input value={filtros.descripcion} onChange={e => onFilterChange('descripcion', e.target.value)} /></th>
+              <th style={{ textAlign: 'right' }}>Cantidad<br /><input value={filtros.cantidad} onChange={e => onFilterChange('cantidad', e.target.value)} /></th>
+              <th>Depósito Origen<br /><input value={filtros.deposito_origen} onChange={e => onFilterChange('deposito_origen', e.target.value)} /></th>
+              <th>Depósito Destino<br /><input value={filtros.deposito_destino} onChange={e => onFilterChange('deposito_destino', e.target.value)} /></th>
+              <th>Usuario<br /><input value={filtros.usuario} onChange={e => onFilterChange('usuario', e.target.value)} /></th>
+              <th>Movimiento<br /><input value={filtros.movimiento} onChange={e => onFilterChange('movimiento', e.target.value)} /></th>
+              <th>Num. Movimiento<br /><input value={filtros.num_movimiento} onChange={e => onFilterChange('num_movimiento', e.target.value)} /></th>
             </tr>
           </thead>
+
           <tbody>
             {paginated.length === 0 ? (
-              <tr><td colSpan={8}>Sin movimientos.</td></tr>
+              <tr><td colSpan={9}>Sin movimientos.</td></tr>
             ) : paginated.map((r, i) => (
               <tr key={i}>
                 <td>{r.fecha ? new Date(r.fecha).toLocaleString('es-AR') : ''}</td>
                 <td>{r.codigo}</td>
                 <td>{r.descripcion}</td>
                 <td style={{ textAlign: 'right' }}>{r.cantidad}</td>
-                <td>{r.deposito}</td>
+                <td>{r.deposito_origen ?? ''}</td>
+                <td>{r.deposito_destino ?? ''}</td>
                 <td>{r.usuario ?? ''}</td>
                 <td>{r.movimiento}</td>
                 <td>{r.num_movimiento}</td>
@@ -211,11 +147,7 @@ function Movimientos() {
         </table>
       </div>
 
-      {/* =========================
-           PAGINADO PRO
-         ========================= */}
       <div className="paginado-pro">
-
         <div className="paginado-info">
           Mostrando {from}-{to} de {filtered.length}
         </div>
@@ -223,7 +155,10 @@ function Movimientos() {
         <div className="paginado-size">
           <select
             value={pageSize}
-            onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+            onChange={e => {
+              setPageSize(Number(e.target.value));
+              setCurrentPage(1);
+            }}
           >
             <option value={10}>10</option>
             <option value={25}>25</option>

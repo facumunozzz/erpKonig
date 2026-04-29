@@ -49,6 +49,14 @@ export default function DetalleAjuste() {
               <input type="text" value={cab.deposito} readOnly />
             </div>
             <div className="nt-field">
+              <label>Obra</label>
+              <input type="text" value={cab.obra ?? ''} readOnly />
+            </div>
+            <div className="nt-field">
+              <label>Versión</label>
+              <input type="text" value={cab.version ?? ''} readOnly />
+            </div>
+            <div className="nt-field">
               <label>Fecha</label>
               <input
                 type="text"
@@ -72,13 +80,16 @@ export default function DetalleAjuste() {
               <tr>
                 <th>Código</th>
                 <th>Descripción</th>
-                <th style={{ textAlign: 'right' }}>Cantidad</th>
+                <th style={{ textAlign: 'right' }}>Cantidad ajustada</th>
+                <th style={{ textAlign: 'right' }}>Requerido</th>
+                <th style={{ textAlign: 'right' }}>Faltante</th>
+                <th>Observación</th>
               </tr>
             </thead>
             <tbody>
               {det.length === 0 ? (
                 <tr>
-                  <td colSpan="3">Este ajuste no tiene ítems.</td>
+                  <td colSpan="6">Este ajuste no tiene ítems.</td>
                 </tr>
               ) : (
                 det.map((it, idx) => (
@@ -86,6 +97,9 @@ export default function DetalleAjuste() {
                     <td>{it.cod_articulo}</td>
                     <td>{it.descripcion}</td>
                     <td style={{ textAlign: 'right' }}>{it.cantidad}</td>
+                    <td style={{ textAlign: 'right' }}>{it.cantidad_requerida ?? ''}</td>
+                    <td style={{ textAlign: 'right' }}>{it.cantidad_faltante ?? ''}</td>
+                    <td>{it.observacion ?? ''}</td>
                   </tr>
                 ))
               )}

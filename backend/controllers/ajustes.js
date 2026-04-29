@@ -2,11 +2,15 @@
 const { sql, poolConnect, getPool } = require("../db");
 const XLSX = require("xlsx");
 const axios = require("axios");
-const { downloadByPath, uploadOverwriteByPath } = require("../services/dropbox");
+const {
+  downloadByPath,
+  uploadOverwriteByPath,
+} = require("../services/dropbox");
 
 // ------------------------ helpers ------------------------
-const toDb = (v) => (v == null || String(v).trim() === "" ? null : String(v).trim());
-const up = (v) => (toDb(v)?.toUpperCase() ?? null);
+const toDb = (v) =>
+  v == null || String(v).trim() === "" ? null : String(v).trim();
+const up = (v) => toDb(v)?.toUpperCase() ?? null;
 
 function toNumber0(v) {
   if (v === null || v === undefined) return 0;
@@ -44,8 +48,7 @@ async function resolveUbicacionId(trans, { depositoId, ubicacionId }) {
   if (Number.isFinite(ub) && ub > 0) {
     const r = await new sql.Request(trans)
       .input("dep", sql.Int, dep)
-      .input("ub", sql.Int, ub)
-      .query(`
+      .input("ub", sql.Int, ub).query(`
         SELECT id_ubicacion
         FROM dbo.ubicaciones
         WHERE id_deposito = @dep AND id_ubicacion = @ub
@@ -57,9 +60,7 @@ async function resolveUbicacionId(trans, { depositoId, ubicacionId }) {
   }
 
   // 2) si no manda ubicación: buscar GENERAL
-  let rGen = await new sql.Request(trans)
-    .input("dep", sql.Int, dep)
-    .query(`
+  let rGen = await new sql.Request(trans).input("dep", sql.Int, dep).query(`
       SELECT TOP 1 id_ubicacion
       FROM dbo.ubicaciones
       WHERE id_deposito = @dep
@@ -70,9 +71,7 @@ async function resolveUbicacionId(trans, { depositoId, ubicacionId }) {
   if (rGen.recordset.length) return Number(rGen.recordset[0].id_ubicacion);
 
   // 3) fallback: primera ubicación del depósito
-  let rAny = await new sql.Request(trans)
-    .input("dep", sql.Int, dep)
-    .query(`
+  let rAny = await new sql.Request(trans).input("dep", sql.Int, dep).query(`
       SELECT TOP 1 id_ubicacion
       FROM dbo.ubicaciones
       WHERE id_deposito = @dep
@@ -83,7 +82,7 @@ async function resolveUbicacionId(trans, { depositoId, ubicacionId }) {
 
   // 4) no hay ubicaciones
   throw new Error(
-    `El depósito ${dep} no tiene ubicaciones. Creá una ubicación "GENERAL" para poder ajustar stock.`
+    `El depósito ${dep} no tiene ubicaciones. Creá una ubicación "GENERAL" para poder ajustar stock.`,
   );
 }
 
@@ -93,8 +92,7 @@ async function getStockActual(trans, { depositoId, articuloId, ubicacionId }) {
   const r = await rq
     .input("dep", sql.Int, depositoId)
     .input("art", sql.Int, articuloId)
-    .input("ub", sql.Int, ubicacionId ?? null)
-    .query(`
+    .input("ub", sql.Int, ubicacionId ?? null).query(`
       SELECT ISNULL(SUM(cantidad),0) AS q
       FROM dbo.stock WITH (UPDLOCK, HOLDLOCK)
       WHERE id_deposito = @dep
@@ -104,15 +102,17 @@ async function getStockActual(trans, { depositoId, articuloId, ubicacionId }) {
   return Number(r.recordset?.[0]?.q || 0);
 }
 
-async function tryDescontarStock(trans, { depositoId, articuloId, ubicacionId, deltaNegativo }) {
+async function tryDescontarStock(
+  trans,
+  { depositoId, articuloId, ubicacionId, deltaNegativo },
+) {
   // deltaNegativo debe ser NEGATIVO (ej -5)
   const rq = new sql.Request(trans);
   const r = await rq
     .input("dep", sql.Int, depositoId)
     .input("art", sql.Int, articuloId)
     .input("ub", sql.Int, ubicacionId)
-    .input("delta", sql.Int, deltaNegativo)
-    .query(`
+    .input("delta", sql.Int, deltaNegativo).query(`
       UPDATE dbo.stock
       SET cantidad = cantidad + @delta
       WHERE id_deposito = @dep
@@ -128,14 +128,16 @@ async function tryDescontarStock(trans, { depositoId, articuloId, ubicacionId, d
 
 // UPSERT atómico (evita UQ_stock_art_dep en concurrencia)
 // Ajusta cantidad = cantidad + @delta
-async function upsertStockDelta(trans, { depositoId, articuloId, ubicacionId, delta }) {
+async function upsertStockDelta(
+  trans,
+  { depositoId, articuloId, ubicacionId, delta },
+) {
   const rq = new sql.Request(trans);
   await rq
     .input("dep", sql.Int, depositoId)
     .input("art", sql.Int, articuloId)
     .input("ub", sql.Int, ubicacionId)
-    .input("delta", sql.Int, delta)
-    .query(`
+    .input("delta", sql.Int, delta).query(`
       MERGE dbo.stock WITH (HOLDLOCK) AS t
       USING (SELECT @dep AS id_deposito, @art AS id_articulo, @ub AS id_ubicacion) AS s
       ON (
@@ -164,35 +166,86 @@ async function detallesTieneUsuario(trans) {
 }
 
 // Inserta detalle con o sin usuario según exista la columna
-async function insertDetalle(trans, { ajusteId, cod, desc, cantidad, usuario }) {
+async function insertDetalle(
+  trans,
+  {
+    ajusteId,
+    cod,
+    desc,
+    cantidad,
+    usuario,
+    cantidadRequerida = null,
+    cantidadFaltante = null,
+    observacion = null,
+  },
+) {
   const conUsuario = await detallesTieneUsuario(trans);
 
   const rq = new sql.Request(trans)
     .input("nro", sql.Int, ajusteId)
     .input("cod", sql.VarChar, cod)
     .input("desc", sql.VarChar, desc || "")
-    .input("cant", sql.Int, cantidad);
+    .input("cant", sql.Int, cantidad)
+    .input("req", sql.Int, cantidadRequerida)
+    .input("falt", sql.Int, cantidadFaltante)
+    .input("obs", sql.VarChar, observacion);
 
   if (conUsuario) rq.input("usr", sql.VarChar, usuario ?? null);
 
   await rq.query(
     conUsuario
       ? `
-        INSERT INTO dbo.ajustes_detalles (ajuste_id, cod_articulo, descripcion, cantidad, usuario)
-        VALUES (@nro, @cod, @desc, @cant, @usr)
+        INSERT INTO dbo.ajustes_detalles
+        (
+          ajuste_id,
+          cod_articulo,
+          descripcion,
+          cantidad,
+          usuario,
+          cantidad_requerida,
+          cantidad_faltante,
+          observacion
+        )
+        VALUES
+        (
+          @nro,
+          @cod,
+          @desc,
+          @cant,
+          @usr,
+          @req,
+          @falt,
+          @obs
+        )
       `
       : `
-        INSERT INTO dbo.ajustes_detalles (ajuste_id, cod_articulo, descripcion, cantidad)
-        VALUES (@nro, @cod, @desc, @cant)
+        INSERT INTO dbo.ajustes_detalles
+        (
+          ajuste_id,
+          cod_articulo,
+          descripcion,
+          cantidad,
+          cantidad_requerida,
+          cantidad_faltante,
+          observacion
+        )
+        VALUES
+        (
+          @nro,
+          @cod,
+          @desc,
+          @cant,
+          @req,
+          @falt,
+          @obs
+        )
       `
   );
 }
 
 // Busca motivo por id (valida activo)
 async function requireMotivoActivo(trans, motivoId) {
-  const r = await new sql.Request(trans)
-    .input("id", sql.Int, motivoId)
-    .query(`
+  const r = await new sql.Request(trans).input("id", sql.Int, motivoId).query(`
       SELECT id_motivo, nombre, activo
       FROM dbo.ajustes_motivos WITH (UPDLOCK, HOLDLOCK)
       WHERE id_motivo = @id
@@ -209,9 +262,11 @@ async function requireMotivoActivo(trans, motivoId) {
 
 // Busca motivo por nombre (para import/dropbox)
 async function getMotivoIdByNombreActivo(trans, nombreExactoUpper) {
-  const r = await new sql.Request(trans)
-    .input("n", sql.VarChar, nombreExactoUpper)
-    .query(`
+  const r = await new sql.Request(trans).input(
+    "n",
+    sql.VarChar,
+    nombreExactoUpper,
+  ).query(`
       SELECT TOP 1 id_motivo
       FROM dbo.ajustes_motivos WITH (UPDLOCK, HOLDLOCK)
       WHERE UPPER(LTRIM(RTRIM(nombre))) = @n
@@ -238,7 +293,9 @@ exports.getMotivos = async (_req, res) => {
     res.json(r.recordset || []);
   } catch (err) {
     console.error("ajustes.getMotivos:", err);
-    res.status(500).json({ error: "Error al listar motivos", detalle: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al listar motivos", detalle: err.message });
   }
 };
 
@@ -250,34 +307,44 @@ exports.createMotivo = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    const r = await pool
-      .request()
-      .input("n", sql.VarChar, nombre)
-      .query(`
+    const r = await pool.request().input("n", sql.VarChar, nombre).query(`
         INSERT INTO dbo.ajustes_motivos (nombre, activo)
         VALUES (@n, 1);
         SELECT SCOPE_IDENTITY() AS id_motivo;
       `);
 
-    return res.status(201).json({ ok: true, id_motivo: Number(r.recordset[0].id_motivo) });
+    return res
+      .status(201)
+      .json({ ok: true, id_motivo: Number(r.recordset[0].id_motivo) });
   } catch (err) {
-    if (String(err.message || "").toLowerCase().includes("unique")) {
-      return res.status(400).json({ error: "Ya existe un motivo con ese nombre" });
+    if (
+      String(err.message || "")
+        .toLowerCase()
+        .includes("unique")
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Ya existe un motivo con ese nombre" });
     }
     console.error("ajustes.createMotivo:", err);
-    res.status(500).json({ error: "Error al crear motivo", detalle: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al crear motivo", detalle: err.message });
   }
 };
 
 exports.updateMotivo = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id)) return res.status(400).json({ error: "ID inválido" });
+    if (!Number.isInteger(id))
+      return res.status(400).json({ error: "ID inválido" });
 
-    const nombre = req.body?.nombre != null ? String(req.body.nombre).trim() : null;
+    const nombre =
+      req.body?.nombre != null ? String(req.body.nombre).trim() : null;
     const activo = req.body?.activo;
 
-    if (nombre != null && !nombre) return res.status(400).json({ error: "Nombre inválido" });
+    if (nombre != null && !nombre)
+      return res.status(400).json({ error: "Nombre inválido" });
 
     await poolConnect;
     const pool = await getPool();
@@ -300,18 +367,27 @@ exports.updateMotivo = async (req, res) => {
       return res.status(404).json({ error: "Motivo no encontrado" });
     return res.json({ ok: true });
   } catch (err) {
-    if (String(err.message || "").toLowerCase().includes("unique")) {
-      return res.status(400).json({ error: "Ya existe un motivo con ese nombre" });
+    if (
+      String(err.message || "")
+        .toLowerCase()
+        .includes("unique")
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Ya existe un motivo con ese nombre" });
     }
     console.error("ajustes.updateMotivo:", err);
-    res.status(500).json({ error: "Error al actualizar motivo", detalle: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al actualizar motivo", detalle: err.message });
   }
 };
 
 exports.deleteMotivo = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id)) return res.status(400).json({ error: "ID inválido" });
+    if (!Number.isInteger(id))
+      return res.status(400).json({ error: "ID inválido" });
 
     await poolConnect;
     const pool = await getPool();
@@ -338,7 +414,9 @@ exports.deleteMotivo = async (req, res) => {
     return res.json({ ok: true });
   } catch (err) {
     console.error("ajustes.deleteMotivo:", err);
-    res.status(500).json({ error: "Error al borrar motivo", detalle: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al borrar motivo", detalle: err.message });
   }
 };
 
@@ -354,6 +432,8 @@ exports.getAll = async (_req, res) => {
         a.numero_ajuste AS id,
         a.numero_ajuste,
         a.deposito,
+        a.obra,
+        a.version,
         m.nombre AS motivo,
         a.fecha
       FROM dbo.ajustes a
@@ -363,7 +443,9 @@ exports.getAll = async (_req, res) => {
     res.json(r.recordset || []);
   } catch (err) {
     console.error("ajustes.getAll:", err);
-    res.status(500).json({ error: "Error al listar ajustes", detalle: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al listar ajustes", detalle: err.message });
   }
 };
 
@@ -373,7 +455,8 @@ exports.getAll = async (_req, res) => {
 exports.getById = async (req, res) => {
   try {
     const nro = Number(req.params.id);
-    if (!Number.isInteger(nro)) return res.status(400).json({ error: "Número inválido" });
+    if (!Number.isInteger(nro))
+      return res.status(400).json({ error: "Número inválido" });
 
     await poolConnect;
     const pool = await getPool();
@@ -383,6 +466,8 @@ exports.getById = async (req, res) => {
         a.numero_ajuste AS id,
         a.numero_ajuste,
         a.deposito,
+        a.obra,
+        a.version,
         a.motivo_id,
         m.nombre AS motivo,
         a.fecha,
@@ -391,14 +476,18 @@ exports.getById = async (req, res) => {
       LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
       WHERE a.numero_ajuste = @n
     `);
-    if (!cab.recordset.length) return res.status(404).json({ error: "Ajuste no encontrado" });
+    if (!cab.recordset.length)
+      return res.status(404).json({ error: "Ajuste no encontrado" });
 
     const det = await pool.request().input("n", sql.Int, nro).query(`
       SELECT 
         ajuste_id,
         cod_articulo,
         descripcion,
-        cantidad
+        cantidad,
+        cantidad_requerida,
+        cantidad_faltante,
+        observacion
       FROM dbo.ajustes_detalles
       WHERE ajuste_id = @n
       ORDER BY cod_articulo
@@ -407,7 +496,9 @@ exports.getById = async (req, res) => {
     res.json({ cabecera: cab.recordset[0], detalle: det.recordset || [] });
   } catch (err) {
     console.error("ajustes.getById:", err);
-    res.status(500).json({ error: "Error al obtener detalle", detalle: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al obtener detalle", detalle: err.message });
   }
 };
 
@@ -421,7 +512,8 @@ exports.getById = async (req, res) => {
  * }
  */
 exports.create = async (req, res) => {
-  const usuario = req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
+  const usuario =
+    req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
 
   const depositoId = asInt(req.body?.deposito_id);
   const ubicacionIdBody = req.body?.id_ubicacion ?? null;
@@ -429,6 +521,27 @@ exports.create = async (req, res) => {
   const motivoId = asInt(req.body?.motivo_id);
   if (!Number.isFinite(motivoId) || motivoId <= 0) {
     return res.status(400).json({ error: "Motivo obligatorio" });
+  }
+
+  const obraRaw = req.body?.obra;
+  const versionRaw = req.body?.version;
+
+  const obra =
+    obraRaw === null || obraRaw === undefined || String(obraRaw).trim() === ""
+      ? null
+      : asInt(obraRaw);
+
+  const version =
+    versionRaw === null || versionRaw === undefined || String(versionRaw).trim() === ""
+      ? null
+      : asInt(versionRaw);
+
+  if (obra !== null && !Number.isFinite(obra)) {
+    return res.status(400).json({ error: "Obra inválida" });
+  }
+
+  if (version !== null && !Number.isFinite(version)) {
+    return res.status(400).json({ error: "Versión inválida" });
   }
 
   const items = Array.isArray(req.body?.items) ? req.body.items : [];
@@ -446,8 +559,12 @@ exports.create = async (req, res) => {
     if (!cod || !Number.isFinite(cant) || cant === 0) continue;
     agg.set(cod, (agg.get(cod) || 0) + cant);
   }
-  const normItems = Array.from(agg.entries()).map(([cod, cant]) => ({ cod, cant }));
-  if (!normItems.length) return res.status(400).json({ error: "Items inválidos" });
+  const normItems = Array.from(agg.entries()).map(([cod, cant]) => ({
+    cod,
+    cant,
+  }));
+  if (!normItems.length)
+    return res.status(400).json({ error: "Items inválidos" });
 
   let trans;
   try {
@@ -457,8 +574,7 @@ exports.create = async (req, res) => {
     await trans.begin();
 
     // 1) Validar depósito
-    const dep = await new sql.Request(trans)
-      .input("d", sql.Int, depositoId)
+    const dep = await new sql.Request(trans).input("d", sql.Int, depositoId)
       .query(`
         SELECT id_deposito, nombre
         FROM dbo.depositos WITH (UPDLOCK, HOLDLOCK)
@@ -467,7 +583,9 @@ exports.create = async (req, res) => {
 
     if (!dep.recordset.length) {
       await trans.rollback();
-      return res.status(400).json({ error: `Depósito inexistente: ${depositoId}` });
+      return res
+        .status(400)
+        .json({ error: `Depósito inexistente: ${depositoId}` });
     }
     const nombreDeposito = String(dep.recordset[0].nombre || "");
 
@@ -505,20 +623,30 @@ exports.create = async (req, res) => {
     const byCode = new Map(
       arts.recordset.map((r) => [
         r.cod,
-        { id_articulo: Number(r.id_articulo), descripcion: String(r.descripcion || "") },
-      ])
+        {
+          id_articulo: Number(r.id_articulo),
+          descripcion: String(r.descripcion || ""),
+        },
+      ]),
     );
 
-    const faltantes = normItems.filter((i) => !byCode.has(i.cod)).map((i) => i.cod);
+    const faltantes = normItems
+      .filter((i) => !byCode.has(i.cod))
+      .map((i) => i.cod);
     if (faltantes.length) {
       await trans.rollback();
-      return res.status(400).json({ error: "Códigos inexistentes", detalle: faltantes });
+      return res
+        .status(400)
+        .json({ error: "Códigos inexistentes", detalle: faltantes });
     }
 
     // 4) Validar stock proyectado
     for (const it of normItems) {
       const { id_articulo } = byCode.get(it.cod);
-      const disponible = await getStockActual(trans, { depositoId, articuloId: id_articulo });
+      const disponible = await getStockActual(trans, {
+        depositoId,
+        articuloId: id_articulo,
+      });
       const proyectado = disponible + it.cant;
       if (proyectado < 0) {
         await trans.rollback();
@@ -546,43 +674,65 @@ exports.create = async (req, res) => {
       .input("nro", sql.Int, nextNro)
       .input("depNom", sql.VarChar, nombreDeposito)
       .input("motId", sql.Int, motivoId)
-      .input("motNom", sql.VarChar, motivoNombre) // legacy
+      .input("motNom", sql.VarChar, motivoNombre)
       .input("usr", sql.VarChar, usuario)
-      .query(`
-        INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo_id, motivo, fecha, usuario)
-        VALUES (@nro, @depNom, @motId, @motNom, GETDATE(), @usr)
-      `);
+      .input("obra", sql.Int, obra)
+      .input("version", sql.Int, version).query(`
+      INSERT INTO dbo.ajustes
+      (
+        numero_ajuste,
+        deposito,
+        motivo_id,
+        motivo,
+        obra,
+        version,
+        fecha,
+        usuario
+      )
+      VALUES
+      (
+        @nro,
+        @depNom,
+        @motId,
+        @motNom,
+        @obra,
+        @version,
+        GETDATE(),
+        @usr
+      )
+    `);
 
     // 7) Detalles + stock
-    for (const it of normItems) {
-      const { id_articulo, descripcion } = byCode.get(it.cod);
+for (const it of normItems) {
+  const { id_articulo, descripcion } = byCode.get(it.cod);
 
-      await insertDetalle(trans, {
-        ajusteId: nextNro,
-        cod: it.cod,
-        desc: descripcion || "",
-        cantidad: it.cant,
-        usuario,
-      });
+  await insertDetalle(trans, {
+    ajusteId: nextNro,
+    cod: it.cod,
+    desc: descripcion || "",
+    cantidad: it.cant,
+    usuario,
+  });
 
-      await upsertStockDelta(trans, {
-        depositoId,
-        articuloId: id_articulo,
-        ubicacionId,
-        delta: it.cant,
-      });
-    }
+  await upsertStockDelta(trans, {
+    depositoId,
+    articuloId: id_articulo,
+    ubicacionId,
+    delta: it.cant,
+  });
+}
 
     await trans.commit();
 
     const creado = await (await getPool())
       .request()
-      .input("n", sql.Int, nextNro)
-      .query(`
+      .input("n", sql.Int, nextNro).query(`
         SELECT 
           a.numero_ajuste AS id,
           a.numero_ajuste,
           a.deposito,
+          a.obra,
+          a.version,
           m.nombre AS motivo,
           a.fecha
         FROM dbo.ajustes a
@@ -590,13 +740,17 @@ exports.create = async (req, res) => {
         WHERE a.numero_ajuste = @n
       `);
 
-    return res.status(201).json({ message: "Ajuste creado", ajuste: creado.recordset[0] });
+    return res
+      .status(201)
+      .json({ message: "Ajuste creado", ajuste: creado.recordset[0] });
   } catch (err) {
     console.error("ajustes.create:", err);
     try {
       if (trans) await trans.rollback();
     } catch {}
-    return res.status(500).json({ error: "Error al crear ajuste", detalle: err.message });
+    return res
+      .status(500)
+      .json({ error: "Error al crear ajuste", detalle: err.message });
   }
 };
 
@@ -605,16 +759,21 @@ exports.create = async (req, res) => {
 // ==========================
 exports.downloadTemplate = (_req, res) => {
   try {
-    const data = [["Código", "Tipo de movimiento", "Depósito", "Ubicación", "Cantidad"]];
+    const data = [
+      ["Código", "Tipo de movimiento", "Depósito", "Ubicación", "Cantidad"],
+    ];
     const ws = XLSX.utils.aoa_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Ajustes");
     const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
-    res.setHeader("Content-Disposition", 'attachment; filename="Plantilla_Ajustes.xlsx"');
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="Plantilla_Ajustes.xlsx"',
+    );
     res.setHeader(
       "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     return res.status(200).send(buffer);
   } catch (err) {
@@ -626,7 +785,8 @@ exports.downloadTemplate = (_req, res) => {
 // IMPORTAR DESDE EXCEL  (requiere Depósito y Ubicación)
 // ==========================
 exports.importarDesdeExcel = async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No se recibió archivo" });
+  if (!req.file)
+    return res.status(400).json({ error: "No se recibió archivo" });
 
   let rows;
   try {
@@ -655,16 +815,24 @@ exports.importarDesdeExcel = async (req, res) => {
     const cod = up(codRaw);
     const dep = toDb(depRaw);
     const ub = toDb(ubRaw);
-    const tipo = String(tipoRaw || "").trim().toUpperCase();
+    const tipo = String(tipoRaw || "")
+      .trim()
+      .toUpperCase();
     const cant = toNumber0(cantRaw);
 
     if (!cod) return errores.push({ fila, error: "Código vacío" });
-    if (!dep) return errores.push({ fila, error: "Depósito vacío (obligatorio)" });
-    if (!ub) return errores.push({ fila, error: "Ubicación vacía (obligatoria)" });
-    if (!Number.isFinite(cant) || cant <= 0) return errores.push({ fila, error: "Cantidad inválida" });
+    if (!dep)
+      return errores.push({ fila, error: "Depósito vacío (obligatorio)" });
+    if (!ub)
+      return errores.push({ fila, error: "Ubicación vacía (obligatoria)" });
+    if (!Number.isFinite(cant) || cant <= 0)
+      return errores.push({ fila, error: "Cantidad inválida" });
 
     if (!["ENTRADA", "SALIDA"].includes(tipo)) {
-      return errores.push({ fila, error: "Tipo inválido (use ENTRADA o SALIDA)" });
+      return errores.push({
+        fila,
+        error: "Tipo inválido (use ENTRADA o SALIDA)",
+      });
     }
 
     movimientos.push({ fila, cod, dep, ub, tipo, cant });
@@ -687,9 +855,14 @@ exports.importarDesdeExcel = async (req, res) => {
     trans = new sql.Transaction(pool);
     await trans.begin();
 
-    const motivoIdExcel = await getMotivoIdByNombreActivo(trans, "IMPORTACIÓN EXCEL");
+    const motivoIdExcel = await getMotivoIdByNombreActivo(
+      trans,
+      "IMPORTACIÓN EXCEL",
+    );
     if (!motivoIdExcel) {
-      throw new Error('Falta motivo "IMPORTACIÓN EXCEL" en dbo.ajustes_motivos (o está inactivo)');
+      throw new Error(
+        'Falta motivo "IMPORTACIÓN EXCEL" en dbo.ajustes_motivos (o está inactivo)',
+      );
     }
 
     const ajustes = [];
@@ -698,22 +871,21 @@ exports.importarDesdeExcel = async (req, res) => {
       const [depNom, ubNom] = key.split("||");
 
       // 1) depósito por nombre
-      const d = await new sql.Request(trans)
-        .input("n", sql.VarChar, depNom)
+      const d = await new sql.Request(trans).input("n", sql.VarChar, depNom)
         .query(`
           SELECT id_deposito, nombre
           FROM dbo.depositos WITH (UPDLOCK, HOLDLOCK)
           WHERE nombre = @n
         `);
 
-      if (!d.recordset.length) throw new Error(`Depósito inexistente: ${depNom}`);
+      if (!d.recordset.length)
+        throw new Error(`Depósito inexistente: ${depNom}`);
       const depId = Number(d.recordset[0].id_deposito);
 
       // 2) ubicación por nombre (obligatoria)
       const ubRes = await new sql.Request(trans)
         .input("dep", sql.Int, depId)
-        .input("ubNom", sql.VarChar, ubNom)
-        .query(`
+        .input("ubNom", sql.VarChar, ubNom).query(`
           SELECT TOP 1 id_ubicacion
           FROM dbo.ubicaciones WITH (UPDLOCK, HOLDLOCK)
           WHERE id_deposito = @dep
@@ -721,7 +893,9 @@ exports.importarDesdeExcel = async (req, res) => {
         `);
 
       if (!ubRes.recordset.length) {
-        throw new Error(`Ubicación inexistente: "${ubNom}" para depósito "${depNom}"`);
+        throw new Error(
+          `Ubicación inexistente: "${ubNom}" para depósito "${depNom}"`,
+        );
       }
       const ubId = Number(ubRes.recordset[0].id_ubicacion);
 
@@ -736,8 +910,7 @@ exports.importarDesdeExcel = async (req, res) => {
         .input("n", sql.Int, nro)
         .input("d", sql.VarChar, depNom)
         .input("mid", sql.Int, motivoIdExcel)
-        .input("m", sql.VarChar, `IMPORTACIÓN EXCEL (${ubNom})`)
-        .query(`
+        .input("m", sql.VarChar, `IMPORTACIÓN EXCEL (${ubNom})`).query(`
           INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo_id, motivo, fecha, usuario)
           VALUES(@n,@d,@mid,@m,GETDATE(),'sistema')
         `);
@@ -754,15 +927,15 @@ exports.importarDesdeExcel = async (req, res) => {
         .filter((x) => x.delta !== 0);
 
       for (const it of merged) {
-        const art = await new sql.Request(trans)
-          .input("c", sql.VarChar, it.cod)
+        const art = await new sql.Request(trans).input("c", sql.VarChar, it.cod)
           .query(`
             SELECT id_articulo, descripcion
             FROM dbo.articulos
             WHERE UPPER(LTRIM(RTRIM(codigo))) = @c
           `);
 
-        if (!art.recordset.length) throw new Error(`Código inexistente: ${it.cod}`);
+        if (!art.recordset.length)
+          throw new Error(`Código inexistente: ${it.cod}`);
         const idArt = Number(art.recordset[0].id_articulo);
         const desc = String(art.recordset[0].descripcion || "");
 
@@ -774,7 +947,9 @@ exports.importarDesdeExcel = async (req, res) => {
             ubicacionId: ubId,
           });
           if (disponible + it.delta < 0) {
-            throw new Error(`Stock insuficiente para ${it.cod} en ${depNom}/${ubNom}`);
+            throw new Error(
+              `Stock insuficiente para ${it.cod} en ${depNom}/${ubNom}`,
+            );
           }
         }
 
@@ -825,11 +1000,15 @@ async function runConsumoProduccion() {
       .query(`SELECT valor FROM dbo.app_settings WHERE clave = @k`);
 
     if (!idRes.recordset.length) {
-      return { ok: false, error: "No existe configuración DROPBOX_PRODUCCION_FILE_ID" };
+      return {
+        ok: false,
+        error: "No existe configuración DROPBOX_PRODUCCION_FILE_ID",
+      };
     }
 
     const fileRef = String(idRes.recordset[0].valor || "").trim();
-    if (!fileRef) return { ok: false, error: "DROPBOX_PRODUCCION_FILE_ID vacío" };
+    if (!fileRef)
+      return { ok: false, error: "DROPBOX_PRODUCCION_FILE_ID vacío" };
 
     // 1) descargar excel
     const buffer = await downloadByPath(fileRef);
@@ -839,7 +1018,13 @@ async function runConsumoProduccion() {
     if (!ws) return { ok: false, error: 'No existe hoja "materiales"' };
 
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-    if (!rows.length) return { ok: true, message: "Hoja materiales vacía", ajustados: 0, fallidos: 0 };
+    if (!rows.length)
+      return {
+        ok: true,
+        message: "Hoja materiales vacía",
+        ajustados: 0,
+        fallidos: 0,
+      };
 
     const header = rows[0];
     const dataRows = rows.slice(1);
@@ -848,7 +1033,10 @@ async function runConsumoProduccion() {
     trans = new sql.Transaction(pool);
     await trans.begin();
 
-    const motivoIdDropbox = await getMotivoIdByNombreActivo(trans, "CONSUMO PRODUCCIÓN (DROPBOX)");
+    const motivoIdDropbox = await getMotivoIdByNombreActivo(
+      trans,
+      "CONSUMO PRODUCCIÓN (DROPBOX)",
+    );
     if (!motivoIdDropbox) {
       await trans.rollback();
       return {
@@ -862,7 +1050,7 @@ async function runConsumoProduccion() {
     const depRes = await new sql.Request(trans)
       .input("n", sql.VarChar, "Producción")
       .query(
-        `SELECT id_deposito, nombre FROM dbo.depositos WITH (UPDLOCK, HOLDLOCK) WHERE nombre = @n`
+        `SELECT id_deposito, nombre FROM dbo.depositos WITH (UPDLOCK, HOLDLOCK) WHERE nombre = @n`,
       );
 
     if (!depRes.recordset.length) {
@@ -874,8 +1062,7 @@ async function runConsumoProduccion() {
     const depositoNombre = String(depRes.recordset[0].nombre || "");
 
     // 2.2) ubicación GENERAL
-    const ubRes = await new sql.Request(trans)
-      .input("dep", sql.Int, depositoId)
+    const ubRes = await new sql.Request(trans).input("dep", sql.Int, depositoId)
       .query(`
         SELECT TOP 1 id_ubicacion
         FROM dbo.ubicaciones WITH (UPDLOCK, HOLDLOCK)
@@ -887,7 +1074,8 @@ async function runConsumoProduccion() {
       await trans.rollback();
       return {
         ok: false,
-        error: 'Ubicación "GENERAL" no existe para depósito "Producción". Creala para continuar.',
+        error:
+          'Ubicación "GENERAL" no existe para depósito "Producción". Creala para continuar.',
       };
     }
 
@@ -905,12 +1093,6 @@ async function runConsumoProduccion() {
       const colA = String(r[0] ?? "").trim();
       if (!colA) break;
 
-      const codigo = up(r[1]);
-      if (!codigo) {
-        failItems.push({ row: excelRowIndex, codigo: null, reason: "Código vacío (col B)" });
-        continue;
-      }
-
       const f = toNumber0(r[5]);
       const g = toNumber0(r[6]);
 
@@ -919,16 +1101,40 @@ async function runConsumoProduccion() {
       const delta = Math.trunc(f - g);
       if (delta <= 0) continue;
 
-      const artRes = await new sql.Request(trans)
-        .input("c", sql.VarChar, codigo)
-        .query(`
+      const codigo = up(r[1]);
+      if (!codigo) {
+        failItems.push({
+        row: excelRowIndex,
+        codigo,
+        desc: "",
+        requerido: delta,
+        ajustado: 0,
+        faltante: delta,
+        reason: "No existe registro en dbo.stock para Producción/GENERAL",
+      });
+        continue;
+      }
+
+      const artRes = await new sql.Request(trans).input(
+        "c",
+        sql.VarChar,
+        codigo,
+      ).query(`
           SELECT TOP 1 id_articulo, descripcion
           FROM dbo.articulos WITH (UPDLOCK, HOLDLOCK)
           WHERE UPPER(LTRIM(RTRIM(codigo))) = @c
         `);
 
       if (!artRes.recordset.length) {
-        failItems.push({ row: excelRowIndex, codigo, reason: "Código no existe en dbo.articulos" });
+        failItems.push({
+        row: excelRowIndex,
+        codigo,
+        desc: "",
+        requerido: delta,
+        ajustado: 0,
+        faltante: delta,
+        reason: "Código no existe en dbo.articulos",
+      });
         continue;
       }
 
@@ -939,8 +1145,7 @@ async function runConsumoProduccion() {
       const existsStock = await new sql.Request(trans)
         .input("dep", sql.Int, depositoId)
         .input("art", sql.Int, idArt)
-        .input("ub", sql.Int, ubicacionId)
-        .query(`
+        .input("ub", sql.Int, ubicacionId).query(`
           SELECT TOP 1 cantidad
           FROM dbo.stock WITH (UPDLOCK, HOLDLOCK)
           WHERE id_deposito = @dep AND id_articulo = @art AND id_ubicacion = @ub
@@ -948,61 +1153,113 @@ async function runConsumoProduccion() {
 
       if (!existsStock.recordset.length) {
         failItems.push({
-          row: excelRowIndex,
-          codigo,
-          reason: "No existe registro en dbo.stock para Producción/GENERAL (no se crea)",
-        });
-        continue;
-      }
-
-      const disponible = Number(existsStock.recordset[0].cantidad || 0);
-      if (disponible < delta) {
-        failItems.push({
-          row: excelRowIndex,
-          codigo,
-          reason: "Stock insuficiente (negativo prohibido)",
-          faltante: delta - disponible,
-        });
-        continue;
-      }
-
-      const ok = await tryDescontarStock(trans, {
-        depositoId,
-        articuloId: idArt,
-        ubicacionId,
-        deltaNegativo: -delta,
+        row: excelRowIndex,
+        codigo,
+        desc: "",
+        requerido: delta,
+        ajustado: 0,
+        faltante: delta,
+        reason: "No existe registro en dbo.stock para Producción/GENERAL",
       });
-
-      if (!ok) {
-        failItems.push({
-          row: excelRowIndex,
-          codigo,
-          reason: "No se pudo descontar (condición de stock/registro)",
-        });
         continue;
       }
 
-      // marcar excel: G = F
-      r[6] = f;
+const disponible = Number(existsStock.recordset[0].cantidad || 0);
 
-      okItems.push({ row: excelRowIndex, codigo, idArt, desc, delta });
+const cantidadAjustable = Math.min(disponible, delta);
+const cantidadFaltante = delta - cantidadAjustable;
 
-      const prev = agg.get(codigo);
-      agg.set(codigo, {
-        desc,
-        delta: (prev?.delta || 0) - delta,
-      });
+if (cantidadAjustable <= 0) {
+  failItems.push({
+    row: excelRowIndex,
+    codigo,
+    desc,
+    requerido: delta,
+    ajustado: 0,
+    faltante: delta,
+    reason: "Sin stock disponible para ajustar",
+  });
+
+  const prev = agg.get(codigo);
+  agg.set(codigo, {
+    desc,
+    delta: prev?.delta || 0,
+    requerido: (prev?.requerido || 0) + delta,
+    faltante: (prev?.faltante || 0) + delta,
+    observacion: "Sin stock disponible para ajustar",
+  });
+
+  continue;
+}
+
+const ok = await tryDescontarStock(trans, {
+  depositoId,
+  articuloId: idArt,
+  ubicacionId,
+  deltaNegativo: -cantidadAjustable,
+});
+
+if (!ok) {
+  failItems.push({
+    row: excelRowIndex,
+    codigo,
+    desc,
+    requerido: delta,
+    ajustado: 0,
+    faltante: delta,
+    reason: "No se pudo descontar stock",
+  });
+
+  continue;
+}
+
+// marcar Excel solo hasta lo que se pudo ajustar
+r[6] = g + cantidadAjustable;
+
+okItems.push({
+  row: excelRowIndex,
+  codigo,
+  idArt,
+  desc,
+  requerido: delta,
+  ajustado: cantidadAjustable,
+  faltante: cantidadFaltante,
+});
+
+if (cantidadFaltante > 0) {
+  failItems.push({
+    row: excelRowIndex,
+    codigo,
+    desc,
+    requerido: delta,
+    ajustado: cantidadAjustable,
+    faltante: cantidadFaltante,
+    reason: "Stock parcial: se ajustó hasta cero",
+  });
+}
+
+const prev = agg.get(codigo);
+agg.set(codigo, {
+  desc,
+  delta: (prev?.delta || 0) - cantidadAjustable,
+  requerido: (prev?.requerido || 0) + delta,
+  faltante: (prev?.faltante || 0) + cantidadFaltante,
+  observacion:
+    cantidadFaltante > 0
+      ? "Stock parcial: se ajustó hasta cero"
+      : prev?.observacion || null,
+});
     }
 
     // si no hay nada: rollback
-    if (okItems.length === 0) {
+    if (okItems.length === 0 && failItems.length === 0) {
       await trans.rollback();
       return {
         ok: true,
         message: "No hay diferencias para ajustar",
         ajustados: 0,
-        fallidos: failItems.length,
-        resumen_fallidos: failItems.slice(0, 50),
+        fallidos: 0,
+        resumen_fallidos: [],
       };
     }
 
@@ -1018,27 +1275,48 @@ async function runConsumoProduccion() {
       .input("depNom", sql.VarChar, depositoNombre)
       .input("motId", sql.Int, motivoIdDropbox)
       .input("mot", sql.VarChar, "CONSUMO PRODUCCIÓN (DROPBOX)")
-      .input("usr", sql.VarChar, "sistema")
-      .query(`
+      .input("usr", sql.VarChar, "sistema").query(`
         INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo_id, motivo, fecha, usuario)
         VALUES (@nro, @depNom, @motId, @mot, GETDATE(), @usr)
       `);
 
-    // 5) detalles consolidado
+    // 5) detalles consolidado: ajustados/parciales
     for (const [codigo, v] of agg.entries()) {
+      if ((v.delta || 0) === 0 && (v.faltante || 0) === 0) continue;
+
       await insertDetalle(trans, {
         ajusteId: nextNro,
         cod: codigo,
         desc: v.desc || "",
-        cantidad: v.delta,
+        cantidad: v.delta || 0,
         usuario: "sistema",
+        cantidadRequerida: v.requerido || null,
+        cantidadFaltante: v.faltante || null,
+        observacion: v.observacion || null,
+      });
+    }
+
+    // 5.b) detalles no ajustados por error
+    for (const f of failItems) {
+      await insertDetalle(trans, {
+        ajusteId: nextNro,
+        cod: f.codigo || "SIN_CODIGO",
+        desc: f.desc || "",
+        cantidad: 0,
+        usuario: "sistema",
+        cantidadRequerida: f.requerido || null,
+        cantidadFaltante: f.faltante || null,
+        observacion: `Fila ${f.row}: ${f.reason}`,
       });
     }
 
     // 6) re-escribir excel
     const outRows = [header, ...dataRows];
     workbook.Sheets["materiales"] = XLSX.utils.aoa_to_sheet(outRows);
-    const outBuffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const outBuffer = XLSX.write(workbook, {
+      type: "buffer",
+      bookType: "xlsx",
+    });
 
     // 7) subir overwrite
     await uploadOverwriteByPath(fileRef, outBuffer);
@@ -1051,7 +1329,7 @@ async function runConsumoProduccion() {
       numero_ajuste: nextNro,
       ajustados: okItems.length,
       fallidos: failItems.length,
-      resumen_fallidos: failItems.slice(0, 50),
+      resumen_fallidos: failItems,
     };
   } catch (err) {
     if (trans) {
@@ -1071,7 +1349,11 @@ exports.consumirProduccionDropbox = async (_req, res) => {
   } catch (err) {
     const status = err?.response?.status;
     const dropboxBody = err?.response?.data;
-    console.error("consumirProduccionDropbox ERROR:", { message: err.message, status, dropboxBody });
+    console.error("consumirProduccionDropbox ERROR:", {
+      message: err.message,
+      status,
+      dropboxBody,
+    });
     return res.status(500).json({
       error: "Error al consumir producción",
       detalle: err.message,

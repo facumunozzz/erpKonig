@@ -897,3 +897,16 @@ h2.module-title:hover::after {
 .modal-row{ display:flex; gap:10px; margin-top: 10px; }
 .modal-row input{ flex:1; }
 .modal-foot{ display:flex; justify-content:flex-end; margin-top:10px; }
+
+.btn-ajuste-produccion {
+  margin-left: auto;
+}
+
+.btn-ajuste-produccion {
+  margin-left: auto;
+  background: #b91c1c; /* rojo */
+}
+
+.btn-ajuste-produccion:hover {
+  background: #991b1b;
+}

@@ -10,7 +10,7 @@ export default function CambiarUtilidades() {
 
   const ALL_UTILIDADES = [
     'Ajustes', 'Transferencias', 'Producción', 'Fábrica',
-    'Artículos', 'Stock', 'Movimientos', 'Administración'
+    'Artículos', 'Stock', 'Movimientos', 'Administración', 'EstadoObras'
   ];
 
   // 🔹 Cargar todos los usuarios

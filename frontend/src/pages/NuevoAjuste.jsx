@@ -1,280 +1,281 @@
-// src/pages/NuevoAjuste.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
-
-// ID estable por item (evita bugs con key={idx})
-const newId = () =>
-  globalThis.crypto?.randomUUID?.() ??
-  `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
 export default function NuevoAjuste() {
   const navigate = useNavigate();
 
   const [depositos, setDepositos] = useState([]);
-  const [depositoId, setDepositoId] = useState("");
-
-  const [ubicaciones, setUbicaciones] = useState([]);
-  const [ubicacionId, setUbicacionId] = useState(""); // id_ubicacion
-  const [errorUbicaciones, setErrorUbicaciones] = useState("");
-
-  // Motivos
   const [motivos, setMotivos] = useState([]);
+  const [ubicaciones, setUbicaciones] = useState([]);
+
+  const [depositoId, setDepositoId] = useState("");
+  const [ubicacionId, setUbicacionId] = useState("");
   const [motivoId, setMotivoId] = useState("");
-  const [errorMotivos, setErrorMotivos] = useState("");
 
-  const [codigo, setCodigo] = useState("");
-  const [descripcion, setDescripcion] = useState("");
-  const [cantidad, setCantidad] = useState(""); // puede ser negativa
+  const [obra, setObra] = useState("");
+  const [version, setVersion] = useState("");
 
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState([
+    { codigo: "", descripcion: "", cantidad: "" }
+  ]);
+
   const [errorMsg, setErrorMsg] = useState("");
-  const [errorDepositos, setErrorDepositos] = useState("");
+  const [loadingUbicaciones, setLoadingUbicaciones] = useState(false);
 
-  const bloqueadoCabecera = items.length > 0;
+  const codigoRefs = useRef([]);
+  const cantidadRefs = useRef([]);
 
-  const depositoSeleccionado = useMemo(() => {
-    const id = Number(depositoId);
-    return depositos.find((d) => Number(d.id_deposito) === id) || null;
-  }, [depositoId, depositos]);
+  const bloqueadoCabecera = items.some(
+    it =>
+      String(it.codigo || "").trim() !== "" ||
+      String(it.cantidad || "").trim() !== ""
+  );
 
-  const ubicacionSeleccionada = useMemo(() => {
-    if (!ubicacionId) return null;
-    return ubicaciones.find((u) => String(u.id_ubicacion) === String(ubicacionId)) || null;
-  }, [ubicacionId, ubicaciones]);
-
-  // =========================
-  // Cargar depósitos
-  // =========================
   useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      try {
-        const res = await api.get("/depositos");
-        if (!alive) return;
-        setDepositos(res.data || []);
-        setErrorDepositos("");
-      } catch (err) {
-        if (!alive) return;
+    api.get("/depositos")
+      .then(res => setDepositos(res.data || []))
+      .catch(err => {
         console.error(err);
-        setErrorDepositos("No se pudo cargar la lista de depósitos.");
-      }
-    })();
+        setErrorMsg("No se pudieron cargar los depósitos.");
+      });
 
-    return () => {
-      alive = false;
-    };
+    api.get("/ajustes/motivos")
+      .then(res => setMotivos((res.data || []).filter(m => m.activo)))
+      .catch(err => {
+        console.error(err);
+        setErrorMsg("No se pudieron cargar los motivos.");
+      });
   }, []);
 
-  // =========================
-  // Cargar motivos
-  // =========================
   useEffect(() => {
-    let alive = true;
+    if (!depositoId) {
+      setUbicaciones([]);
+      setUbicacionId("");
+      return;
+    }
 
-    (async () => {
+    const cargarUbicaciones = async () => {
       try {
-        const res = await api.get("/ajustes/motivos");
-        if (!alive) return;
-        const activos = (res.data || []).filter((m) => m.activo);
-        setMotivos(activos);
-        setErrorMotivos("");
-      } catch (err) {
-        if (!alive) return;
-        console.error(err);
-        setErrorMotivos("No se pudieron cargar los motivos.");
-      }
-    })();
+        setLoadingUbicaciones(true);
+        setUbicaciones([]);
+        setUbicacionId("");
 
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // =========================
-  // Cuando cambia depósito => cargar ubicaciones
-  // =========================
-  useEffect(() => {
-    let alive = true;
-
-    const dId = Number(depositoId);
-    setUbicaciones([]);
-    setUbicacionId("");
-    setErrorUbicaciones("");
-
-    if (!dId) return () => { alive = false; };
-
-    (async () => {
-      try {
-        // Reutilizamos endpoint de transferencias
-        const res = await api.get(`/transferencias/ubicaciones/${dId}`);
-        if (!alive) return;
-
+        const res = await api.get(`/transferencias/ubicaciones/${depositoId}`);
         const list = res.data || [];
+
         setUbicaciones(list);
 
-        // Auto-seleccionar GENERAL si existe
         const general = list.find(
-          (u) => String(u.nombre || "").trim().toUpperCase() === "GENERAL"
+          u => String(u.nombre || "").trim().toUpperCase() === "GENERAL"
         );
-        if (general) setUbicacionId(String(general.id_ubicacion));
-      } catch (err) {
-        if (!alive) return;
-        console.error(err);
-        setErrorUbicaciones("No se pudo cargar la lista de ubicaciones del depósito.");
-      }
-    })();
 
-    return () => {
-      alive = false;
+        if (general) {
+          setUbicacionId(String(general.id_ubicacion));
+        }
+      } catch (err) {
+        console.error(err);
+        setErrorMsg("No se pudieron cargar las ubicaciones.");
+      } finally {
+        setLoadingUbicaciones(false);
+      }
     };
+
+    cargarUbicaciones();
   }, [depositoId]);
 
-  // =========================
-  // Resolver descripción por código (debounce)
-  // =========================
-  useEffect(() => {
-    let alive = true;
+  const actualizarItem = (index, cambios) => {
+    setItems(prev =>
+      prev.map((it, i) => i === index ? { ...it, ...cambios } : it)
+    );
+  };
 
-    const c = (codigo || "").trim();
+  const buscarArticulo = async (codigo, index) => {
+    const c = String(codigo || "").trim().toUpperCase();
+
     if (!c) {
-      setDescripcion("");
-      return () => { alive = false; };
+      actualizarItem(index, { descripcion: "" });
+      return false;
     }
 
-    const t = setTimeout(async () => {
-      try {
-        let res;
-        try {
-          res = await api.get(`/articulos/codigo/${encodeURIComponent(c)}`);
-        } catch {
-          res = await api.get(`/articulos/articulo?codigo=${encodeURIComponent(c)}`);
-        }
+    try {
+      const res = await api.get(`/articulos/codigo/${encodeURIComponent(c)}`);
 
-        if (!alive) return;
-        const desc = res.data?.descripcion;
-        setDescripcion(desc ? desc : "Artículo no encontrado");
-      } catch {
-        if (!alive) return;
-        setDescripcion("Artículo no encontrado");
+      actualizarItem(index, {
+        codigo: res.data?.codigo || c,
+        descripcion: res.data?.descripcion || ""
+      });
+
+      return true;
+    } catch (err) {
+      console.error("No se encontró artículo:", err);
+
+      actualizarItem(index, {
+        codigo: c,
+        descripcion: "Artículo no encontrado"
+      });
+
+      return false;
+    }
+  };
+
+  const asegurarFilaSiguiente = (index, focusCol = "codigo") => {
+    setItems(prev => {
+      const nuevo = [...prev];
+
+      if (index === nuevo.length - 1) {
+        nuevo.push({ codigo: "", descripcion: "", cantidad: "" });
       }
-    }, 250);
 
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [codigo]);
+      return nuevo;
+    });
 
-  // =========================
-  // Agregar item
-  // =========================
-  const cargarYContinuar = () => {
-    setErrorMsg("");
-
-    const dId = Number(depositoId);
-    if (!dId) return setErrorMsg("Seleccioná el DEPÓSITO.");
-
-    if (!Number(motivoId)) return setErrorMsg("Seleccioná el MOTIVO.");
-
-    // Si el depósito tiene ubicaciones, exigir selección
-    if (ubicaciones.length > 0 && !Number(ubicacionId)) {
-      return setErrorMsg("Seleccioná la UBICACIÓN (o dejá GENERAL).");
-    }
-
-    const c = (codigo || "").trim().toUpperCase();
-    const q = Number(cantidad);
-
-    if (!c) return setErrorMsg("Ingresá el CÓDIGO.");
-    if (!Number.isFinite(q) || q === 0) {
-      return setErrorMsg("La CANTIDAD no puede ser 0 (puede ser negativa o positiva).");
-    }
-
-    setItems((prev) => [
-      ...prev,
-      { id: newId(), cod_articulo: c, descripcion: descripcion || "", cantidad: q },
-    ]);
-
-    setCodigo("");
-    setDescripcion("");
-    setCantidad("");
+    setTimeout(() => {
+      if (focusCol === "cantidad") {
+        cantidadRefs.current[index + 1]?.focus();
+      } else {
+        codigoRefs.current[index + 1]?.focus();
+      }
+    }, 80);
   };
 
-  const quitarItem = (id) => {
-    setItems((prev) => prev.filter((x) => x.id !== id));
+  const handleCodigoKeyDown = async (e, index) => {
+    if (e.key !== "Enter") return;
+
+    e.preventDefault();
+
+    const c = String(items[index]?.codigo || "").trim().toUpperCase();
+    if (!c) return;
+
+    await buscarArticulo(c, index);
+    asegurarFilaSiguiente(index, "codigo");
   };
 
-  // =========================
-  // Confirmar ajuste
-  // =========================
+  const handleCantidadKeyDown = (e, index) => {
+    if (e.key !== "Enter") return;
+
+    e.preventDefault();
+    asegurarFilaSiguiente(index, "cantidad");
+  };
+
+  const quitarItem = (idx) => {
+    setItems(prev => {
+      const nuevo = prev.filter((_, i) => i !== idx);
+      return nuevo.length ? nuevo : [{ codigo: "", descripcion: "", cantidad: "" }];
+    });
+  };
+
+  const agregarFila = () => {
+    setItems(prev => [...prev, { codigo: "", descripcion: "", cantidad: "" }]);
+
+    setTimeout(() => {
+      codigoRefs.current[items.length]?.focus();
+    }, 80);
+  };
+
   const confirmar = async () => {
     try {
       setErrorMsg("");
 
-      const dId = Number(depositoId);
-      if (!dId) return setErrorMsg("Seleccioná el DEPÓSITO.");
-      if (!Number(motivoId)) return setErrorMsg("Seleccioná el MOTIVO.");
+      if (!depositoId) return setErrorMsg("Seleccioná un depósito.");
+      if (!motivoId) return setErrorMsg("Seleccioná un motivo.");
 
-      if (items.length === 0) return setErrorMsg('Agregá ítems con "Cargar y continuar".');
+      const itemsValidos = items
+        .map(it => ({
+          cod_articulo: String(it.codigo || "").trim().toUpperCase(),
+          descripcion: String(it.descripcion || "").trim(),
+          cantidad: Number(it.cantidad)
+        }))
+        .filter(it => it.cod_articulo);
 
-      const ubId = ubicacionId ? Number(ubicacionId) : null;
+      if (!itemsValidos.length) {
+        return setErrorMsg("Cargá al menos un código.");
+      }
+
+      const noEncontrados = itemsValidos.filter(it =>
+        !it.descripcion ||
+        it.descripcion.toUpperCase().includes("NO ENCONTRADO")
+      );
+
+      if (noEncontrados.length) {
+        return setErrorMsg("Hay códigos sin validar o no encontrados.");
+      }
+
+      const sinCantidad = itemsValidos.filter(it => !it.cantidad || it.cantidad === 0);
+
+      if (sinCantidad.length) {
+        return setErrorMsg("Todos los códigos deben tener cantidad distinta de 0.");
+      }
 
       const body = {
-        deposito_id: dId,
-        id_ubicacion: ubId || null,
+        deposito_id: Number(depositoId),
+        id_ubicacion: ubicacionId ? Number(ubicacionId) : null,
         motivo_id: Number(motivoId),
-        items: items.map((it) => ({
+        obra: Number(obra),
+        version: Number(version),
+        items: itemsValidos.map(it => ({
           cod_articulo: it.cod_articulo,
-          cantidad: it.cantidad,
-        })),
+          cantidad: it.cantidad
+        }))
       };
 
       const res = await api.post("/ajustes", body);
 
       alert(
         "Ajuste creado: " +
-          (res.data?.ajuste?.numero_ajuste || res.data?.message || "OK")
+          (
+            res.data?.ajuste?.numero_ajuste ||
+            res.data?.ajuste?.id ||
+            res.data?.message ||
+            "OK"
+          )
       );
 
       navigate("/ajustes");
     } catch (err) {
-      console.error(err);
       const msg =
         err.response?.data?.error ||
-        (typeof err.response?.data?.detalle === "string" ? err.response.data.detalle : null) ||
+        err.response?.data?.detalle ||
         err.message ||
-        "Error al confirmar el ajuste";
-      setErrorMsg(msg);
+        "Error al crear ajuste";
+
+      setErrorMsg(typeof msg === "string" ? msg : JSON.stringify(msg));
     }
   };
+
+  const hayItemsConDatos = items.some(it => String(it.codigo || "").trim());
+
+  const depositoNombre = useMemo(() => {
+    const d = depositos.find(x => String(x.id_deposito) === String(depositoId));
+    return d?.nombre || "";
+  }, [depositos, depositoId]);
 
   return (
     <div className="nueva-transferencia-page">
       <div className="nt-header">
         <h2 className="module-title">Nuevo Ajuste</h2>
+
         <button className="nt-volver" onClick={() => navigate("/ajustes")}>
           ← Volver
         </button>
       </div>
 
-      {errorDepositos && <div className="nt-error">{errorDepositos}</div>}
-      {errorUbicaciones && <div className="nt-error">{errorUbicaciones}</div>}
-      {errorMotivos && <div className="nt-error">{errorMotivos}</div>}
       {errorMsg && <div className="nt-error">{errorMsg}</div>}
 
       <div className="nt-card">
         <div className="nt-row">
           <div className="nt-field">
             <label>Depósito</label>
+
             <select
               value={depositoId}
-              onChange={(e) => setDepositoId(e.target.value)}
+              onChange={e => setDepositoId(e.target.value)}
               disabled={bloqueadoCabecera}
             >
               <option value="">-- Seleccioná depósito --</option>
-              {depositos.map((d) => (
+
+              {depositos.map(d => (
                 <option key={d.id_deposito} value={d.id_deposito}>
                   {d.nombre}
                 </option>
@@ -283,145 +284,149 @@ export default function NuevoAjuste() {
           </div>
 
           <div className="nt-field">
-            <label>Ubicación</label>
+            <label>Ubicación {depositoNombre ? `(${depositoNombre})` : ""}</label>
+
             <select
               value={ubicacionId}
-              onChange={(e) => setUbicacionId(e.target.value)}
-              disabled={bloqueadoCabecera || !depositoId || ubicaciones.length === 0}
-              title={!depositoId ? "Primero elegí depósito" : ""}
+              onChange={e => setUbicacionId(e.target.value)}
+              disabled={bloqueadoCabecera || !depositoId || loadingUbicaciones}
             >
               <option value="">
-                {ubicaciones.length === 0 ? "-- (sin ubicaciones) --" : "-- Seleccioná ubicación --"}
+                {depositoId ? "-- Seleccioná ubicación --" : "Seleccioná depósito primero"}
               </option>
-              {ubicaciones.map((u) => (
+
+              {ubicaciones.map(u => (
                 <option key={u.id_ubicacion} value={u.id_ubicacion}>
                   {u.nombre}
                 </option>
               ))}
             </select>
-
-            {depositoId && ubicaciones.length > 0 && !ubicacionId && (
-              <small style={{ opacity: 0.75 }}>
-                Si no elegís una, el sistema intentará usar <b>GENERAL</b>.
-              </small>
-            )}
           </div>
 
-          <div className="nt-field grow">
-            <label>Motivo *</label>
+          <div className="nt-field">
+            <label>Motivo</label>
+
             <select
               value={motivoId}
-              onChange={(e) => setMotivoId(e.target.value)}
+              onChange={e => setMotivoId(e.target.value)}
               disabled={bloqueadoCabecera}
             >
               <option value="">-- Seleccioná motivo --</option>
-              {motivos.map((m) => (
+
+              {motivos.map(m => (
                 <option key={m.id_motivo} value={m.id_motivo}>
                   {m.nombre}
                 </option>
               ))}
             </select>
           </div>
-        </div>
 
-        <div className="nt-row">
-          <div className="nt-field">
-            <label>Código</label>
+          <div className="nt-field small">
+            <label>Obra</label>
             <input
-              type="text"
-              value={codigo}
-              placeholder="Ingresá código…"
-              onChange={(e) => setCodigo(e.target.value)}
-            />
-          </div>
-
-          <div className="nt-field">
-            <label>Descripción</label>
-            <input
-              type="text"
-              value={descripcion}
-              readOnly
-              placeholder="Se completa desde el código"
+              type="number"
+              value={obra}
+              onChange={e => setObra(e.target.value.replace(/[^0-9]/g, ""))}
+              disabled={bloqueadoCabecera}
             />
           </div>
 
           <div className="nt-field small">
-            <label>Cantidad (+/-)</label>
+            <label>Versión</label>
             <input
               type="number"
-              step="1"
-              value={cantidad}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (/^-?\d*$/.test(v)) setCantidad(v);
-              }}
+              value={version}
+              onChange={e => setVersion(e.target.value.replace(/[^0-9]/g, ""))}
+              disabled={bloqueadoCabecera}
             />
           </div>
-
-          <div className="nt-actions">
-            <button className="btn-light" onClick={cargarYContinuar}>
-              Cargar y continuar
-            </button>
-            <button
-              className="btn-primary"
-              onClick={confirmar}
-              disabled={!depositoId || items.length === 0 || !Number(motivoId)}
-              title={
-                !depositoId
-                  ? "Seleccioná depósito"
-                  : !Number(motivoId)
-                  ? "Seleccioná motivo"
-                  : items.length === 0
-                  ? "Cargá al menos un ítem"
-                  : ""
-              }
-            >
-              Confirmar
-            </button>
-          </div>
         </div>
-
-        {depositoSeleccionado && (
-          <div style={{ marginTop: 10, opacity: 0.8 }}>
-            Trabajando en: <b>{depositoSeleccionado.nombre}</b>
-            {ubicacionSeleccionada ? ` / ${ubicacionSeleccionada.nombre}` : ""}
-          </div>
-        )}
       </div>
 
       <div className="nt-card">
-        <h4>Ítems cargados</h4>
+        <h4>Ítems del ajuste</h4>
+
         <div className="tabla-articulos-container">
           <table className="tabla-articulos">
             <thead>
               <tr>
-                <th>Código</th>
+                <th style={{ width: "180px" }}>Código</th>
                 <th>Descripción</th>
-                <th style={{ textAlign: "right" }}>Cantidad</th>
-                <th>Acción</th>
+                <th style={{ width: "140px", textAlign: "right" }}>Cantidad</th>
+                <th style={{ width: "110px" }}>Acción</th>
               </tr>
             </thead>
+
             <tbody>
-              {items.length === 0 ? (
-                <tr>
-                  <td colSpan="4">No hay ítems. Usá "Cargar y continuar".</td>
+              {items.map((it, idx) => (
+                <tr key={idx}>
+                  <td>
+                    <input
+                      ref={el => codigoRefs.current[idx] = el}
+                      type="text"
+                      value={it.codigo}
+                      placeholder="Código..."
+                      onChange={e =>
+                        actualizarItem(idx, {
+                          codigo: e.target.value.toUpperCase(),
+                          descripcion: ""
+                        })
+                      }
+                      onBlur={() => buscarArticulo(it.codigo, idx)}
+                      onKeyDown={e => handleCodigoKeyDown(e, idx)}
+                      style={{ width: "100%" }}
+                    />
+                  </td>
+
+                  <td>
+                    <input
+                      type="text"
+                      value={it.descripcion}
+                      readOnly
+                      placeholder="Se completa automáticamente"
+                      style={{ width: "100%" }}
+                    />
+                  </td>
+
+                  <td>
+                    <input
+                      ref={el => cantidadRefs.current[idx] = el}
+                      type="number"
+                      step="1"
+                      value={it.cantidad}
+                      onChange={e =>
+                        actualizarItem(idx, {
+                          cantidad: e.target.value.replace(/[^0-9-]/g, "")
+                        })
+                      }
+                      onKeyDown={e => handleCantidadKeyDown(e, idx)}
+                      style={{ width: "100%", textAlign: "right" }}
+                    />
+                  </td>
+
+                  <td>
+                    <button className="borrar-btn" onClick={() => quitarItem(idx)}>
+                      Quitar
+                    </button>
+                  </td>
                 </tr>
-              ) : (
-                items.map((it) => (
-                  <tr key={it.id}>
-                    <td>{it.cod_articulo}</td>
-                    <td>{it.descripcion}</td>
-                    <td style={{ textAlign: "right" }}>{it.cantidad}</td>
-                    <td>
-                      <button className="borrar-btn" onClick={() => quitarItem(it.id)}>
-                        Quitar
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
+              ))}
             </tbody>
           </table>
+        </div>
+
+        <div className="nt-actions" style={{ marginTop: 14 }}>
+          <button className="btn-light" onClick={agregarFila}>
+            Agregar fila
+          </button>
+
+          <button
+            className="btn-primary"
+            onClick={confirmar}
+            disabled={!depositoId || !motivoId || !hayItemsConDatos}
+          >
+            Confirmar ajuste
+          </button>
         </div>
       </div>
     </div>

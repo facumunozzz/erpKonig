@@ -1,0 +1,95 @@
+.tabla-seguimiento-page {
+  width: 100%;
+}
+
+.tabla-seguimiento-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.tabla-seguimiento-header h2 {
+  margin: 0;
+}
+
+.tabla-seguimiento-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tabla-seguimiento-actions input {
+  min-width: 260px;
+  padding: 10px 12px;
+  border: 1px solid #cfcfcf;
+  border-radius: 8px;
+  outline: none;
+}
+
+.tabla-seguimiento-actions button {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #1f4f82;
+  color: white;
+  font-weight: 600;
+}
+
+.tabla-seguimiento-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  background: white;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+}
+
+.tabla-seguimiento {
+  width: 100%;
+  min-width: 1800px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.tabla-seguimiento thead th {
+  position: sticky;
+  top: 0;
+  background: #16324f;
+  color: white;
+  text-align: left;
+  padding: 12px;
+  white-space: nowrap;
+}
+
+.tabla-seguimiento tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #ececec;
+  white-space: nowrap;
+}
+
+.tabla-seguimiento tbody tr:hover {
+  background: #f8fafc;
+}
+
+.tabla-error {
+  color: #c62828;
+  font-weight: 600;
+}
+
+.estado-cell.ok {
+  color: #157347;
+  font-weight: 700;
+}
+
+.estado-cell.fabricando {
+  color: #b26a00;
+  font-weight: 700;
+}
+
+.estado-cell.comenzar {
+  color: #6c757d;
+  font-weight: 700;
+}
