@@ -29,10 +29,10 @@ function Navbar() {
           <li><NavLink to="/transferencias" className={linkClass}>Transferencias</NavLink></li>
         )}
         {hasUtilidad('Ajustes') && (
-          <li><NavLink to="/ajustes" className={linkClass}>Ajustes/Movimientos varios</NavLink></li>
+          <li><NavLink to="/ajustes" className={linkClass}>Movimientos/Ajustes</NavLink></li>
         )}
         {hasUtilidad('Movimientos') && (
-          <li><NavLink to="/movimientos" className={linkClass}>Movimientos</NavLink></li>
+          <li><NavLink to="/movimientos" className={linkClass}>Transacciones</NavLink></li>
         )}
         {hasUtilidad('Remitos') && (
         <li><NavLink to="/remitos" className={linkClass}>Remitos</NavLink></li>

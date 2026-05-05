@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
+import ReferentesModal from "../components/ReferentesModal";
 
 export default function Ajustes() {
   const navigate = useNavigate();
@@ -15,19 +16,8 @@ export default function Ajustes() {
   const [nuevoMotivo, setNuevoMotivo] = useState("");
   const [motivosError, setMotivosError] = useState("");
 
-  const consumirProduccion = async () => {
-    try {
-      const res = await api.post("/ajustes/consumir-produccion");
-      alert(
-        `Proceso finalizado. Ajustados: ${res.data.ajustados || 0}\nFallidos: ${
-          res.data.fallidos || 0
-        }`
-      );
-      fetchAjustes();
-    } catch (err) {
-      alert(err.response?.data?.error || "Error al consumir producción");
-    }
-  };
+  // Referentes (ABM modal reutilizable)
+  const [showReferentes, setShowReferentes] = useState(false);
 
   // Paginado
   const [currentPage, setCurrentPage] = useState(1);
@@ -45,19 +35,41 @@ export default function Ajustes() {
     fetchAjustes();
   }, []);
 
+  const consumirProduccion = async () => {
+    try {
+      const res = await api.post("/ajustes/consumir-produccion");
+
+      alert(
+        `Proceso finalizado. Ajustados: ${res.data.ajustados || 0}\nFallidos: ${
+          res.data.fallidos || 0
+        }`
+      );
+
+      fetchAjustes();
+    } catch (err) {
+      alert(err.response?.data?.error || "Error al consumir producción");
+    }
+  };
+
   // =========================
   // Descargar plantilla Excel
   // =========================
   const descargarPlantilla = async () => {
     try {
-      const res = await api.get("/ajustes/plantilla", { responseType: "blob" });
+      const res = await api.get("/ajustes/plantilla", {
+        responseType: "blob",
+      });
+
       const url = window.URL.createObjectURL(res.data);
       const a = document.createElement("a");
+
       a.href = url;
       a.download = "Plantilla_Ajustes.xlsx";
+
       document.body.appendChild(a);
       a.click();
       a.remove();
+
       window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error(err);
@@ -70,6 +82,7 @@ export default function Ajustes() {
   // =========================
   const importarExcel = async (e) => {
     const file = e.target.files[0];
+
     if (!file) return;
 
     const formData = new FormData();
@@ -79,14 +92,17 @@ export default function Ajustes() {
       await api.post("/ajustes/importar", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+
       fetchAjustes();
       alert("Ajustes importados correctamente");
     } catch (err) {
       console.error(err);
+
       const msg =
         err.response?.data?.error ||
         (err.response?.data?.errores ? "Hay errores en el Excel" : null) ||
         "Error al importar ajustes";
+
       alert(msg);
     } finally {
       e.target.value = "";
@@ -102,17 +118,16 @@ export default function Ajustes() {
   };
 
   const abrirMotivos = async () => {
-    // ✅ Abrir SIEMPRE el modal
     setShowMotivos(true);
     setMotivosError("");
     setMotivos([]);
     setNuevoMotivo("");
 
-    // luego intentar cargar; si falla, mostramos el error dentro del modal
     try {
       await fetchMotivos();
     } catch (e) {
       console.error("fetchMotivos:", e);
+
       setMotivosError(
         e.response?.data?.error ||
           e.message ||
@@ -122,11 +137,13 @@ export default function Ajustes() {
   };
 
   const crearMotivo = async () => {
-    const n = (nuevoMotivo || "").trim();
+    const n = String(nuevoMotivo || "").trim();
+
     if (!n) return;
 
     try {
       await api.post("/ajustes/motivos", { nombre: n });
+
       setNuevoMotivo("");
       await fetchMotivos();
       setMotivosError("");
@@ -137,12 +154,16 @@ export default function Ajustes() {
 
   const editarMotivo = async (id, actual) => {
     const nuevo = prompt("Editar motivo:", actual);
+
     if (nuevo == null) return;
-    const n = nuevo.trim();
+
+    const n = String(nuevo || "").trim();
+
     if (!n) return;
 
     try {
       await api.put(`/ajustes/motivos/${id}`, { nombre: n });
+
       await fetchMotivos();
       setMotivosError("");
     } catch (e) {
@@ -153,6 +174,7 @@ export default function Ajustes() {
   const toggleMotivo = async (id, activo) => {
     try {
       await api.put(`/ajustes/motivos/${id}`, { activo: !activo });
+
       await fetchMotivos();
       setMotivosError("");
     } catch (e) {
@@ -161,10 +183,13 @@ export default function Ajustes() {
   };
 
   const borrarMotivo = async (id) => {
-    if (!confirm("¿Borrar motivo? (solo si nunca fue usado)")) return;
+    if (!confirm("¿Borrar motivo? Solo se podrá borrar si nunca fue usado.")) {
+      return;
+    }
 
     try {
       await api.delete(`/ajustes/motivos/${id}`);
+
       await fetchMotivos();
       setMotivosError("");
     } catch (e) {
@@ -208,6 +233,10 @@ export default function Ajustes() {
 
         <button onClick={abrirMotivos}>🧾 Motivos</button>
 
+        <button onClick={() => setShowReferentes(true)}>
+          👤 Actuantes
+        </button>
+
         <button onClick={descargarPlantilla}>📤 Descargar plantilla</button>
 
         <label style={{ cursor: "pointer" }}>
@@ -230,24 +259,31 @@ export default function Ajustes() {
           }}
         />
 
-      <button className="btn-primary btn-ajuste-produccion" onClick={consumirProduccion}>
-        ⚙️ Ajustar Registro de Producción
-      </button>
-
+        <button
+          className="btn-primary btn-ajuste-produccion"
+          onClick={consumirProduccion}
+        >
+          ⚙️ Ajustar Registro de Producción
+        </button>
       </div>
 
       <table className="tabla-transferencias">
         <thead>
           <tr>
             <th>Fecha</th>
+            <th>Fecha real</th>
             <th>Depósito</th>
             <th>Motivo</th>
+            <th>Referente</th>
+            <th>Remito / Ref.</th>
             <th>Nro Ajuste</th>
           </tr>
         </thead>
+
         <tbody>
           {paginated.map((a) => {
             const id = a.numero_ajuste ?? a.id;
+
             return (
               <tr
                 key={id}
@@ -256,8 +292,17 @@ export default function Ajustes() {
                 title="Ver detalle"
               >
                 <td>{a.fecha ? new Date(a.fecha).toLocaleString("es-AR") : ""}</td>
+
+                <td>
+                  {a.fecha_real
+                    ? new Date(a.fecha_real).toLocaleDateString("es-AR")
+                    : ""}
+                </td>
+
                 <td>{a.deposito}</td>
                 <td>{a.motivo || ""}</td>
+                <td>{a.referente || ""}</td>
+                <td>{a.remito_referencia || ""}</td>
                 <td>{id}</td>
               </tr>
             );
@@ -265,7 +310,7 @@ export default function Ajustes() {
 
           {paginated.length === 0 && (
             <tr>
-              <td colSpan={4}>Sin ajustes.</td>
+              <td colSpan={7}>Sin ajustes.</td>
             </tr>
           )}
         </tbody>
@@ -309,9 +354,14 @@ export default function Ajustes() {
         </div>
 
         <div className="paginado-botones">
-          <button className="pg-btn" onClick={() => irPagina(1)} disabled={currentPage === 1}>
+          <button
+            className="pg-btn"
+            onClick={() => irPagina(1)}
+            disabled={currentPage === 1}
+          >
             ⏮
           </button>
+
           <button
             className="pg-btn"
             onClick={() => irPagina(currentPage - 1)}
@@ -321,10 +371,18 @@ export default function Ajustes() {
           </button>
 
           {Array.from({ length: totalPages }, (_, i) => i + 1)
-            .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+            .filter(
+              (p) =>
+                p === 1 ||
+                p === totalPages ||
+                Math.abs(p - currentPage) <= 1
+            )
             .map((p, i, arr) => (
               <React.Fragment key={p}>
-                {i > 0 && p - arr[i - 1] > 1 && <span className="pg-dots">…</span>}
+                {i > 0 && p - arr[i - 1] > 1 && (
+                  <span className="pg-dots">…</span>
+                )}
+
                 <button
                   className={`pg-btn ${currentPage === p ? "activo" : ""}`}
                   onClick={() => irPagina(p)}
@@ -341,6 +399,7 @@ export default function Ajustes() {
           >
             ▶
           </button>
+
           <button
             className="pg-btn"
             onClick={() => irPagina(totalPages)}
@@ -352,15 +411,16 @@ export default function Ajustes() {
       </div>
 
       {/* =========================
-           MODAL MOTIVOS
-         ========================= */}
+          MODAL MOTIVOS
+      ========================= */}
       {showMotivos && (
         <div
           className="modal-backdrop"
           style={{ position: "fixed", inset: 0, zIndex: 999999 }}
           onMouseDown={(e) => {
-            // cerrar si clickeás el fondo
-            if (e.target.classList.contains("modal-backdrop")) setShowMotivos(false);
+            if (e.target.classList.contains("modal-backdrop")) {
+              setShowMotivos(false);
+            }
           }}
         >
           <div className="modal-card" style={{ position: "relative", zIndex: 999999 }}>
@@ -380,10 +440,15 @@ export default function Ajustes() {
                 value={nuevoMotivo}
                 onChange={(e) => setNuevoMotivo(e.target.value)}
                 placeholder="Nuevo motivo…"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") crearMotivo();
+                }}
               />
+
               <button className="btn-primary" onClick={crearMotivo}>
                 Agregar
               </button>
+
               <button onClick={fetchMotivos}>↻ Recargar</button>
             </div>
 
@@ -396,18 +461,38 @@ export default function Ajustes() {
                     <th>Acciones</th>
                   </tr>
                 </thead>
+
                 <tbody>
                   {motivos.map((m) => (
                     <tr key={m.id_motivo}>
                       <td>{m.nombre}</td>
                       <td>{m.activo ? "SI" : "NO"}</td>
-                      <td style={{ display: "flex", gap: 8 }}>
-                        <button className="borrar-btn" onClick={() => borrarMotivo(m.id_motivo)}>
-                          Borrar
+
+                      <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button
+                          className="btn-light"
+                          onClick={() => editarMotivo(m.id_motivo, m.nombre)}
+                        >
+                          Editar
+                        </button>
+
+                        <button
+                          className="btn-light"
+                          onClick={() => toggleMotivo(m.id_motivo, m.activo)}
+                        >
+                          {m.activo ? "Desactivar" : "Activar"}
+                        </button>
+
+                        <button
+                          className="borrar-btn"
+                          onClick={() => borrarMotivo(m.id_motivo)}
+                        >
+                          Eliminar
                         </button>
                       </td>
                     </tr>
                   ))}
+
                   {motivos.length === 0 && (
                     <tr>
                       <td colSpan={3}>Sin motivos.</td>
@@ -423,6 +508,14 @@ export default function Ajustes() {
           </div>
         </div>
       )}
+
+      <ReferentesModal
+        abierto={showReferentes}
+        onClose={() => setShowReferentes(false)}
+        onChanged={() => {
+          fetchAjustes();
+        }}
+      />
     </div>
   );
 }

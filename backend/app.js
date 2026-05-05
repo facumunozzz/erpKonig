@@ -34,7 +34,7 @@ const dropboxMetaUsers = require("./routes/dropboxMeta");
 const dropboxRegistroRoutes = require("./routes/dropboxRegistro");
 const dashboardObrasRoutes = require("./routes/dashboardObras");
 const estadoResumenRoutes = require("./routes/estadoResumen");
-
+const referentesRoutes = require("./routes/referentes");
 
 // =====================
 // 1) BACKEND ROUTES (igual que hoy)
@@ -60,6 +60,7 @@ app.use("/catalogos", require("./routes/catalogos"));
 app.use("/api/dropbox", dropboxRegistroRoutes);
 app.use("/api/dashboard-obras", dashboardObrasRoutes);
 app.use("/api/estado-resumen", estadoResumenRoutes);
+app.use("/referentes", referentesRoutes);
 
 // Endpoint para listar rutas instaladas (útil para debug; podés borrarlo luego)
 app.get("/__routes", (req, res) => {

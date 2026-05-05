@@ -910,3 +910,21 @@ h2.module-title:hover::after {
 .btn-ajuste-produccion:hover {
   background: #991b1b;
 }
+
+.obra-version-field {
+  display: grid;
+  grid-template-columns: 120px 120px;
+  gap: 12px;
+  align-items: end;
+  justify-content: flex-start;
+}
+
+.obra-version-field .mini-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.obra-version-field .mini-field input {
+  width: 100%;
+}

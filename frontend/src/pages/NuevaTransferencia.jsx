@@ -7,6 +7,8 @@ export default function NuevaTransferencia() {
   const navigate = useNavigate();
 
   const [depositos, setDepositos] = useState([]);
+  const [referentes, setReferentes] = useState([]);
+
   const [origenId, setOrigenId] = useState("");
   const [destinoId, setDestinoId] = useState("");
   const [usarUbicaciones, setUsarUbicaciones] = useState(false);
@@ -16,45 +18,99 @@ export default function NuevaTransferencia() {
   const [ubicacionOrigenId, setUbicacionOrigenId] = useState("");
   const [ubicacionDestinoId, setUbicacionDestinoId] = useState("");
 
+  const [remitoReferencia, setRemitoReferencia] = useState("");
+  const [referenteId, setReferenteId] = useState("");
+  const [fechaReal, setFechaReal] = useState(() => {
+    return new Date().toISOString().slice(0, 10);
+  });
+
   const [items, setItems] = useState([
-    { codigo: "", descripcion: "", cantidad: "" }
+    { codigo: "", descripcion: "", stock: "", cantidad: "" },
   ]);
 
   const [errorMsg, setErrorMsg] = useState("");
   const [errorDepositos, setErrorDepositos] = useState("");
   const [loadingUbicOrigen, setLoadingUbicOrigen] = useState(false);
   const [loadingUbicDestino, setLoadingUbicDestino] = useState(false);
+  const [loadingReferentes, setLoadingReferentes] = useState(false);
 
   const codigoRefs = useRef([]);
   const cantidadRefs = useRef([]);
 
-  const bloqueadoCabecera = items.some(
-    it => String(it.codigo || "").trim() !== "" || String(it.cantidad || "").trim() !== ""
-  );
-
   useEffect(() => {
-    api.get("/depositos")
-      .then(res => {
+    api
+      .get("/depositos")
+      .then((res) => {
         setDepositos(res.data || []);
         setErrorDepositos("");
       })
-      .catch(err => {
+      .catch((err) => {
         console.error(err);
         setErrorDepositos("No se pudo cargar la lista de depósitos.");
       });
+
+    cargarReferentes();
   }, []);
 
+  const cargarReferentes = async () => {
+    try {
+      setLoadingReferentes(true);
+
+      const res = await api.get("/referentes");
+      const list = res.data || [];
+
+      setReferentes(list.filter((r) => r.activo));
+    } catch (err) {
+      console.error("Error cargando referentes:", err);
+      setErrorMsg("No se pudieron cargar los referentes.");
+    } finally {
+      setLoadingReferentes(false);
+    }
+  };
+
   const actualizarItem = (index, cambios) => {
-    setItems(prev =>
-      prev.map((it, i) => i === index ? { ...it, ...cambios } : it)
+    setItems((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, ...cambios } : it))
     );
+  };
+
+  const consultarStock = async (codigo, index) => {
+    const c = String(codigo || "").trim().toUpperCase();
+
+    if (!c || !origenId) {
+      actualizarItem(index, { stock: "" });
+      return;
+    }
+
+    try {
+      const res = await api.get("/transferencias/stock-articulo", {
+        params: {
+          codigo: c,
+          deposito_id: origenId,
+          ubicacion_id: usarUbicaciones
+            ? ubicacionOrigenId || undefined
+            : undefined,
+        },
+      });
+
+      actualizarItem(index, {
+        stock: res.data?.stock ?? 0,
+      });
+    } catch (err) {
+      console.error("Error consultando stock:", err);
+      actualizarItem(index, { stock: "Error" });
+    }
   };
 
   const buscarArticulo = async (codigo, index) => {
     const c = String(codigo || "").trim().toUpperCase();
 
     if (!c) {
-      actualizarItem(index, { descripcion: "" });
+      actualizarItem(index, {
+        descripcion: "",
+        stock: "",
+      });
+
       return false;
     }
 
@@ -64,15 +120,19 @@ export default function NuevaTransferencia() {
       try {
         res = await api.get(`/articulos/codigo/${encodeURIComponent(c)}`);
       } catch {
-        res = await api.get(`/transferencias/articulo?codigo=${encodeURIComponent(c)}`);
+        res = await api.get(
+          `/transferencias/articulo?codigo=${encodeURIComponent(c)}`
+        );
       }
 
       const art = res.data || {};
 
       actualizarItem(index, {
         codigo: art.codigo || c,
-        descripcion: art.descripcion || ""
+        descripcion: art.descripcion || "",
       });
+
+      await consultarStock(c, index);
 
       return true;
     } catch (err) {
@@ -80,14 +140,20 @@ export default function NuevaTransferencia() {
 
       actualizarItem(index, {
         codigo: c,
-        descripcion: "Artículo no encontrado"
+        descripcion: "Artículo no encontrado",
+        stock: "",
       });
 
       return false;
     }
   };
 
-  const cargarUbicaciones = async (depositoId, setterList, setterSelected, setLoading) => {
+  const cargarUbicaciones = async (
+    depositoId,
+    setterList,
+    setterSelected,
+    setLoading
+  ) => {
     const dep = Number(depositoId);
 
     setterList([]);
@@ -104,10 +170,12 @@ export default function NuevaTransferencia() {
       setterList(list);
 
       const general = list.find(
-        u => String(u.nombre || "").trim().toUpperCase() === "GENERAL"
+        (u) => String(u.nombre || "").trim().toUpperCase() === "GENERAL"
       );
 
-      if (general) setterSelected(String(general.id_ubicacion));
+      if (general) {
+        setterSelected(String(general.id_ubicacion));
+      }
     } catch (err) {
       console.error(err);
       setErrorMsg("No se pudieron cargar ubicaciones.");
@@ -144,22 +212,36 @@ export default function NuevaTransferencia() {
     }
   }, [usarUbicaciones, origenId, destinoId]);
 
+  useEffect(() => {
+    setItems((prev) =>
+      prev.map((it) => ({
+        ...it,
+        stock: "",
+      }))
+    );
+  }, [origenId, ubicacionOrigenId, usarUbicaciones]);
+
   const origenNombre = useMemo(() => {
-    const d = depositos.find(x => String(x.id_deposito) === String(origenId));
+    const d = depositos.find((x) => String(x.id_deposito) === String(origenId));
     return d?.nombre || "";
   }, [depositos, origenId]);
 
   const destinoNombre = useMemo(() => {
-    const d = depositos.find(x => String(x.id_deposito) === String(destinoId));
+    const d = depositos.find((x) => String(x.id_deposito) === String(destinoId));
     return d?.nombre || "";
   }, [depositos, destinoId]);
 
   const asegurarFilaSiguiente = (index, focusCol = "codigo") => {
-    setItems(prev => {
+    setItems((prev) => {
       const nuevo = [...prev];
 
       if (index === nuevo.length - 1) {
-        nuevo.push({ codigo: "", descripcion: "", cantidad: "" });
+        nuevo.push({
+          codigo: "",
+          descripcion: "",
+          stock: "",
+          cantidad: "",
+        });
       }
 
       return nuevo;
@@ -180,10 +262,10 @@ export default function NuevaTransferencia() {
     e.preventDefault();
 
     const c = String(items[index]?.codigo || "").trim().toUpperCase();
+
     if (!c) return;
 
     await buscarArticulo(c, index);
-
     asegurarFilaSiguiente(index, "codigo");
   };
 
@@ -191,21 +273,23 @@ export default function NuevaTransferencia() {
     if (e.key !== "Enter") return;
 
     e.preventDefault();
-
     asegurarFilaSiguiente(index, "cantidad");
   };
 
   const quitarItem = (idx) => {
-    setItems(prev => {
+    setItems((prev) => {
       const nuevo = prev.filter((_, i) => i !== idx);
-      return nuevo.length ? nuevo : [{ codigo: "", descripcion: "", cantidad: "" }];
+
+      return nuevo.length
+        ? nuevo
+        : [{ codigo: "", descripcion: "", stock: "", cantidad: "" }];
     });
   };
 
   const agregarFila = () => {
-    setItems(prev => [
+    setItems((prev) => [
       ...prev,
-      { codigo: "", descripcion: "", cantidad: "" }
+      { codigo: "", descripcion: "", stock: "", cantidad: "" },
     ]);
 
     setTimeout(() => {
@@ -248,57 +332,67 @@ export default function NuevaTransferencia() {
       }
 
       const itemsValidos = items
-        .map(it => ({
+        .map((it) => ({
           codigo: String(it.codigo || "").trim().toUpperCase(),
           descripcion: String(it.descripcion || "").trim(),
-          cantidad: Number(it.cantidad)
+          cantidad: Number(it.cantidad),
         }))
-        .filter(it => it.codigo);
+        .filter((it) => it.codigo);
 
       if (!itemsValidos.length) {
         return setErrorMsg("Cargá al menos un código.");
       }
 
-      const noEncontrados = itemsValidos.filter(it =>
-        !it.descripcion ||
-        it.descripcion.toUpperCase().includes("NO ENCONTRADO")
+      const noEncontrados = itemsValidos.filter(
+        (it) =>
+          !it.descripcion ||
+          it.descripcion.toUpperCase().includes("NO ENCONTRADO")
       );
 
       if (noEncontrados.length) {
-        return setErrorMsg("Hay códigos sin validar o no encontrados. Revisá la tabla antes de confirmar.");
+        return setErrorMsg(
+          "Hay códigos sin validar o no encontrados. Revisá la tabla antes de confirmar."
+        );
       }
 
-      const sinCantidad = itemsValidos.filter(it => !it.cantidad || it.cantidad <= 0);
+      const sinCantidad = itemsValidos.filter(
+        (it) => !it.cantidad || it.cantidad <= 0
+      );
 
       if (sinCantidad.length) {
-        return setErrorMsg("Todos los códigos cargados deben tener cantidad mayor a 0.");
+        return setErrorMsg(
+          "Todos los códigos cargados deben tener cantidad mayor a 0."
+        );
       }
 
       const body = {
         origen_id: oId,
         destino_id: dId,
+        remito_referencia: remitoReferencia.trim() || null,
+        id_referente: referenteId ? Number(referenteId) : null,
+        fecha_real: fechaReal || null,
+
         ...(usarUbicaciones
           ? {
               id_ubicacion_origen: uO,
-              id_ubicacion_destino: uD
+              id_ubicacion_destino: uD,
             }
           : {}),
-        items: itemsValidos.map(it => ({
+
+        items: itemsValidos.map((it) => ({
           codigo: it.codigo,
-          cantidad: it.cantidad
-        }))
+          cantidad: it.cantidad,
+        })),
       };
 
       const res = await api.post("/transferencias", body);
 
       alert(
         "Transferencia creada: " +
-          (
-            res.data?.cabecera?.numero_transferencia ||
+          (res.data?.cabecera?.numero_transferencia ||
             res.data?.transferencia?.numero_transferencia ||
             res.data?.message ||
-            "OK"
-          )
+            "OK")
       );
 
       navigate("/transferencias");
@@ -320,21 +414,24 @@ export default function NuevaTransferencia() {
 
   const sameUbicWhenSameDeposito =
     sameDeposito &&
-    (
-      !usarUbicaciones ||
+    (!usarUbicaciones ||
       !ubicacionOrigenId ||
       !ubicacionDestinoId ||
-      Number(ubicacionOrigenId) === Number(ubicacionDestinoId)
-    );
+      Number(ubicacionOrigenId) === Number(ubicacionDestinoId));
 
-  const hayItemsConDatos = items.some(it => String(it.codigo || "").trim());
+  const hayItemsConDatos = items.some((it) =>
+    String(it.codigo || "").trim()
+  );
 
   return (
     <div className="nueva-transferencia-page">
       <div className="nt-header">
         <h2 className="module-title">Nueva Transferencia</h2>
 
-        <button className="nt-volver" onClick={() => navigate("/transferencias")}>
+        <button
+          className="nt-volver"
+          onClick={() => navigate("/transferencias")}
+        >
           ← Volver
         </button>
       </div>
@@ -349,12 +446,11 @@ export default function NuevaTransferencia() {
 
             <select
               value={origenId}
-              onChange={e => setOrigenId(e.target.value)}
-              disabled={bloqueadoCabecera}
+              onChange={(e) => setOrigenId(e.target.value)}
             >
               <option value="">-- Seleccioná depósito origen --</option>
 
-              {depositos.map(d => (
+              {depositos.map((d) => (
                 <option key={d.id_deposito} value={d.id_deposito}>
                   {d.nombre}
                 </option>
@@ -367,17 +463,59 @@ export default function NuevaTransferencia() {
 
             <select
               value={destinoId}
-              onChange={e => setDestinoId(e.target.value)}
-              disabled={bloqueadoCabecera}
+              onChange={(e) => setDestinoId(e.target.value)}
             >
               <option value="">-- Seleccioná depósito destino --</option>
 
-              {depositos.map(d => (
+              {depositos.map((d) => (
                 <option key={d.id_deposito} value={d.id_deposito}>
                   {d.nombre}
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="nt-field">
+            <label>Remito / Referencia</label>
+
+            <input
+              type="text"
+              value={remitoReferencia}
+              onChange={(e) => setRemitoReferencia(e.target.value)}
+              placeholder="Remito, comprobante o referencia..."
+            />
+          </div>
+
+          <div className="nt-field">
+            <label>Actuante</label>
+
+            <select
+              value={referenteId}
+              onChange={(e) => setReferenteId(e.target.value)}
+              disabled={loadingReferentes}
+            >
+              <option value="">
+                {loadingReferentes
+                  ? "Cargando referentes..."
+                  : "-- Seleccioná referente --"}
+              </option>
+
+              {referentes.map((r) => (
+                <option key={r.id_referente} value={r.id_referente}>
+                  {r.nombre}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="nt-field small">
+            <label>Fecha real</label>
+
+            <input
+              type="date"
+              value={fechaReal}
+              onChange={(e) => setFechaReal(e.target.value)}
+            />
           </div>
 
           <div className="nt-field">
@@ -388,10 +526,8 @@ export default function NuevaTransferencia() {
                 type="button"
                 className={`btn-light ${usarUbicaciones ? "activo" : ""}`}
                 onClick={() => {
-                  if (bloqueadoCabecera) return;
-                  setUsarUbicaciones(v => !v);
+                  setUsarUbicaciones((v) => !v);
                 }}
-                disabled={bloqueadoCabecera}
               >
                 {usarUbicaciones ? "SI" : "NO"}
               </button>
@@ -414,8 +550,8 @@ export default function NuevaTransferencia() {
 
               <select
                 value={ubicacionOrigenId}
-                onChange={e => setUbicacionOrigenId(e.target.value)}
-                disabled={bloqueadoCabecera || !origenId || loadingUbicOrigen}
+                onChange={(e) => setUbicacionOrigenId(e.target.value)}
+                disabled={!origenId || loadingUbicOrigen}
               >
                 <option value="">
                   {origenId
@@ -423,7 +559,7 @@ export default function NuevaTransferencia() {
                     : "Seleccioná depósito origen primero"}
                 </option>
 
-                {ubicacionesOrigen.map(u => (
+                {ubicacionesOrigen.map((u) => (
                   <option key={u.id_ubicacion} value={u.id_ubicacion}>
                     {u.nombre}
                   </option>
@@ -438,8 +574,8 @@ export default function NuevaTransferencia() {
 
               <select
                 value={ubicacionDestinoId}
-                onChange={e => setUbicacionDestinoId(e.target.value)}
-                disabled={bloqueadoCabecera || !destinoId || loadingUbicDestino}
+                onChange={(e) => setUbicacionDestinoId(e.target.value)}
+                disabled={!destinoId || loadingUbicDestino}
               >
                 <option value="">
                   {destinoId
@@ -447,7 +583,7 @@ export default function NuevaTransferencia() {
                     : "Seleccioná depósito destino primero"}
                 </option>
 
-                {ubicacionesDestino.map(u => (
+                {ubicacionesDestino.map((u) => (
                   <option key={u.id_ubicacion} value={u.id_ubicacion}>
                     {u.nombre}
                   </option>
@@ -467,7 +603,12 @@ export default function NuevaTransferencia() {
               <tr>
                 <th style={{ width: "180px" }}>Código</th>
                 <th>Descripción</th>
-                <th style={{ width: "140px", textAlign: "right" }}>Cantidad</th>
+                <th style={{ width: "120px", textAlign: "right" }}>
+                  Stock origen
+                </th>
+                <th style={{ width: "140px", textAlign: "right" }}>
+                  Cantidad
+                </th>
                 <th style={{ width: "110px" }}>Acción</th>
               </tr>
             </thead>
@@ -477,18 +618,19 @@ export default function NuevaTransferencia() {
                 <tr key={idx}>
                   <td>
                     <input
-                      ref={el => codigoRefs.current[idx] = el}
+                      ref={(el) => (codigoRefs.current[idx] = el)}
                       type="text"
                       value={it.codigo}
                       placeholder="Código..."
-                      onChange={e =>
+                      onChange={(e) =>
                         actualizarItem(idx, {
                           codigo: e.target.value.toUpperCase(),
-                          descripcion: ""
+                          descripcion: "",
+                          stock: "",
                         })
                       }
                       onBlur={() => buscarArticulo(it.codigo, idx)}
-                      onKeyDown={e => handleCodigoKeyDown(e, idx)}
+                      onKeyDown={(e) => handleCodigoKeyDown(e, idx)}
                       style={{ width: "100%" }}
                     />
                   </td>
@@ -503,25 +645,30 @@ export default function NuevaTransferencia() {
                     />
                   </td>
 
+                  <td style={{ textAlign: "right" }}>{it.stock ?? ""}</td>
+
                   <td>
                     <input
-                      ref={el => cantidadRefs.current[idx] = el}
+                      ref={(el) => (cantidadRefs.current[idx] = el)}
                       type="number"
                       min="1"
                       step="1"
                       value={it.cantidad}
-                      onChange={e =>
+                      onChange={(e) =>
                         actualizarItem(idx, {
-                          cantidad: e.target.value.replace(/[^0-9]/g, "")
+                          cantidad: e.target.value.replace(/[^0-9]/g, ""),
                         })
                       }
-                      onKeyDown={e => handleCantidadKeyDown(e, idx)}
+                      onKeyDown={(e) => handleCantidadKeyDown(e, idx)}
                       style={{ width: "100%", textAlign: "right" }}
                     />
                   </td>
 
                   <td>
-                    <button className="borrar-btn" onClick={() => quitarItem(idx)}>
+                    <button
+                      className="borrar-btn"
+                      onClick={() => quitarItem(idx)}
+                    >
                       Quitar
                     </button>
                   </td>
@@ -543,7 +690,8 @@ export default function NuevaTransferencia() {
               !origenId ||
               !destinoId ||
               !hayItemsConDatos ||
-              (usarUbicaciones && (!ubicacionOrigenId || !ubicacionDestinoId)) ||
+              (usarUbicaciones &&
+                (!ubicacionOrigenId || !ubicacionDestinoId)) ||
               sameUbicWhenSameDeposito
             }
           >

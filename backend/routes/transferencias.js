@@ -10,6 +10,7 @@ router.get("/articulo", authRequired, controller.getArticuloByCodigo);
 router.get("/", authRequired, controller.getAll);
 router.post("/", authRequired, controller.create);
 
+router.get("/stock-articulo", authRequired, controller.getStockArticulo);
 router.get("/:id", authRequired, controller.getById);
 
 module.exports = router; 

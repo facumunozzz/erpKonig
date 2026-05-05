@@ -1,23 +1,26 @@
 // frontend/src/pages/Transferencias.jsx
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import api from '../api/axiosConfig';
-import './../styles/transferencias.css';
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import api from "../api/axiosConfig";
+import "./../styles/transferencias.css";
+import ReferentesModal from "../components/ReferentesModal";
 
 function Transferencias() {
   const navigate = useNavigate();
 
   const [transferencias, setTransferencias] = useState([]);
-  const [filtro, setFiltro] = useState('');
+  const [filtro, setFiltro] = useState("");
+  const [showReferentes, setShowReferentes] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [gotoPage, setGotoPage] = useState('');
+  const [gotoPage, setGotoPage] = useState("");
 
   const fetchTransferencias = () => {
-    api.get('/transferencias')
-      .then(res => setTransferencias(res.data || []))
-      .catch(err => console.error(err));
+    api
+      .get("/transferencias")
+      .then((res) => setTransferencias(res.data || []))
+      .catch((err) => console.error(err));
   };
 
   useEffect(() => {
@@ -27,9 +30,9 @@ function Transferencias() {
   // ==========================
   // Filtro global
   // ==========================
-  const transferenciasFiltradas = transferencias.filter(t =>
-    Object.values(t).some(val =>
-      String(val ?? '').toLowerCase().includes(filtro.toLowerCase())
+  const transferenciasFiltradas = transferencias.filter((t) =>
+    Object.values(t).some((val) =>
+      String(val ?? "").toLowerCase().includes(filtro.toLowerCase())
     )
   );
 
@@ -43,12 +46,16 @@ function Transferencias() {
     currentPage * pageSize
   );
 
-  const irPagina = p => {
+  const irPagina = (p) => {
     if (p < 1 || p > totalPages) return;
     setCurrentPage(p);
   };
 
-  const from = (currentPage - 1) * pageSize + 1;
+  const from =
+    transferenciasFiltradas.length === 0
+      ? 0
+      : (currentPage - 1) * pageSize + 1;
+
   const to = Math.min(currentPage * pageSize, transferenciasFiltradas.length);
 
   return (
@@ -56,14 +63,22 @@ function Transferencias() {
       <h2 className="module-title">Transferencias</h2>
 
       <div className="acciones">
-        <button onClick={() => navigate('/transferencias/nueva')}>
+        <button onClick={() => navigate("/transferencias/nueva")}>
           Nueva transferencia
         </button>
+
+        <button onClick={() => setShowReferentes(true)}>
+          👤 Actuantes
+        </button>
+
         <input
           type="text"
           placeholder="Filtrar transferencias"
           value={filtro}
-          onChange={e => { setFiltro(e.target.value); setCurrentPage(1); }}
+          onChange={(e) => {
+            setFiltro(e.target.value);
+            setCurrentPage(1);
+          }}
         />
       </div>
 
@@ -71,24 +86,38 @@ function Transferencias() {
         <thead>
           <tr>
             <th>Fecha</th>
+            <th>Fecha real</th>
             <th>Origen</th>
             <th>Destino</th>
+            <th>Referente</th>
+            <th>Remito / Ref.</th>
             <th>Nro Transferencia</th>
           </tr>
         </thead>
+
         <tbody>
-          {paginated.map(t => {
+          {paginated.map((t) => {
             const id = t.numero_transferencia ?? t.id;
+
             return (
               <tr
                 key={id}
-                style={{ cursor: 'pointer' }}
+                style={{ cursor: "pointer" }}
                 onClick={() => navigate(`/transferencias/${id}`)}
                 title="Ver detalle"
               >
-                <td>{t.fecha ? new Date(t.fecha).toLocaleString('es-AR') : ''}</td>
+                <td>{t.fecha ? new Date(t.fecha).toLocaleString("es-AR") : ""}</td>
+
+                <td>
+                  {t.fecha_real
+                    ? new Date(t.fecha_real).toLocaleDateString("es-AR")
+                    : ""}
+                </td>
+
                 <td>{t.origen}</td>
                 <td>{t.destino}</td>
+                <td>{t.referente || ""}</td>
+                <td>{t.remito_referencia || ""}</td>
                 <td>{id}</td>
               </tr>
             );
@@ -96,7 +125,7 @@ function Transferencias() {
 
           {paginated.length === 0 && (
             <tr>
-              <td colSpan={4}>Sin transferencias.</td>
+              <td colSpan={7}>Sin transferencias.</td>
             </tr>
           )}
         </tbody>
@@ -104,15 +133,20 @@ function Transferencias() {
 
       {/* =========================
            PAGINADO PRO
-         ========================= */}
+      ========================= */}
       <div className="paginado-pro">
-
         <div className="paginado-info">
           Mostrando {from}-{to} de {transferenciasFiltradas.length}
         </div>
 
         <div className="paginado-size">
-          <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}>
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setCurrentPage(1);
+            }}
+          >
             <option value={10}>10</option>
             <option value={25}>25</option>
             <option value={50}>50</option>
@@ -127,31 +161,48 @@ function Transferencias() {
             min="1"
             max={totalPages}
             value={gotoPage}
-            onChange={e => setGotoPage(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
+            onChange={(e) => setGotoPage(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
                 irPagina(Number(gotoPage));
-                setGotoPage('');
+                setGotoPage("");
               }
             }}
           />
         </div>
 
         <div className="paginado-botones">
-          <button className="pg-btn" onClick={() => irPagina(1)} disabled={currentPage === 1}>⏮</button>
-          <button className="pg-btn" onClick={() => irPagina(currentPage - 1)} disabled={currentPage === 1}>◀</button>
+          <button
+            className="pg-btn"
+            onClick={() => irPagina(1)}
+            disabled={currentPage === 1}
+          >
+            ⏮
+          </button>
+
+          <button
+            className="pg-btn"
+            onClick={() => irPagina(currentPage - 1)}
+            disabled={currentPage === 1}
+          >
+            ◀
+          </button>
 
           {Array.from({ length: totalPages }, (_, i) => i + 1)
-            .filter(p =>
-              p === 1 ||
-              p === totalPages ||
-              Math.abs(p - currentPage) <= 1
+            .filter(
+              (p) =>
+                p === 1 ||
+                p === totalPages ||
+                Math.abs(p - currentPage) <= 1
             )
             .map((p, i, arr) => (
               <React.Fragment key={p}>
-                {i > 0 && p - arr[i - 1] > 1 && <span className="pg-dots">…</span>}
+                {i > 0 && p - arr[i - 1] > 1 && (
+                  <span className="pg-dots">…</span>
+                )}
+
                 <button
-                  className={`pg-btn ${currentPage === p ? 'activo' : ''}`}
+                  className={`pg-btn ${currentPage === p ? "activo" : ""}`}
                   onClick={() => irPagina(p)}
                 >
                   {p}
@@ -159,10 +210,31 @@ function Transferencias() {
               </React.Fragment>
             ))}
 
-          <button className="pg-btn" onClick={() => irPagina(currentPage + 1)} disabled={currentPage === totalPages}>▶</button>
-          <button className="pg-btn" onClick={() => irPagina(totalPages)} disabled={currentPage === totalPages}>⏭</button>
+          <button
+            className="pg-btn"
+            onClick={() => irPagina(currentPage + 1)}
+            disabled={currentPage === totalPages}
+          >
+            ▶
+          </button>
+
+          <button
+            className="pg-btn"
+            onClick={() => irPagina(totalPages)}
+            disabled={currentPage === totalPages}
+          >
+            ⏭
+          </button>
         </div>
       </div>
+
+      <ReferentesModal
+        abierto={showReferentes}
+        onClose={() => setShowReferentes(false)}
+        onChanged={() => {
+          fetchTransferencias();
+        }}
+      />
     </div>
   );
 }

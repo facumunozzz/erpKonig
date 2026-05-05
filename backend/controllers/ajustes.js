@@ -429,16 +429,21 @@ exports.getAll = async (_req, res) => {
     const pool = await getPool();
     const r = await pool.request().query(`
       SELECT 
-        a.numero_ajuste AS id,
-        a.numero_ajuste,
-        a.deposito,
-        a.obra,
-        a.version,
-        m.nombre AS motivo,
-        a.fecha
-      FROM dbo.ajustes a
-      LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
-      ORDER BY a.fecha DESC, a.numero_ajuste DESC
+      a.numero_ajuste AS id,
+      a.numero_ajuste,
+      a.deposito,
+      a.obra,
+      a.version,
+      m.nombre AS motivo,
+      a.fecha,
+      a.fecha_real,
+      a.remito_referencia,
+      a.id_referente,
+      r.nombre AS referente
+    FROM dbo.ajustes a
+    LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
+    LEFT JOIN dbo.referentes r ON r.id_referente = a.id_referente
+    ORDER BY a.fecha DESC, a.numero_ajuste DESC
     `);
     res.json(r.recordset || []);
   } catch (err) {
@@ -463,18 +468,23 @@ exports.getById = async (req, res) => {
 
     const cab = await pool.request().input("n", sql.Int, nro).query(`
       SELECT 
-        a.numero_ajuste AS id,
-        a.numero_ajuste,
-        a.deposito,
-        a.obra,
-        a.version,
-        a.motivo_id,
-        m.nombre AS motivo,
-        a.fecha,
-        a.usuario
-      FROM dbo.ajustes a
-      LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
-      WHERE a.numero_ajuste = @n
+      a.numero_ajuste AS id,
+      a.numero_ajuste,
+      a.deposito,
+      a.obra,
+      a.version,
+      a.motivo_id,
+      m.nombre AS motivo,
+      a.fecha,
+      a.fecha_real,
+      a.remito_referencia,
+      a.id_referente,
+      r.nombre AS referente,
+      a.usuario
+    FROM dbo.ajustes a
+    LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
+    LEFT JOIN dbo.referentes r ON r.id_referente = a.id_referente
+    WHERE a.numero_ajuste = @n
     `);
     if (!cab.recordset.length)
       return res.status(404).json({ error: "Ajuste no encontrado" });
@@ -518,6 +528,30 @@ exports.create = async (req, res) => {
   const depositoId = asInt(req.body?.deposito_id);
   const ubicacionIdBody = req.body?.id_ubicacion ?? null;
 
+  const remitoReferenciaRaw = req.body?.remito_referencia;
+const remitoReferencia =
+  remitoReferenciaRaw === null ||
+  remitoReferenciaRaw === undefined ||
+  String(remitoReferenciaRaw).trim() === ""
+    ? null
+    : String(remitoReferenciaRaw).trim();
+
+const referenteRaw = req.body?.id_referente;
+const referenteId =
+  referenteRaw === null ||
+  referenteRaw === undefined ||
+  String(referenteRaw).trim() === ""
+    ? null
+    : asInt(referenteRaw);
+
+const fechaRealRaw = req.body?.fecha_real;
+const fechaReal =
+  fechaRealRaw === null ||
+  fechaRealRaw === undefined ||
+  String(fechaRealRaw).trim() === ""
+    ? null
+    : String(fechaRealRaw).trim();
+
   const motivoId = asInt(req.body?.motivo_id);
   if (!Number.isFinite(motivoId) || motivoId <= 0) {
     return res.status(400).json({ error: "Motivo obligatorio" });
@@ -542,6 +576,10 @@ exports.create = async (req, res) => {
 
   if (version !== null && !Number.isFinite(version)) {
     return res.status(400).json({ error: "Versión inválida" });
+  }
+
+  if (referenteId !== null && !Number.isFinite(referenteId)) {
+    return res.status(400).json({ error: "Referente inválido" });
   }
 
   const items = Array.isArray(req.body?.items) ? req.body.items : [];
@@ -597,6 +635,27 @@ exports.create = async (req, res) => {
     } catch (e) {
       await trans.rollback();
       return res.status(400).json({ error: e.message || "Motivo inválido" });
+    }
+
+    // 1.c) Validar referente si viene informado
+    if (referenteId !== null) {
+      const ref = await new sql.Request(trans)
+        .input("id", sql.Int, referenteId)
+        .query(`
+          SELECT id_referente, nombre, activo
+          FROM dbo.referentes WITH (UPDLOCK, HOLDLOCK)
+          WHERE id_referente = @id
+        `);
+
+      if (!ref.recordset.length) {
+        await trans.rollback();
+        return res.status(400).json({ error: "Referente inexistente" });
+      }
+
+      if (!ref.recordset[0].activo) {
+        await trans.rollback();
+        return res.status(400).json({ error: "Referente inactivo" });
+      }
     }
 
     // 2) Resolver ubicación
@@ -671,36 +730,45 @@ exports.create = async (req, res) => {
 
     // 6) Cabecera
     await new sql.Request(trans)
-      .input("nro", sql.Int, nextNro)
-      .input("depNom", sql.VarChar, nombreDeposito)
-      .input("motId", sql.Int, motivoId)
-      .input("motNom", sql.VarChar, motivoNombre)
-      .input("usr", sql.VarChar, usuario)
-      .input("obra", sql.Int, obra)
-      .input("version", sql.Int, version).query(`
-      INSERT INTO dbo.ajustes
-      (
-        numero_ajuste,
-        deposito,
-        motivo_id,
-        motivo,
-        obra,
-        version,
-        fecha,
-        usuario
-      )
-      VALUES
-      (
-        @nro,
-        @depNom,
-        @motId,
-        @motNom,
-        @obra,
-        @version,
-        GETDATE(),
-        @usr
-      )
-    `);
+  .input("nro", sql.Int, nextNro)
+  .input("depNom", sql.VarChar, nombreDeposito)
+  .input("motId", sql.Int, motivoId)
+  .input("motNom", sql.VarChar, motivoNombre)
+  .input("usr", sql.VarChar, usuario)
+  .input("obra", sql.Int, obra)
+  .input("version", sql.Int, version)
+  .input("remitoReferencia", sql.VarChar, remitoReferencia)
+  .input("referenteId", sql.Int, referenteId)
+  .input("fechaReal", sql.Date, fechaReal).query(`
+    INSERT INTO dbo.ajustes
+    (
+      numero_ajuste,
+      deposito,
+      motivo_id,
+      motivo,
+      obra,
+      version,
+      fecha,
+      fecha_real,
+      remito_referencia,
+      id_referente,
+      usuario
+    )
+    VALUES
+    (
+      @nro,
+      @depNom,
+      @motId,
+      @motNom,
+      @obra,
+      @version,
+      GETDATE(),
+      COALESCE(@fechaReal, CONVERT(date, GETDATE())),
+      @remitoReferencia,
+      @referenteId,
+      @usr
+    )
+  `);
 
     // 7) Detalles + stock
 for (const it of normItems) {
@@ -734,9 +802,14 @@ for (const it of normItems) {
           a.obra,
           a.version,
           m.nombre AS motivo,
-          a.fecha
+          a.fecha,
+          a.fecha_real,
+          a.remito_referencia,
+          a.id_referente,
+          r.nombre AS referente
         FROM dbo.ajustes a
         LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
+        LEFT JOIN dbo.referentes r ON r.id_referente = a.id_referente
         WHERE a.numero_ajuste = @n
       `);
 
