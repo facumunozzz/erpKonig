@@ -1,7 +1,22 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
+
+const normalizarMotivo = (v) =>
+  String(v ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+
+const MOTIVOS_OCULTOS = new Set([
+  "CONSUMO PRODUCCION (DROPBOX)",
+  "IMPORTACION EXCEL",
+]);
+
+const esMotivoOculto = (nombre) =>
+  MOTIVOS_OCULTOS.has(normalizarMotivo(nombre));
 
 export default function NuevoAjuste() {
   const navigate = useNavigate();
@@ -9,10 +24,8 @@ export default function NuevoAjuste() {
   const [depositos, setDepositos] = useState([]);
   const [motivos, setMotivos] = useState([]);
   const [referentes, setReferentes] = useState([]);
-  const [ubicaciones, setUbicaciones] = useState([]);
 
   const [depositoId, setDepositoId] = useState("");
-  const [ubicacionId, setUbicacionId] = useState("");
   const [motivoId, setMotivoId] = useState("");
   const [referenteId, setReferenteId] = useState("");
 
@@ -37,16 +50,31 @@ export default function NuevoAjuste() {
   ]);
 
   const [errorMsg, setErrorMsg] = useState("");
-  const [loadingUbicaciones, setLoadingUbicaciones] = useState(false);
   const [loadingReferentes, setLoadingReferentes] = useState(false);
 
   const codigoRefs = useRef([]);
   const cantidadRefs = useRef([]);
 
+  const getPanolId = (lista) => {
+    const panol = (lista || []).find(
+      (d) => String(d.nombre || "").trim().toUpperCase() === "PAÑOL"
+    );
+
+    return panol ? String(panol.id_deposito) : "";
+  };
+
   useEffect(() => {
     api
       .get("/depositos")
-      .then((res) => setDepositos(res.data || []))
+      .then((res) => {
+        const lista = res.data || [];
+        setDepositos(lista);
+
+        const panolId = getPanolId(lista);
+        if (panolId) {
+          setDepositoId((prev) => prev || panolId);
+        }
+      })
       .catch((err) => {
         console.error(err);
         setErrorMsg("No se pudieron cargar los depósitos.");
@@ -54,7 +82,13 @@ export default function NuevoAjuste() {
 
     api
       .get("/ajustes/motivos")
-      .then((res) => setMotivos((res.data || []).filter((m) => m.activo)))
+      .then((res) =>
+        setMotivos(
+          (res.data || []).filter(
+            (m) => m.activo && !esMotivoOculto(m.nombre)
+          )
+        )
+      )
       .catch((err) => {
         console.error(err);
         setErrorMsg("No se pudieron cargar los motivos.");
@@ -80,52 +114,13 @@ export default function NuevoAjuste() {
   };
 
   useEffect(() => {
-    if (!depositoId) {
-      setUbicaciones([]);
-      setUbicacionId("");
-      return;
-    }
-
-    const cargarUbicaciones = async () => {
-      try {
-        setLoadingUbicaciones(true);
-        setUbicaciones([]);
-        setUbicacionId("");
-
-        const res = await api.get(`/transferencias/ubicaciones/${depositoId}`);
-        const list = res.data || [];
-
-        setUbicaciones(list);
-
-        const general = list.find(
-          (u) =>
-            String(u.nombre || "")
-              .trim()
-              .toUpperCase() === "GENERAL"
-        );
-
-        if (general) {
-          setUbicacionId(String(general.id_ubicacion));
-        }
-      } catch (err) {
-        console.error(err);
-        setErrorMsg("No se pudieron cargar las ubicaciones.");
-      } finally {
-        setLoadingUbicaciones(false);
-      }
-    };
-
-    cargarUbicaciones();
-  }, [depositoId]);
-
-  useEffect(() => {
     setItems((prev) =>
       prev.map((it) => ({
         ...it,
         stock: "",
       }))
     );
-  }, [depositoId, ubicacionId]);
+  }, [depositoId]);
 
   const actualizarItem = (index, cambios) => {
     setItems((prev) =>
@@ -148,7 +143,6 @@ export default function NuevoAjuste() {
         params: {
           codigo: c,
           deposito_id: depositoId,
-          ubicacion_id: ubicacionId || undefined,
         },
       });
 
@@ -338,7 +332,7 @@ export default function NuevoAjuste() {
 
       const body = {
         deposito_id: Number(depositoId),
-        id_ubicacion: ubicacionId ? Number(ubicacionId) : null,
+        id_ubicacion: null,
         motivo_id: Number(motivoId),
         obra: obra === "" ? null : Number(obra),
         version: version === "" ? null : Number(version),
@@ -380,12 +374,6 @@ export default function NuevoAjuste() {
 
   const hayItemsConDatos = items.some((it) => String(it.codigo || "").trim());
 
-  const depositoNombre = useMemo(() => {
-    const d = depositos.find(
-      (x) => String(x.id_deposito) === String(depositoId)
-    );
-    return d?.nombre || "";
-  }, [depositos, depositoId]);
 
   return (
     <div className="nueva-transferencia-page">
@@ -418,29 +406,6 @@ export default function NuevoAjuste() {
             </select>
           </div>
 
-          <div className="nt-field">
-            <label>
-              Ubicación {depositoNombre ? `(${depositoNombre})` : ""}
-            </label>
-
-            <select
-              value={ubicacionId}
-              onChange={(e) => setUbicacionId(e.target.value)}
-              disabled={!depositoId || loadingUbicaciones}
-            >
-              <option value="">
-                {depositoId
-                  ? "-- Seleccioná ubicación --"
-                  : "Seleccioná depósito primero"}
-              </option>
-
-              {ubicaciones.map((u) => (
-                <option key={u.id_ubicacion} value={u.id_ubicacion}>
-                  {u.nombre}
-                </option>
-              ))}
-            </select>
-          </div>
 
           <div className="nt-field">
             <label>Motivo</label>

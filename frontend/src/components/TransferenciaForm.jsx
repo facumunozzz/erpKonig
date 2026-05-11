@@ -13,62 +13,38 @@ function TransferenciaForm({ onClose, onCreated }) {
   const [origenId, setOrigenId] = useState('');
   const [destinoId, setDestinoId] = useState('');
 
-  const [ubicOrigenList, setUbicOrigenList] = useState([]);
-  const [ubicDestinoList, setUbicDestinoList] = useState([]);
-  const [ubicOrigenId, setUbicOrigenId] = useState('');
-  const [ubicDestinoId, setUbicDestinoId] = useState('');
 
   const [items, setItems] = useState([{ codigo: '', cantidad: 1 }]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Cargar depósitos
+  const getPanolId = (lista) => {
+    const panol = (lista || []).find(
+      d => String(d.nombre || '').trim().toUpperCase() === 'PAÑOL'
+    );
+
+    return panol ? String(panol.id_deposito) : '';
+  };
+
+  // Cargar depósitos y dejar PAÑOL por defecto como origen
   useEffect(() => {
     api.get('/depositos')
-      .then(r => setDepositos(r.data || []))
+      .then(r => {
+        const lista = r.data || [];
+        setDepositos(lista);
+
+        const panolId = getPanolId(lista);
+        if (panolId) setOrigenId(prev => prev || panolId);
+      })
       .catch(() => setDepositos([]));
   }, []);
 
-  // Helpers: elegir GENERAL si existe
-  const pickGeneral = (list) => {
-    const g = (list || []).find(u => String(u.nombre || '').trim().toUpperCase() === 'GENERAL');
-    return g ? String(g.id_ubicacion) : (list?.[0] ? String(list[0].id_ubicacion) : '');
-  };
-
-  // Cargar ubicaciones de ORIGEN
-  useEffect(() => {
-    const dep = toInt(origenId);
-    if (!dep) { setUbicOrigenList([]); setUbicOrigenId(''); return; }
-
-    api.get(`/transferencias/ubicaciones/${dep}`)
-      .then(r => {
-        const list = r.data || [];
-        setUbicOrigenList(list);
-        setUbicOrigenId(prev => prev || pickGeneral(list));
-      })
-      .catch(() => { setUbicOrigenList([]); setUbicOrigenId(''); });
-  }, [origenId]);
-
-  // Cargar ubicaciones de DESTINO
-  useEffect(() => {
-    const dep = toInt(destinoId);
-    if (!dep) { setUbicDestinoList([]); setUbicDestinoId(''); return; }
-
-    api.get(`/transferencias/ubicaciones/${dep}`)
-      .then(r => {
-        const list = r.data || [];
-        setUbicDestinoList(list);
-        setUbicDestinoId(prev => prev || pickGeneral(list));
-      })
-      .catch(() => { setUbicDestinoList([]); setUbicDestinoId(''); });
-  }, [destinoId]);
-
   const canSubmit = useMemo(() => {
     if (!toInt(origenId) || !toInt(destinoId)) return false;
-    if (!toInt(ubicOrigenId) || !toInt(ubicDestinoId)) return false;
+    if (toInt(origenId) === toInt(destinoId)) return false;
     const validItems = items.filter(it => String(it.codigo || '').trim() && toInt(it.cantidad) > 0);
     return validItems.length > 0;
-  }, [origenId, destinoId, ubicOrigenId, ubicDestinoId, items]);
+  }, [origenId, destinoId, items]);
 
   const addItem = () => setItems(prev => [...prev, { codigo: '', cantidad: 1 }]);
   const removeItem = (idx) => setItems(prev => prev.filter((_, i) => i !== idx));
@@ -78,13 +54,11 @@ function TransferenciaForm({ onClose, onCreated }) {
 
   const submit = async () => {
     setError('');
-    if (!canSubmit) { setError('Completá depósitos, ubicaciones y al menos un ítem válido.'); return; }
+    if (!canSubmit) { setError('Completá origen, destino distinto y al menos un ítem válido.'); return; }
 
     const payload = {
       origen_id: toInt(origenId),
       destino_id: toInt(destinoId),
-      id_ubicacion_origen: toInt(ubicOrigenId),
-      id_ubicacion_destino: toInt(ubicDestinoId),
       items: items
         .map(it => ({ codigo: String(it.codigo || '').trim().toUpperCase(), cantidad: toInt(it.cantidad) }))
         .filter(it => it.codigo && it.cantidad > 0)
@@ -119,7 +93,7 @@ function TransferenciaForm({ onClose, onCreated }) {
         <div className="nt-row" style={{ gap: 12 }}>
           <div className="nt-field" style={{ flex: 1 }}>
             <label>Depósito Origen</label>
-            <select value={origenId} onChange={e => { setOrigenId(e.target.value); setUbicOrigenId(''); }}>
+            <select value={origenId} onChange={e => setOrigenId(e.target.value)}>
               <option value="">-- Seleccionar --</option>
               {depositos.map(d => (
                 <option key={d.id_deposito} value={d.id_deposito}>{d.nombre}</option>
@@ -127,39 +101,20 @@ function TransferenciaForm({ onClose, onCreated }) {
             </select>
           </div>
 
-          <div className="nt-field" style={{ flex: 1 }}>
-            <label>Ubicación Origen</label>
-            <select value={ubicOrigenId} onChange={e => setUbicOrigenId(e.target.value)} disabled={!toInt(origenId)}>
-              <option value="">-- Seleccionar --</option>
-              {ubicOrigenList.map(u => (
-                <option key={u.id_ubicacion} value={u.id_ubicacion}>{u.nombre}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="nt-row" style={{ gap: 12, marginTop: 10 }}>
           <div className="nt-field" style={{ flex: 1 }}>
             <label>Depósito Destino</label>
-            <select value={destinoId} onChange={e => { setDestinoId(e.target.value); setUbicDestinoId(''); }}>
+            <select value={destinoId} onChange={e => setDestinoId(e.target.value)}>
               <option value="">-- Seleccionar --</option>
               {depositos.map(d => (
                 <option key={d.id_deposito} value={d.id_deposito}>{d.nombre}</option>
               ))}
             </select>
           </div>
-
-          <div className="nt-field" style={{ flex: 1 }}>
-            <label>Ubicación Destino</label>
-            <select value={ubicDestinoId} onChange={e => setUbicDestinoId(e.target.value)} disabled={!toInt(destinoId)}>
-              <option value="">-- Seleccionar --</option>
-              {ubicDestinoList.map(u => (
-                <option key={u.id_ubicacion} value={u.id_ubicacion}>{u.nombre}</option>
-              ))}
-            </select>
-          </div>
         </div>
 
+        {toInt(origenId) && toInt(destinoId) && toInt(origenId) === toInt(destinoId) && (
+          <div className="error-message">El depósito origen y destino deben ser distintos.</div>
+        )}
         <hr style={{ margin: '14px 0' }} />
 
         <h4>Ítems</h4>

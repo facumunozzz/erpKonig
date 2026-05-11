@@ -23,6 +23,7 @@ exports.getAllArticulos = async (req, res) => {
         a.descripcion,
         a.folio,
         a.proveedor,
+        a.ubicacion,
         a.punto_pedido,
         a.tipo
       FROM dbo.articulos a
@@ -331,6 +332,110 @@ exports.updateArticulo = async (req, res) => {
   } catch (err) {
     console.error("Error en updateArticulo:", err);
     res.status(500).json({ error: "Error al actualizar artículo", detalle: err.message });
+  }
+};
+
+
+// -----------------------------------------------------------------------------
+// ACTUALIZAR SOLO UBICACIÓN
+// PATCH /articulos/:id/ubicacion
+// -----------------------------------------------------------------------------
+exports.updateUbicacionArticulo = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "ID inválido" });
+    }
+
+    const ubicacion = toDb(req.body?.ubicacion);
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .input("ubicacion", sql.VarChar, ubicacion)
+      .query(`
+        SET NOCOUNT ON;
+
+        UPDATE dbo.articulos
+           SET ubicacion = @ubicacion
+         WHERE id_articulo = @id;
+
+        SELECT @@ROWCOUNT AS affected;
+      `);
+
+    const affected = Number(result.recordset?.[0]?.affected || 0);
+
+    if (affected === 0) {
+      return res.status(404).json({ error: "Artículo no encontrado" });
+    }
+
+    res.json({
+      message: "Ubicación actualizada",
+      id_articulo: id,
+      ubicacion
+    });
+  } catch (err) {
+    console.error("Error en updateUbicacionArticulo:", err);
+    res.status(500).json({
+      error: "Error al actualizar ubicación",
+      detalle: err.message
+    });
+  }
+};
+
+
+// -----------------------------------------------------------------------------
+// ACTUALIZAR SOLO UBICACIÓN
+// PATCH /articulos/:id/ubicacion
+// -----------------------------------------------------------------------------
+exports.updateUbicacionArticulo = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "ID inválido" });
+    }
+
+    const ubicacion = toDb(req.body?.ubicacion);
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .input("ubicacion", sql.VarChar, ubicacion)
+      .query(`
+        SET NOCOUNT ON;
+
+        UPDATE dbo.articulos
+           SET ubicacion = @ubicacion
+         WHERE id_articulo = @id;
+
+        SELECT @@ROWCOUNT AS affected;
+      `);
+
+    const affected = Number(result.recordset?.[0]?.affected || 0);
+
+    if (affected === 0) {
+      return res.status(404).json({ error: "Artículo no encontrado" });
+    }
+
+    res.json({
+      message: "Ubicación actualizada",
+      id_articulo: id,
+      ubicacion,
+    });
+  } catch (err) {
+    console.error("Error en updateUbicacionArticulo:", err);
+    res.status(500).json({
+      error: "Error al actualizar ubicación",
+      detalle: err.message,
+    });
   }
 };
 

@@ -4,7 +4,25 @@ import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
 import ReferentesModal from "../components/ReferentesModal";
 
+
+  const normalizarMotivo = (v) =>
+  String(v ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+
+const MOTIVOS_OCULTOS = new Set([
+  "CONSUMO PRODUCCION (DROPBOX)",
+  "IMPORTACION EXCEL",
+]);
+
+const esMotivoOculto = (nombre) =>
+  MOTIVOS_OCULTOS.has(normalizarMotivo(nombre));
+
+
 export default function Ajustes() {
+
   const navigate = useNavigate();
 
   const [ajustes, setAjustes] = useState([]);
@@ -113,9 +131,12 @@ export default function Ajustes() {
   // Motivos ABM
   // =========================
   const fetchMotivos = async () => {
-    const res = await api.get("/ajustes/motivos");
-    setMotivos(res.data || []);
-  };
+  const res = await api.get("/ajustes/motivos");
+
+  setMotivos(
+    (res.data || []).filter((m) => !esMotivoOculto(m.nombre))
+  );
+};
 
   const abrirMotivos = async () => {
     setShowMotivos(true);

@@ -12,6 +12,22 @@ const toDb = (v) =>
   v == null || String(v).trim() === "" ? null : String(v).trim();
 const up = (v) => toDb(v)?.toUpperCase() ?? null;
 
+const normalizarMotivoSistema = (v) =>
+  String(v ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+
+const MOTIVOS_SISTEMA = new Set([
+  "CONSUMO PRODUCCION (DROPBOX)",
+  "IMPORTACION EXCEL",
+]);
+
+const esMotivoSistema = (nombre) =>
+  MOTIVOS_SISTEMA.has(normalizarMotivoSistema(nombre));
+
+
 function toNumber0(v) {
   if (v === null || v === undefined) return 0;
   if (typeof v === "number" && Number.isFinite(v)) return v;
@@ -285,86 +301,158 @@ exports.getMotivos = async (_req, res) => {
   try {
     await poolConnect;
     const pool = await getPool();
+
     const r = await pool.request().query(`
       SELECT id_motivo, nombre, activo
       FROM dbo.ajustes_motivos
+      WHERE UPPER(LTRIM(RTRIM(nombre))) NOT IN (
+        N'CONSUMO PRODUCCIÓN (DROPBOX)',
+        N'CONSUMO PRODUCCION (DROPBOX)',
+        N'IMPORTACIÓN EXCEL',
+        N'IMPORTACION EXCEL'
+      )
       ORDER BY activo DESC, nombre ASC
     `);
+
     res.json(r.recordset || []);
   } catch (err) {
     console.error("ajustes.getMotivos:", err);
-    res
-      .status(500)
-      .json({ error: "Error al listar motivos", detalle: err.message });
+    res.status(500).json({
+      error: "Error al listar motivos",
+      detalle: err.message,
+    });
   }
 };
 
 exports.createMotivo = async (req, res) => {
   try {
     const nombre = String(req.body?.nombre ?? "").trim();
-    if (!nombre) return res.status(400).json({ error: "Nombre obligatorio" });
+
+    if (!nombre) {
+      return res.status(400).json({ error: "Nombre obligatorio" });
+    }
+
+    if (esMotivoSistema(nombre)) {
+      return res.status(400).json({
+        error: "Ese nombre está reservado para procesos internos del sistema.",
+      });
+    }
 
     await poolConnect;
     const pool = await getPool();
 
     const r = await pool.request().input("n", sql.VarChar, nombre).query(`
-        INSERT INTO dbo.ajustes_motivos (nombre, activo)
-        VALUES (@n, 1);
-        SELECT SCOPE_IDENTITY() AS id_motivo;
-      `);
+      INSERT INTO dbo.ajustes_motivos (nombre, activo)
+      VALUES (@n, 1);
 
-    return res
-      .status(201)
-      .json({ ok: true, id_motivo: Number(r.recordset[0].id_motivo) });
+      SELECT SCOPE_IDENTITY() AS id_motivo;
+    `);
+
+    return res.status(201).json({
+      ok: true,
+      id_motivo: Number(r.recordset[0].id_motivo),
+    });
   } catch (err) {
     if (
       String(err.message || "")
         .toLowerCase()
         .includes("unique")
     ) {
-      return res
-        .status(400)
-        .json({ error: "Ya existe un motivo con ese nombre" });
+      return res.status(400).json({
+        error: "Ya existe un motivo con ese nombre",
+      });
     }
+
     console.error("ajustes.createMotivo:", err);
-    res
-      .status(500)
-      .json({ error: "Error al crear motivo", detalle: err.message });
+
+    return res.status(500).json({
+      error: "Error al crear motivo",
+      detalle: err.message,
+    });
   }
 };
 
 exports.updateMotivo = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id))
+
+    if (!Number.isInteger(id)) {
       return res.status(400).json({ error: "ID inválido" });
+    }
 
-    const nombre =
-      req.body?.nombre != null ? String(req.body.nombre).trim() : null;
-    const activo = req.body?.activo;
+    const vieneNombre = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      "nombre"
+    );
 
-    if (nombre != null && !nombre)
+    const vieneActivo = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      "activo"
+    );
+
+    if (!vieneNombre && !vieneActivo) {
+      return res.status(400).json({
+        error: "Debe enviar al menos nombre o activo",
+      });
+    }
+
+    const nombre = vieneNombre ? String(req.body.nombre || "").trim() : null;
+
+    if (vieneNombre && !nombre) {
       return res.status(400).json({ error: "Nombre inválido" });
+    }
+
+    if (vieneNombre && esMotivoSistema(nombre)) {
+      return res.status(400).json({
+        error: "Ese nombre está reservado para procesos internos del sistema.",
+      });
+    }
+
+    const activo = vieneActivo ? (req.body.activo ? 1 : 0) : null;
 
     await poolConnect;
     const pool = await getPool();
 
-    const rq = pool.request().input("id", sql.Int, id);
-    if (nombre != null) rq.input("n", sql.VarChar, nombre);
-    if (activo != null) rq.input("a", sql.Bit, activo ? 1 : 0);
+    const actual = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT id_motivo, nombre, activo
+        FROM dbo.ajustes_motivos
+        WHERE id_motivo = @id
+      `);
+
+    if (!actual.recordset.length) {
+      return res.status(404).json({ error: "Motivo no encontrado" });
+    }
+
+    if (esMotivoSistema(actual.recordset[0].nombre)) {
+      return res.status(403).json({
+        error:
+          "Este motivo es interno del sistema y no puede editarse ni desactivarse.",
+      });
+    }
+
+    const rq = pool
+      .request()
+      .input("id", sql.Int, id)
+      .input("n", sql.VarChar, nombre)
+      .input("a", sql.Bit, activo);
 
     const r = await rq.query(`
       UPDATE dbo.ajustes_motivos
       SET
-        nombre = COALESCE(@n, nombre),
-        activo = COALESCE(@a, activo)
+        nombre = CASE WHEN @n IS NULL THEN nombre ELSE @n END,
+        activo = CASE WHEN @a IS NULL THEN activo ELSE @a END
       WHERE id_motivo = @id;
 
       SELECT @@ROWCOUNT AS affected;
     `);
 
-    if (Number(r.recordset[0].affected) !== 1)
+    if (Number(r.recordset[0].affected) !== 1) {
       return res.status(404).json({ error: "Motivo no encontrado" });
+    }
+
     return res.json({ ok: true });
   } catch (err) {
     if (
@@ -372,31 +460,56 @@ exports.updateMotivo = async (req, res) => {
         .toLowerCase()
         .includes("unique")
     ) {
-      return res
-        .status(400)
-        .json({ error: "Ya existe un motivo con ese nombre" });
+      return res.status(400).json({
+        error: "Ya existe un motivo con ese nombre",
+      });
     }
+
     console.error("ajustes.updateMotivo:", err);
-    res
-      .status(500)
-      .json({ error: "Error al actualizar motivo", detalle: err.message });
+
+    return res.status(500).json({
+      error: "Error al actualizar motivo",
+      detalle: err.message,
+    });
   }
 };
 
 exports.deleteMotivo = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id))
+
+    if (!Number.isInteger(id)) {
       return res.status(400).json({ error: "ID inválido" });
+    }
 
     await poolConnect;
     const pool = await getPool();
+
+    const actual = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT id_motivo, nombre, activo
+        FROM dbo.ajustes_motivos
+        WHERE id_motivo = @id
+      `);
+
+    if (!actual.recordset.length) {
+      return res.status(404).json({ error: "Motivo no encontrado" });
+    }
+
+    if (esMotivoSistema(actual.recordset[0].nombre)) {
+      return res.status(403).json({
+        error: "Este motivo es interno del sistema y no puede eliminarse.",
+      });
+    }
 
     const used = await pool.request().input("id", sql.Int, id).query(`
       SELECT TOP 1 1 AS used
       FROM dbo.ajustes
       WHERE motivo_id = @id
     `);
+
     if (used.recordset.length) {
       return res.status(400).json({
         error:
@@ -405,18 +518,24 @@ exports.deleteMotivo = async (req, res) => {
     }
 
     const r = await pool.request().input("id", sql.Int, id).query(`
-      DELETE FROM dbo.ajustes_motivos WHERE id_motivo = @id;
+      DELETE FROM dbo.ajustes_motivos
+      WHERE id_motivo = @id;
+
       SELECT @@ROWCOUNT AS affected;
     `);
 
-    if (Number(r.recordset[0].affected) !== 1)
+    if (Number(r.recordset[0].affected) !== 1) {
       return res.status(404).json({ error: "Motivo no encontrado" });
+    }
+
     return res.json({ ok: true });
   } catch (err) {
     console.error("ajustes.deleteMotivo:", err);
-    res
-      .status(500)
-      .json({ error: "Error al borrar motivo", detalle: err.message });
+
+    return res.status(500).json({
+      error: "Error al borrar motivo",
+      detalle: err.message,
+    });
   }
 };
 

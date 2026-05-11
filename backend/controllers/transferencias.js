@@ -8,6 +8,12 @@ function asInt(v) {
 
 const toUpperTrim = (v) => String(v ?? "").trim().toUpperCase();
 
+const cleanTextOrNull = (v) => {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+};
+
 // ============================================================================
 // GET /transferencias
 // ============================================================================
@@ -45,7 +51,7 @@ exports.getAll = async (_req, res) => {
 };
 
 // ============================================================================
-// GET /transferencias/:id  (cabecera + detalle)
+// GET /transferencias/:id
 // ============================================================================
 exports.getById = async (req, res) => {
   try {
@@ -112,6 +118,7 @@ exports.getById = async (req, res) => {
 
 // ============================================================================
 // GET /transferencias/ubicaciones/:depositoId
+// Se deja por compatibilidad, aunque el nuevo frontend ya no lo usa.
 // ============================================================================
 exports.getUbicacionesByDeposito = async (req, res) => {
   try {
@@ -190,17 +197,12 @@ exports.getArticuloByCodigo = async (req, res) => {
 
 // ============================================================================
 // POST /transferencias
-// body:
-// {
-//   origen_id,
-//   destino_id,
-//   id_ubicacion_origen?: null,
-//   id_ubicacion_destino?: null,
-//   remito_referencia?: string|null,
-//   id_referente?: number|null,
-//   fecha_real?: "YYYY-MM-DD"|null,
-//   items: [{ codigo, cantidad }]
-// }
+//
+// Nuevo criterio:
+// - El usuario solo elige DEPÓSITO / ALMACÉN.
+// - No se pide ubicación en pantalla.
+// - Internamente se usa ubicación GENERAL o la primera activa para registrar.
+// - No permite origen y destino iguales.
 // ============================================================================
 exports.create = async (req, res) => {
   const usuario =
@@ -212,13 +214,7 @@ exports.create = async (req, res) => {
   const origenId = asInt(req.body?.origen_id);
   const destinoId = asInt(req.body?.destino_id);
 
-  const remitoReferenciaRaw = req.body?.remito_referencia;
-  const remitoReferencia =
-    remitoReferenciaRaw === null ||
-    remitoReferenciaRaw === undefined ||
-    String(remitoReferenciaRaw).trim() === ""
-      ? null
-      : String(remitoReferenciaRaw).trim();
+  const remitoReferencia = cleanTextOrNull(req.body?.remito_referencia);
 
   const referenteRaw = req.body?.id_referente;
   const referenteId =
@@ -236,16 +232,6 @@ exports.create = async (req, res) => {
       ? null
       : String(fechaRealRaw).trim();
 
-  const ubicO =
-    req.body?.id_ubicacion_origen == null
-      ? null
-      : asInt(req.body.id_ubicacion_origen);
-
-  const ubicD =
-    req.body?.id_ubicacion_destino == null
-      ? null
-      : asInt(req.body.id_ubicacion_destino);
-
   const itemsRaw = Array.isArray(req.body?.items) ? req.body.items : [];
 
   if (!Number.isFinite(origenId) || !Number.isFinite(destinoId)) {
@@ -254,12 +240,10 @@ exports.create = async (req, res) => {
     });
   }
 
-  if (ubicO !== null && !Number.isFinite(ubicO)) {
-    return res.status(400).json({ error: "Ubicación origen inválida" });
-  }
-
-  if (ubicD !== null && !Number.isFinite(ubicD)) {
-    return res.status(400).json({ error: "Ubicación destino inválida" });
+  if (Number(origenId) === Number(destinoId)) {
+    return res.status(400).json({
+      error: "El depósito origen y destino deben ser distintos",
+    });
   }
 
   if (referenteId !== null && !Number.isFinite(referenteId)) {
@@ -271,11 +255,16 @@ exports.create = async (req, res) => {
       codigo: toUpperTrim(it.codigo),
       cantidad: asInt(it.cantidad),
     }))
-    .filter((it) => it.codigo && Number.isFinite(it.cantidad) && it.cantidad > 0);
+    .filter(
+      (it) =>
+        it.codigo &&
+        Number.isFinite(it.cantidad) &&
+        it.cantidad > 0
+    );
 
   if (!items.length) {
     return res.status(400).json({
-      error: "Debe incluir items con cantidad > 0",
+      error: "Debe incluir items con cantidad mayor a 0",
     });
   }
 
@@ -305,9 +294,43 @@ exports.create = async (req, res) => {
       return r.query(sqlText);
     };
 
-    // ---------------------------------------
-    // Helper MERGE sobre dbo.stock
-    // ---------------------------------------
+    // ------------------------------------------------------------------------
+    // Helper: devuelve ubicación GENERAL del depósito o la primera activa.
+    // Aunque el usuario ya no la elija, la tabla stock necesita id_ubicacion.
+    // ------------------------------------------------------------------------
+    const resolveUbicacionInterna = async (idDeposito) => {
+      const g = await execQ(
+        `
+        SELECT TOP 1 id_ubicacion, id_deposito, nombre
+        FROM dbo.ubicaciones
+        WHERE id_deposito = @dep
+          AND activa = 1
+          AND UPPER(LTRIM(RTRIM(nombre))) = 'GENERAL'
+        ORDER BY id_ubicacion
+        `,
+        (r) => r.input("dep", sql.Int, idDeposito)
+      );
+
+      if (g.recordset[0]) return g.recordset[0];
+
+      const any = await execQ(
+        `
+        SELECT TOP 1 id_ubicacion, id_deposito, nombre
+        FROM dbo.ubicaciones
+        WHERE id_deposito = @dep
+          AND activa = 1
+        ORDER BY id_ubicacion
+        `,
+        (r) => r.input("dep", sql.Int, idDeposito)
+      );
+
+      return any.recordset[0] || null;
+    };
+
+    // ------------------------------------------------------------------------
+    // Helper: suma/resta stock en una ubicación concreta.
+    // Para el destino se suma en GENERAL o primera ubicación activa.
+    // ------------------------------------------------------------------------
     const upsertStockDelta = async ({
       idDeposito,
       idArticulo,
@@ -343,16 +366,92 @@ exports.create = async (req, res) => {
       );
     };
 
-    // ---------------------------------------
+    // ------------------------------------------------------------------------
+    // Helper: descuenta stock del depósito origen sin que el usuario elija
+    // ubicación. Consume desde las ubicaciones con stock disponible.
+    // Primero GENERAL, luego el resto.
+    // ------------------------------------------------------------------------
+    const consumirStockDesdeDeposito = async ({
+      idDeposito,
+      idArticulo,
+      cantidad,
+    }) => {
+      let restante = Number(cantidad);
+
+      const rows = await execQ(
+        `
+        SELECT 
+          s.id_stock,
+          s.id_ubicacion,
+          s.cantidad,
+          u.nombre AS ubicacion
+        FROM dbo.stock s WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN dbo.ubicaciones u ON u.id_ubicacion = s.id_ubicacion
+        WHERE s.id_deposito = @dep
+          AND s.id_articulo = @art
+          AND s.cantidad > 0
+        ORDER BY
+          CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(u.nombre, '')))) = 'GENERAL' THEN 0 ELSE 1 END,
+          s.id_ubicacion,
+          s.id_stock
+        `,
+        (r) =>
+          r
+            .input("dep", sql.Int, idDeposito)
+            .input("art", sql.Int, idArticulo)
+      );
+
+      for (const row of rows.recordset || []) {
+        if (restante <= 0) break;
+
+        const disponibleFila = Number(row.cantidad || 0);
+        const tomar = Math.min(disponibleFila, restante);
+
+        if (tomar <= 0) continue;
+
+        const upd = await execQ(
+          `
+          UPDATE dbo.stock
+          SET cantidad = cantidad - @cant
+          WHERE id_stock = @idStock
+            AND cantidad >= @cant;
+
+          SELECT @@ROWCOUNT AS affected;
+          `,
+          (r) =>
+            r
+              .input("idStock", sql.Int, Number(row.id_stock))
+              .input("cant", sql.Int, tomar)
+        );
+
+        const affected = Number(upd.recordset?.[0]?.affected || 0);
+
+        if (affected !== 1) {
+          throw new Error(
+            "No se pudo descontar stock. Volvé a intentar la operación."
+          );
+        }
+
+        restante -= tomar;
+      }
+
+      if (restante > 0) {
+        throw new Error(
+          `Stock insuficiente. Faltan ${restante} unidades para descontar.`
+        );
+      }
+    };
+
+    // ------------------------------------------------------------------------
     // Depósitos
-    // ---------------------------------------
+    // ------------------------------------------------------------------------
     const deps = await execQ(`
-      SELECT id_deposito, nombre 
+      SELECT id_deposito, nombre
       FROM dbo.depositos
     `);
 
     const depMap = new Map(
-      deps.recordset.map((d) => [Number(d.id_deposito), d.nombre])
+      deps.recordset.map((d) => [Number(d.id_deposito), String(d.nombre || "")])
     );
 
     if (!depMap.has(origenId)) {
@@ -365,9 +464,9 @@ exports.create = async (req, res) => {
       return res.status(400).json({ error: "Depósito destino inexistente" });
     }
 
-    // ---------------------------------------
-    // Referente, si viene informado
-    // ---------------------------------------
+    // ------------------------------------------------------------------------
+    // Referente
+    // ------------------------------------------------------------------------
     if (referenteId !== null) {
       const ref = await execQ(
         `
@@ -389,94 +488,38 @@ exports.create = async (req, res) => {
       }
     }
 
-    // ---------------------------------------
-    // Resolver ubicaciones
-    // Si viene null, busca GENERAL. Si no hay GENERAL, usa primera activa.
-    // ---------------------------------------
-    async function resolveUbicacionOrGeneral(idDeposito, idUbicacionNullable) {
-      if (idUbicacionNullable != null) {
-        const u = await execQ(
-          `
-          SELECT id_ubicacion, id_deposito, nombre
-          FROM dbo.ubicaciones
-          WHERE id_ubicacion = @uid AND activa = 1
-          `,
-          (r) => r.input("uid", sql.Int, idUbicacionNullable)
-        );
-
-        if (!u.recordset.length) return null;
-
-        if (Number(u.recordset[0].id_deposito) !== Number(idDeposito)) {
-          return null;
-        }
-
-        return u.recordset[0];
-      }
-
-      const g = await execQ(
-        `
-        SELECT TOP 1 id_ubicacion, id_deposito, nombre
-        FROM dbo.ubicaciones
-        WHERE id_deposito = @dep
-          AND activa = 1
-          AND UPPER(LTRIM(RTRIM(nombre))) = 'GENERAL'
-        ORDER BY id_ubicacion
-        `,
-        (r) => r.input("dep", sql.Int, idDeposito)
-      );
-
-      if (g.recordset[0]) return g.recordset[0];
-
-      const any = await execQ(
-        `
-        SELECT TOP 1 id_ubicacion, id_deposito, nombre
-        FROM dbo.ubicaciones
-        WHERE id_deposito = @dep AND activa = 1
-        ORDER BY id_ubicacion
-        `,
-        (r) => r.input("dep", sql.Int, idDeposito)
-      );
-
-      return any.recordset[0] || null;
-    }
-
-    const uOrigen = await resolveUbicacionOrGeneral(origenId, ubicO);
-    const uDestino = await resolveUbicacionOrGeneral(destinoId, ubicD);
+    // ------------------------------------------------------------------------
+    // Ubicaciones internas automáticas
+    // ------------------------------------------------------------------------
+    const uOrigen = await resolveUbicacionInterna(origenId);
+    const uDestino = await resolveUbicacionInterna(destinoId);
 
     if (!uOrigen) {
       await trans.rollback();
       return res.status(400).json({
-        error: "Ubicación origen inválida o no pertenece al depósito",
+        error:
+          "El depósito origen no tiene ninguna ubicación activa. Creá una ubicación GENERAL.",
       });
     }
 
     if (!uDestino) {
       await trans.rollback();
       return res.status(400).json({
-        error: "Ubicación destino inválida o no pertenece al depósito",
+        error:
+          "El depósito destino no tiene ninguna ubicación activa. Creá una ubicación GENERAL.",
       });
     }
 
-    if (Number(origenId) === Number(destinoId)) {
-      if (Number(uOrigen.id_ubicacion) === Number(uDestino.id_ubicacion)) {
-        await trans.rollback();
-        return res.status(400).json({
-          error:
-            "Origen y destino no pueden ser el mismo depósito y la misma ubicación.",
-        });
-      }
-    }
-
-    // ---------------------------------------
-    // Validar artículos por código
-    // ---------------------------------------
+    // ------------------------------------------------------------------------
+    // Artículos
+    // ------------------------------------------------------------------------
     const inList = itemsMerged.map((_, i) => `@c${i}`).join(",");
 
     const arts = await execQ(
       `
       SELECT 
-        id_articulo, 
-        UPPER(LTRIM(RTRIM(codigo))) AS codigo, 
+        id_articulo,
+        UPPER(LTRIM(RTRIM(codigo))) AS codigo,
         descripcion
       FROM dbo.articulos
       WHERE UPPER(LTRIM(RTRIM(codigo))) IN (${inList})
@@ -488,7 +531,7 @@ exports.create = async (req, res) => {
     );
 
     const artIdByCodigo = new Map(
-      arts.recordset.map((a) => [a.codigo, Number(a.id_articulo)])
+      arts.recordset.map((a) => [String(a.codigo), Number(a.id_articulo)])
     );
 
     const faltan = itemsMerged
@@ -503,9 +546,10 @@ exports.create = async (req, res) => {
       });
     }
 
-    // ---------------------------------------
-    // Validar stock en ubicación origen
-    // ---------------------------------------
+    // ------------------------------------------------------------------------
+    // Validar stock total por depósito origen
+    // Ya no validamos ubicación, porque el usuario trabaja por almacén.
+    // ------------------------------------------------------------------------
     const faltantesStock = [];
 
     for (const it of itemsMerged) {
@@ -513,26 +557,24 @@ exports.create = async (req, res) => {
 
       const chk = await execQ(
         `
-        SELECT ISNULL(SUM(cantidad),0) AS q
+        SELECT ISNULL(SUM(cantidad), 0) AS q
         FROM dbo.stock WITH (UPDLOCK, HOLDLOCK)
         WHERE id_deposito = @dep
-          AND id_ubicacion = @uO
-          AND id_articulo = @a1
+          AND id_articulo = @art
         `,
         (r) =>
           r
             .input("dep", sql.Int, origenId)
-            .input("uO", sql.Int, Number(uOrigen.id_ubicacion))
-            .input("a1", sql.Int, Number(idArt))
+            .input("art", sql.Int, Number(idArt))
       );
 
-      const disp = Number(chk.recordset[0]?.q || 0);
+      const disponible = Number(chk.recordset[0]?.q || 0);
 
-      if (disp < it.cantidad) {
+      if (disponible < it.cantidad) {
         faltantesStock.push({
           codigo: it.codigo,
           requerido: it.cantidad,
-          disponible: disp,
+          disponible,
         });
       }
     }
@@ -540,16 +582,18 @@ exports.create = async (req, res) => {
     if (faltantesStock.length) {
       await trans.rollback();
       return res.status(400).json({
-        error: "Stock insuficiente en ubicación origen",
+        error: "Stock insuficiente en depósito origen",
         faltantes: faltantesStock,
       });
     }
 
-    // ---------------------------------------
+    // ------------------------------------------------------------------------
     // Cabecera
-    // ---------------------------------------
-    const origenTxt = `${depMap.get(origenId)} - ${uOrigen.nombre}`;
-    const destinoTxt = `${depMap.get(destinoId)} - ${uDestino.nombre}`;
+    // Ahora se guarda solo el nombre del depósito, sin mostrar ubicación.
+    // Internamente se guardan id_ubicacion_origen/destino para compatibilidad.
+    // ------------------------------------------------------------------------
+    const origenTxt = depMap.get(origenId);
+    const destinoTxt = depMap.get(destinoId);
 
     const ins = await execQ(
       `
@@ -574,8 +618,8 @@ exports.create = async (req, res) => {
         COALESCE(@fechaReal, CONVERT(date, GETDATE())),
         @remitoReferencia,
         @referenteId,
-        @uO2,
-        @uD2,
+        @uO,
+        @uD,
         @usr
       )
       `,
@@ -586,8 +630,8 @@ exports.create = async (req, res) => {
           .input("fechaReal", sql.Date, fechaReal)
           .input("remitoReferencia", sql.VarChar, remitoReferencia)
           .input("referenteId", sql.Int, referenteId)
-          .input("uO2", sql.Int, Number(uOrigen.id_ubicacion))
-          .input("uD2", sql.Int, Number(uDestino.id_ubicacion))
+          .input("uO", sql.Int, Number(uOrigen.id_ubicacion))
+          .input("uD", sql.Int, Number(uDestino.id_ubicacion))
           .input("usr", sql.VarChar, usuario)
     );
 
@@ -595,32 +639,32 @@ exports.create = async (req, res) => {
 
     await execQ(
       `
-      UPDATE dbo.transferencias 
-      SET numero_transferencia = CAST(id AS VARCHAR(20)) 
+      UPDATE dbo.transferencias
+      SET numero_transferencia = CAST(id AS VARCHAR(20))
       WHERE id = @id
       `,
       (r) => r.input("id", sql.Int, transferenciaId)
     );
 
-    // ---------------------------------------
+    // ------------------------------------------------------------------------
     // Detalle + movimientos de stock
-    // ---------------------------------------
+    // ------------------------------------------------------------------------
     for (const it of itemsMerged) {
       const idArt = artIdByCodigo.get(it.codigo);
       const qty = Number(it.cantidad);
 
       await execQ(
         `
-        INSERT INTO dbo.transferencias_detalle 
+        INSERT INTO dbo.transferencias_detalle
         (
-          transferencia_id, 
-          articulo_id, 
+          transferencia_id,
+          articulo_id,
           cantidad
         )
-        VALUES 
+        VALUES
         (
-          @tid, 
-          @artId, 
+          @tid,
+          @artId,
           @qty
         )
         `,
@@ -631,11 +675,10 @@ exports.create = async (req, res) => {
             .input("qty", sql.Int, qty)
       );
 
-      await upsertStockDelta({
+      await consumirStockDesdeDeposito({
         idDeposito: origenId,
         idArticulo: Number(idArt),
-        idUbicacion: Number(uOrigen.id_ubicacion),
-        delta: -qty,
+        cantidad: qty,
       });
 
       await upsertStockDelta({
@@ -680,7 +723,11 @@ exports.create = async (req, res) => {
 };
 
 // ============================================================================
-// GET /transferencias/stock-articulo?codigo=XXX&deposito_id=1&ubicacion_id=2
+// GET /transferencias/stock-articulo?codigo=XXX&deposito_id=1
+//
+// Nuevo criterio:
+// - Si no viene ubicacion_id, devuelve stock total del depósito.
+// - Si viene ubicacion_id, lo respeta por compatibilidad con pantallas viejas.
 // ============================================================================
 exports.getStockArticulo = async (req, res) => {
   try {

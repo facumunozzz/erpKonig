@@ -12,6 +12,9 @@ router.delete("/:id/full", articulosController.deleteArticuloFull);
 router.get('/:id/clasificaciones', articulos.getClasificacionesArticulo);
 router.post('/:id/clasificaciones', articulos.setClasificacionesArticulo);
 
+// editar solo ubicación del artículo
+router.patch("/:id/ubicacion", articulos.updateUbicacionArticulo);
+
 router.post('/', articulos.createArticulo);
 router.put('/:id', articulos.updateArticulo);
 router.delete('/:id', articulos.deleteArticulo);

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
@@ -11,12 +11,6 @@ export default function NuevaTransferencia() {
 
   const [origenId, setOrigenId] = useState("");
   const [destinoId, setDestinoId] = useState("");
-  const [usarUbicaciones, setUsarUbicaciones] = useState(false);
-
-  const [ubicacionesOrigen, setUbicacionesOrigen] = useState([]);
-  const [ubicacionesDestino, setUbicacionesDestino] = useState([]);
-  const [ubicacionOrigenId, setUbicacionOrigenId] = useState("");
-  const [ubicacionDestinoId, setUbicacionDestinoId] = useState("");
 
   const [remitoReferencia, setRemitoReferencia] = useState("");
   const [referenteId, setReferenteId] = useState("");
@@ -30,19 +24,31 @@ export default function NuevaTransferencia() {
 
   const [errorMsg, setErrorMsg] = useState("");
   const [errorDepositos, setErrorDepositos] = useState("");
-  const [loadingUbicOrigen, setLoadingUbicOrigen] = useState(false);
-  const [loadingUbicDestino, setLoadingUbicDestino] = useState(false);
   const [loadingReferentes, setLoadingReferentes] = useState(false);
 
   const codigoRefs = useRef([]);
   const cantidadRefs = useRef([]);
 
+  const getPanolId = (lista) => {
+    const panol = (lista || []).find(
+      (d) => String(d.nombre || "").trim().toUpperCase() === "PAÑOL"
+    );
+
+    return panol ? String(panol.id_deposito) : "";
+  };
+
   useEffect(() => {
     api
       .get("/depositos")
       .then((res) => {
-        setDepositos(res.data || []);
+        const lista = res.data || [];
+        setDepositos(lista);
         setErrorDepositos("");
+
+        const panolId = getPanolId(lista);
+        if (panolId) {
+          setOrigenId((prev) => prev || panolId);
+        }
       })
       .catch((err) => {
         console.error(err);
@@ -87,9 +93,6 @@ export default function NuevaTransferencia() {
         params: {
           codigo: c,
           deposito_id: origenId,
-          ubicacion_id: usarUbicaciones
-            ? ubicacionOrigenId || undefined
-            : undefined,
         },
       });
 
@@ -147,89 +150,6 @@ export default function NuevaTransferencia() {
       return false;
     }
   };
-
-  const cargarUbicaciones = async (
-    depositoId,
-    setterList,
-    setterSelected,
-    setLoading
-  ) => {
-    const dep = Number(depositoId);
-
-    setterList([]);
-    setterSelected("");
-
-    if (!depositoId || !Number.isFinite(dep)) return;
-
-    try {
-      setLoading(true);
-
-      const res = await api.get(`/transferencias/ubicaciones/${dep}`);
-      const list = res.data || [];
-
-      setterList(list);
-
-      const general = list.find(
-        (u) => String(u.nombre || "").trim().toUpperCase() === "GENERAL"
-      );
-
-      if (general) {
-        setterSelected(String(general.id_ubicacion));
-      }
-    } catch (err) {
-      console.error(err);
-      setErrorMsg("No se pudieron cargar ubicaciones.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!usarUbicaciones) {
-      setUbicacionesOrigen([]);
-      setUbicacionesDestino([]);
-      setUbicacionOrigenId("");
-      setUbicacionDestinoId("");
-      return;
-    }
-
-    if (origenId) {
-      cargarUbicaciones(
-        origenId,
-        setUbicacionesOrigen,
-        setUbicacionOrigenId,
-        setLoadingUbicOrigen
-      );
-    }
-
-    if (destinoId) {
-      cargarUbicaciones(
-        destinoId,
-        setUbicacionesDestino,
-        setUbicacionDestinoId,
-        setLoadingUbicDestino
-      );
-    }
-  }, [usarUbicaciones, origenId, destinoId]);
-
-  useEffect(() => {
-    setItems((prev) =>
-      prev.map((it) => ({
-        ...it,
-        stock: "",
-      }))
-    );
-  }, [origenId, ubicacionOrigenId, usarUbicaciones]);
-
-  const origenNombre = useMemo(() => {
-    const d = depositos.find((x) => String(x.id_deposito) === String(origenId));
-    return d?.nombre || "";
-  }, [depositos, origenId]);
-
-  const destinoNombre = useMemo(() => {
-    const d = depositos.find((x) => String(x.id_deposito) === String(destinoId));
-    return d?.nombre || "";
-  }, [depositos, destinoId]);
 
   const asegurarFilaSiguiente = (index, focusCol = "codigo") => {
     setItems((prev) => {
@@ -308,27 +228,8 @@ export default function NuevaTransferencia() {
         return setErrorMsg("Seleccioná ORIGEN y DESTINO.");
       }
 
-      const uO = usarUbicaciones ? Number(ubicacionOrigenId) : null;
-      const uD = usarUbicaciones ? Number(ubicacionDestinoId) : null;
-
       if (oId === dId) {
-        if (!usarUbicaciones) {
-          return setErrorMsg(
-            "Si Origen y Destino son el mismo depósito, activá transferencia entre ubicaciones."
-          );
-        }
-
-        if (!uO || !uD) {
-          return setErrorMsg("Seleccioná ubicación origen y destino.");
-        }
-
-        if (uO === uD) {
-          return setErrorMsg("Las ubicaciones deben ser distintas.");
-        }
-      }
-
-      if (usarUbicaciones && (!uO || !uD)) {
-        return setErrorMsg("Seleccioná ubicación origen y destino.");
+        return setErrorMsg("El depósito origen y destino deben ser distintos.");
       }
 
       const itemsValidos = items
@@ -372,13 +273,6 @@ export default function NuevaTransferencia() {
         id_referente: referenteId ? Number(referenteId) : null,
         fecha_real: fechaReal || null,
 
-        ...(usarUbicaciones
-          ? {
-              id_ubicacion_origen: uO,
-              id_ubicacion_destino: uD,
-            }
-          : {}),
-
         items: itemsValidos.map((it) => ({
           codigo: it.codigo,
           cantidad: it.cantidad,
@@ -412,13 +306,6 @@ export default function NuevaTransferencia() {
     Number(destinoId) &&
     Number(origenId) === Number(destinoId);
 
-  const sameUbicWhenSameDeposito =
-    sameDeposito &&
-    (!usarUbicaciones ||
-      !ubicacionOrigenId ||
-      !ubicacionDestinoId ||
-      Number(ubicacionOrigenId) === Number(ubicacionDestinoId));
-
   const hayItemsConDatos = items.some((it) =>
     String(it.codigo || "").trim()
   );
@@ -438,6 +325,11 @@ export default function NuevaTransferencia() {
 
       {errorDepositos && <div className="nt-error">{errorDepositos}</div>}
       {errorMsg && <div className="nt-error">{errorMsg}</div>}
+      {sameDeposito && (
+        <div className="nt-error">
+          El depósito origen y destino deben ser distintos.
+        </div>
+      )}
 
       <div className="nt-card">
         <div className="nt-row">
@@ -518,80 +410,8 @@ export default function NuevaTransferencia() {
             />
           </div>
 
-          <div className="nt-field">
-            <label>Transferencia entre ubicaciones</label>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button
-                type="button"
-                className={`btn-light ${usarUbicaciones ? "activo" : ""}`}
-                onClick={() => {
-                  setUsarUbicaciones((v) => !v);
-                }}
-              >
-                {usarUbicaciones ? "SI" : "NO"}
-              </button>
-
-              <small style={{ opacity: 0.8 }}>
-                {usarUbicaciones
-                  ? "Elegí ubicaciones."
-                  : "Se usará GENERAL automáticamente."}
-              </small>
-            </div>
-          </div>
         </div>
 
-        {usarUbicaciones && (
-          <div className="nt-row">
-            <div className="nt-field">
-              <label>
-                Ubicación Origen {origenNombre ? `(${origenNombre})` : ""}
-              </label>
-
-              <select
-                value={ubicacionOrigenId}
-                onChange={(e) => setUbicacionOrigenId(e.target.value)}
-                disabled={!origenId || loadingUbicOrigen}
-              >
-                <option value="">
-                  {origenId
-                    ? "-- Seleccioná ubicación origen --"
-                    : "Seleccioná depósito origen primero"}
-                </option>
-
-                {ubicacionesOrigen.map((u) => (
-                  <option key={u.id_ubicacion} value={u.id_ubicacion}>
-                    {u.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="nt-field">
-              <label>
-                Ubicación Destino {destinoNombre ? `(${destinoNombre})` : ""}
-              </label>
-
-              <select
-                value={ubicacionDestinoId}
-                onChange={(e) => setUbicacionDestinoId(e.target.value)}
-                disabled={!destinoId || loadingUbicDestino}
-              >
-                <option value="">
-                  {destinoId
-                    ? "-- Seleccioná ubicación destino --"
-                    : "Seleccioná depósito destino primero"}
-                </option>
-
-                {ubicacionesDestino.map((u) => (
-                  <option key={u.id_ubicacion} value={u.id_ubicacion}>
-                    {u.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        )}
       </div>
 
       <div className="nt-card">
@@ -686,14 +506,7 @@ export default function NuevaTransferencia() {
           <button
             className="btn-primary"
             onClick={confirmar}
-            disabled={
-              !origenId ||
-              !destinoId ||
-              !hayItemsConDatos ||
-              (usarUbicaciones &&
-                (!ubicacionOrigenId || !ubicacionDestinoId)) ||
-              sameUbicWhenSameDeposito
-            }
+            disabled={!origenId || !destinoId || !hayItemsConDatos || sameDeposito}
           >
             Confirmar transferencia
           </button>

@@ -8,7 +8,7 @@ import ArticuloEditarModal from "../components/ArticuloEditarModal";
 import ArticuloEliminarModal from "../components/ArticuloEliminarModal";
 
 const STORAGE_KEY = "articulos_col_widths_v1";
-const CAMPOS_OCULTOS = ["almacen", "cantidad", "traspasa", "ubicacion"];
+const CAMPOS_OCULTOS = ["almacen", "cantidad", "traspasa"];
 
 // ✅ columnas base fijas (las del artículo)
 const BASE_COLS = [
@@ -16,6 +16,7 @@ const BASE_COLS = [
   "descripcion",
   "folio",
   "proveedor",
+  "ubicacion",
   "punto_pedido",
   "tipo",
 ];
@@ -40,6 +41,7 @@ export default function Articulos() {
   const [openCrear, setOpenCrear] = useState(false);
   const [openEditar, setOpenEditar] = useState(false);
   const [rowEditar, setRowEditar] = useState(null);
+  const [savingUbicacionId, setSavingUbicacionId] = useState(null);
 
   const limpiarFiltros = () => {
     setFiltros({});
@@ -137,22 +139,75 @@ export default function Articulos() {
     }
   };
 
+  const actualizarUbicacionLocal = (idArticulo, value) => {
+    setArticulos((prev) =>
+      (prev || []).map((a) =>
+        Number(a.id_articulo) === Number(idArticulo)
+          ? { ...a, ubicacion: value }
+          : a,
+      ),
+    );
+
+    setFiltered((prev) =>
+      (prev || []).map((a) =>
+        Number(a.id_articulo) === Number(idArticulo)
+          ? { ...a, ubicacion: value }
+          : a,
+      ),
+    );
+  };
+
+  const guardarUbicacion = async (articulo) => {
+    try {
+      const id = articulo?.id_articulo;
+
+      if (!id) return;
+
+      setSavingUbicacionId(id);
+
+      await api.patch(`/articulos/${id}/ubicacion`, {
+        ubicacion: articulo.ubicacion ?? "",
+      });
+    } catch (err) {
+      console.error("Error guardando ubicación:", err);
+      alert(
+        err.response?.data?.error ||
+          err.response?.data?.detalle ||
+          "No se pudo guardar la ubicación",
+      );
+
+      fetchArticulos();
+    } finally {
+      setSavingUbicacionId(null);
+    }
+  };
+
+  const handleUbicacionKeyDown = (e, articulo) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.currentTarget.blur();
+    }
+
+    if (e.key === "Escape") {
+      e.preventDefault();
+      fetchArticulos();
+    }
+  };
+
   // ✅ columnas = base + dinámicas (clasificaciones activas)
   const columnas = useMemo(() => {
     // base: usar las que existan en la data (por si el backend no manda todas)
     const baseSet = new Set(BASE_COLS.map((x) => String(x).toLowerCase()));
 
     // si el backend trae más keys, agregarlas (excepto ocultas y "clasificaciones")
-    const extraBase =
-      articulos?.length
-        ? Object.keys(articulos[0] || {})
-            .filter((k) => {
-              const kk = String(k).toLowerCase();
-              if (kk === "clasificaciones") return false;
-              if (CAMPOS_OCULTOS.includes(kk)) return false;
-              return !baseSet.has(kk);
-            })
-        : [];
+    const extraBase = articulos?.length
+      ? Object.keys(articulos[0] || {}).filter((k) => {
+          const kk = String(k).toLowerCase();
+          if (kk === "clasificaciones") return false;
+          if (CAMPOS_OCULTOS.includes(kk)) return false;
+          return !baseSet.has(kk);
+        })
+      : [];
 
     const base = [...BASE_COLS, ...extraBase].filter((k) => {
       const kk = String(k).toLowerCase();
@@ -204,27 +259,31 @@ export default function Articulos() {
     const kk = String(k).toLowerCase();
     // si existe como propiedad directa del objeto artículo => base
     // (esto permite que extraBase también funcione)
-    return articulos?.length ? Object.prototype.hasOwnProperty.call(articulos[0] || {}, k) : BASE_COLS.includes(kk);
+    return articulos?.length
+      ? Object.prototype.hasOwnProperty.call(articulos[0] || {}, k)
+      : BASE_COLS.includes(kk);
   };
 
   const getCellValue = (a, k) => {
-  if (Object.prototype.hasOwnProperty.call(a || {}, k)) return a?.[k];
+    if (Object.prototype.hasOwnProperty.call(a || {}, k)) return a?.[k];
 
-  const obj = a?.clasificaciones || {};
-  const key = String(k ?? "").trim();
+    const obj = a?.clasificaciones || {};
+    const key = String(k ?? "").trim();
 
-  if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
 
-  // fallback por mayúsculas (por si quedó data vieja guardada en UPPER)
-  const up = key.toUpperCase();
-  if (Object.prototype.hasOwnProperty.call(obj, up)) return obj[up];
+    // fallback por mayúsculas (por si quedó data vieja guardada en UPPER)
+    const up = key.toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(obj, up)) return obj[up];
 
-  // fallback por búsqueda case-insensitive (último recurso)
-  const found = Object.keys(obj).find((x) => String(x).trim().toLowerCase() === key.toLowerCase());
-  if (found) return obj[found];
+    // fallback por búsqueda case-insensitive (último recurso)
+    const found = Object.keys(obj).find(
+      (x) => String(x).trim().toLowerCase() === key.toLowerCase(),
+    );
+    if (found) return obj[found];
 
-  return "";
-};
+    return "";
+  };
 
   const handleFilter = (e, key) => {
     const val = String(e.target.value ?? "").toLowerCase();
@@ -236,9 +295,11 @@ export default function Articulos() {
       (articulos || []).filter((a) => {
         return Object.keys(nuevosFiltros).every((k) => {
           const v = getCellValue(a, k);
-          return String(v ?? "").toLowerCase().includes(nuevosFiltros[k]);
+          return String(v ?? "")
+            .toLowerCase()
+            .includes(nuevosFiltros[k]);
         });
-      })
+      }),
     );
 
     setCurrentPage(1);
@@ -250,7 +311,7 @@ export default function Articulos() {
 
   const paginated = filtered.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
 
   const clampPage = (p) => {
@@ -282,75 +343,74 @@ export default function Articulos() {
   const pageButtons = buildPageButtons();
 
   return (
-      <div
-        className="articulos-container"
-        style={{
-          width: "100%",
-          maxWidth: "100%",
-          minWidth: 0,
-          margin: 0,
-          boxSizing: "border-box",
-          overflow: "hidden",
-        }}
-      >
+    <div
+      className="articulos-container"
+      style={{
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        margin: 0,
+        boxSizing: "border-box",
+        overflow: "hidden",
+      }}
+    >
       <h2 className="module-title">ARTÍCULOS</h2>
-        <div>
-          <button className="nuevo-btn" onClick={() => setOpenCrear(true)}>
-            Crear nuevo artículo
-          </button>
+      <div>
+        <button className="nuevo-btn" onClick={() => setOpenCrear(true)}>
+          Crear nuevo artículo
+        </button>
 
-          <button className="nuevo-btn" onClick={limpiarFiltros}>
-            Limpiar filtros
-          </button>
-        </div>
+        <button className="nuevo-btn" onClick={limpiarFiltros}>
+          Limpiar filtros
+        </button>
+      </div>
 
-        <div style={{ marginBottom: 10 }}>
+      <div style={{ marginBottom: 10 }}>
+        <button className="nuevo-btn" onClick={() => setOpenProv(true)}>
+          Administrar proveedores
+        </button>
 
-          <button className="nuevo-btn" onClick={() => setOpenProv(true)}>
-            Administrar proveedores
-          </button>
+        <button className="nuevo-btn" onClick={() => setOpenFolio(true)}>
+          Administrar folios
+        </button>
 
-          <button className="nuevo-btn" onClick={() => setOpenFolio(true)}>
-            Administrar folios
-          </button>
+        <button className="nuevo-btn" onClick={() => setOpenTipo(true)}>
+          Administrar tipos
+        </button>
+      </div>
 
-          <button className="nuevo-btn" onClick={() => setOpenTipo(true)}>
-            Administrar tipos
-          </button>
-        </div>
+      <CatalogoModal
+        isOpen={openProv}
+        onClose={() => setOpenProv(false)}
+        tipo="proveedores"
+        titulo="Proveedores"
+        singular="Proveedor"
+        onSaved={() => {
+          fetchArticulos();
+        }}
+      />
 
-        <CatalogoModal
-          isOpen={openProv}
-          onClose={() => setOpenProv(false)}
-          tipo="proveedores"
-          titulo="Proveedores"
-          singular="Proveedor"
-          onSaved={() => {
-            fetchArticulos();
-          }}
-        />
+      <CatalogoModal
+        isOpen={openFolio}
+        onClose={() => setOpenFolio(false)}
+        tipo="folios"
+        titulo="Folios"
+        singular="Folio"
+        onSaved={() => {
+          fetchArticulos();
+        }}
+      />
 
-        <CatalogoModal
-          isOpen={openFolio}
-          onClose={() => setOpenFolio(false)}
-          tipo="folios"
-          titulo="Folios"
-          singular="Folio"
-          onSaved={() => {
-            fetchArticulos();
-          }}
-        />
-
-        <CatalogoModal
-          isOpen={openTipo}
-          onClose={() => setOpenTipo(false)}
-          tipo="tipos"
-          titulo="Tipos"
-          singular="Tipo"
-          onSaved={() => {
-            fetchArticulos();
-          }}
-        />
+      <CatalogoModal
+        isOpen={openTipo}
+        onClose={() => setOpenTipo(false)}
+        tipo="tipos"
+        titulo="Tipos"
+        singular="Tipo"
+        onSaved={() => {
+          fetchArticulos();
+        }}
+      />
 
       <ArticuloCrearModal
         isOpen={openCrear}
@@ -520,37 +580,70 @@ export default function Articulos() {
                 </th>
               ))}
               <th
-              style={{
-                minWidth: 0,
-                width: `${colWidths["ACCIONES"] || 170}px`,
-                maxWidth: `${colWidths["ACCIONES"] || 170}px`,
-                boxSizing: "border-box",
-                overflow: "hidden",
-              }}>
-              </th>
+                style={{
+                  minWidth: 0,
+                  width: `${colWidths["ACCIONES"] || 170}px`,
+                  maxWidth: `${colWidths["ACCIONES"] || 170}px`,
+                  boxSizing: "border-box",
+                  overflow: "hidden",
+                }}
+              ></th>
             </tr>
           </thead>
 
           <tbody>
             {paginated.map((a, i) => (
               <tr key={a?.id_articulo ?? i}>
-                {columnas.map((k) => (
-                  <td
-                    key={k}
-                    title={String(getCellValue(a, k) ?? "")}
-                    style={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      minWidth: 0,
-                      width: `${colWidths[k] || 160}px`,
-                      maxWidth: `${colWidths[k] || 160}px`,
-                      boxSizing: "border-box",
-                    }}
-                  >
-                    {String(getCellValue(a, k) ?? "")}
-                  </td>
-                ))}
+                {columnas.map((k) => {
+                  const isUbicacion = String(k).toLowerCase() === "ubicacion";
+
+                  return (
+                    <td
+                      key={k}
+                      title={String(getCellValue(a, k) ?? "")}
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        minWidth: 0,
+                        width: `${colWidths[k] || 160}px`,
+                        maxWidth: `${colWidths[k] || 160}px`,
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      {isUbicacion ? (
+                        <input
+                          value={a.ubicacion ?? ""}
+                          disabled={savingUbicacionId === a.id_articulo}
+                          onChange={(e) =>
+                            actualizarUbicacionLocal(
+                              a.id_articulo,
+                              e.target.value,
+                            )
+                          }
+                          onBlur={() => guardarUbicacion(a)}
+                          onKeyDown={(e) => handleUbicacionKeyDown(e, a)}
+                          placeholder="Ubicación"
+                          style={{
+                            width: "100%",
+                            height: "28px",
+                            boxSizing: "border-box",
+                            border: "1px solid #d0d7de",
+                            borderRadius: "6px",
+                            padding: "3px 6px",
+                            fontSize: "13px",
+                            background:
+                              savingUbicacionId === a.id_articulo
+                                ? "#f3f4f6"
+                                : "white",
+                          }}
+                        />
+                      ) : (
+                        String(getCellValue(a, k) ?? "")
+                      )}
+                    </td>
+                  );
+                })}
 
                 <td
                   style={{
@@ -652,7 +745,7 @@ export default function Articulos() {
               >
                 {p}
               </button>
-            )
+            ),
           )}
 
           <button
