@@ -7,8 +7,11 @@ const { authRequired, adminOnly } = require('../middleware/auth');
 router.post('/', authRequired, adminOnly, users.create);
 router.get('/', authRequired, adminOnly, users.getAll);
 
-// 👇 NUEVO: borrar todos y borrar por id
-router.delete('/',     authRequired, adminOnly, users.removeAll);
-router.delete('/:id',  authRequired, adminOnly, users.removeOne);
+// Editar usuario
+router.put('/:id', authRequired, adminOnly, users.update);
 
-module.exports = router; 
+// Borrar usuarios
+router.delete('/', authRequired, adminOnly, users.removeAll);
+router.delete('/:id', authRequired, adminOnly, users.removeOne);
+
+module.exports = router;

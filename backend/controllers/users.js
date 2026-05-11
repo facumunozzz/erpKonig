@@ -258,3 +258,163 @@ exports.deleteUser = async (req, res) => {
     res.status(500).json({ error: 'Error al eliminar el usuario' });
   }
 };
+
+/**
+ * ========================================================
+ * PUT /users/:id
+ * Edita usuario y permite cambiar contraseña sin pedir la actual
+ * Solo ADMIN
+ * ========================================================
+ */
+exports.update = async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) return res.status(400).json({ error: "ID inválido" });
+
+  let trans;
+
+  try {
+    const username = up(req.body?.username);
+    const nombre = toDb(req.body?.nombre);
+    const email = toDb(req.body?.email);
+    const password = String(req.body?.password || "");
+    const roles = Array.isArray(req.body?.roles) && req.body.roles.length
+      ? req.body.roles.map(up)
+      : ["USER"];
+
+    if (!username) {
+      return res.status(400).json({ error: "El usuario es obligatorio" });
+    }
+
+    if (password && password.length < 6) {
+      return res.status(400).json({
+        error: "La contraseña debe tener al menos 6 caracteres",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    trans = new sql.Transaction(pool);
+    await trans.begin();
+
+    // Verificar que no exista otro usuario con el mismo username o email
+    const dup = await new sql.Request(trans)
+      .input("id", sql.Int, id)
+      .input("un", sql.VarChar(100), username)
+      .input("em", sql.VarChar(160), email)
+      .query(`
+        SELECT TOP 1 1 AS x
+        FROM dbo.usuarios
+        WHERE id_usuario <> @id
+          AND (
+            UPPER(LTRIM(RTRIM(username))) = @un
+            OR (
+              @em IS NOT NULL
+              AND UPPER(LTRIM(RTRIM(email))) = UPPER(LTRIM(RTRIM(@em)))
+            )
+          )
+      `);
+
+    if (dup.recordset.length) {
+      await trans.rollback();
+      return res.status(409).json({
+        error: "Ya existe otro usuario con ese username o email",
+      });
+    }
+
+    // Si vino contraseña, actualizamos password_hash.
+    // Si vino vacía, dejamos la contraseña actual.
+    if (password) {
+      const hash = await bcrypt.hash(password, 10);
+
+      await new sql.Request(trans)
+        .input("id", sql.Int, id)
+        .input("un", sql.VarChar(100), username)
+        .input("nm", sql.VarChar(160), nombre)
+        .input("em", sql.VarChar(160), email)
+        .input("ph", sql.VarChar, hash)
+        .query(`
+          UPDATE dbo.usuarios
+          SET username = @un,
+              nombre = @nm,
+              email = @em,
+              password_hash = @ph
+          WHERE id_usuario = @id
+        `);
+    } else {
+      await new sql.Request(trans)
+        .input("id", sql.Int, id)
+        .input("un", sql.VarChar(100), username)
+        .input("nm", sql.VarChar(160), nombre)
+        .input("em", sql.VarChar(160), email)
+        .query(`
+          UPDATE dbo.usuarios
+          SET username = @un,
+              nombre = @nm,
+              email = @em
+          WHERE id_usuario = @id
+        `);
+    }
+
+    // Reemplazar roles
+    await new sql.Request(trans)
+      .input("id", sql.Int, id)
+      .query(`
+        DELETE FROM dbo.usuario_roles
+        WHERE id_usuario = @id
+      `);
+
+    for (const r of roles) {
+      const ex = await new sql.Request(trans)
+        .input("rn", sql.VarChar(100), r)
+        .query(`
+          SELECT id_rol
+          FROM dbo.roles
+          WHERE nombre = @rn
+        `);
+
+      let rid;
+
+      if (ex.recordset.length) {
+        rid = ex.recordset[0].id_rol;
+      } else {
+        const insR = await new sql.Request(trans)
+          .input("rn", sql.VarChar(100), r)
+          .query(`
+            INSERT INTO dbo.roles (nombre, is_system)
+            OUTPUT INSERTED.id_rol
+            VALUES (@rn, 0)
+          `);
+
+        rid = insR.recordset[0].id_rol;
+      }
+
+      await new sql.Request(trans)
+        .input("uid", sql.Int, id)
+        .input("rid", sql.Int, rid)
+        .query(`
+          INSERT INTO dbo.usuario_roles (id_usuario, id_rol)
+          VALUES (@uid, @rid)
+        `);
+    }
+
+    await trans.commit();
+
+    res.json({
+      ok: true,
+      message: password
+        ? "Usuario y contraseña actualizados correctamente"
+        : "Usuario actualizado correctamente",
+    });
+
+  } catch (err) {
+    try { if (trans) await trans.rollback(); } catch {}
+
+    console.error("users.update:", err);
+
+    res.status(500).json({
+      error: "Error al actualizar usuario",
+      detalle: err.message,
+    });
+  }
+};

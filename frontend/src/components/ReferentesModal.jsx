@@ -14,11 +14,33 @@ export default function ReferentesModal({ abierto, onClose, onChanged }) {
       setErrorMsg("");
 
       const res = await api.get("/referentes");
-      setReferentes(res.data || []);
+
+      console.log("Respuesta /referentes:", res.data);
+
+      const lista =
+        Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.data)
+          ? res.data.data
+          : Array.isArray(res.data?.referentes)
+          ? res.data.referentes
+          : Array.isArray(res.data?.recordset)
+          ? res.data.recordset
+          : [];
+
+      if (!Array.isArray(res.data)) {
+        console.warn("La respuesta de /referentes no vino como array:", res.data);
+      }
+
+      setReferentes(lista);
     } catch (err) {
       console.error("fetchReferentes:", err);
+
+      setReferentes([]);
+
       setErrorMsg(
         err.response?.data?.error ||
+          err.response?.data?.detalle ||
           err.message ||
           "No se pudieron cargar los referentes."
       );
