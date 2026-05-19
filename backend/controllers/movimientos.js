@@ -18,7 +18,7 @@ async function pickExistingTable(pool, names = []) {
   return r.recordset[0]?.name || null;
 }
 
-exports.getAll = async (_req, res) => {
+exports.getAll = async (req, res) => {
   try {
     await poolConnect;
     const pool = await getPool();
@@ -55,6 +55,7 @@ exports.getAll = async (_req, res) => {
           t.origen                                         AS deposito_origen,
           t.destino                                        AS deposito_destino,
           'TRANSFERENCIA'                                  AS tipo_transaccion,
+          NULL                                             AS motivo,
           t.remito_referencia                              AS remito_referencia,
           NULL                                             AS obra,
           NULL                                             AS version,
@@ -94,6 +95,7 @@ exports.getAll = async (_req, res) => {
             ELSE NULL 
           END                                              AS deposito_destino,
           'AJUSTE'                                         AS tipo_transaccion,
+          COALESCE(am.nombre, a.motivo)                    AS motivo,
           a.remito_referencia                              AS remito_referencia,
           a.obra                                           AS obra,
           a.version                                        AS version,
@@ -109,6 +111,8 @@ exports.getAll = async (_req, res) => {
         FROM dbo.${ajustesTable} a
         JOIN dbo.${ajusteDetalleTable} ad
           ON ad.ajuste_id = a.numero_ajuste
+        LEFT JOIN dbo.ajustes_motivos am
+          ON am.id_motivo = a.motivo_id
         LEFT JOIN dbo.articulos art
           ON UPPER(LTRIM(RTRIM(art.codigo))) = UPPER(LTRIM(RTRIM(ad.cod_articulo)))
         LEFT JOIN dbo.referentes ref
@@ -137,6 +141,7 @@ exports.getAll = async (_req, res) => {
             ELSE NULL 
           END                                              AS deposito_destino,
           'REMITO'                                         AS tipo_transaccion,
+          NULL                                             AS motivo,
           CAST(r.numero_remito AS VARCHAR(50))             AS remito_referencia,
           NULL                                             AS obra,
           NULL                                             AS version,
@@ -170,6 +175,7 @@ exports.getAll = async (_req, res) => {
         d.nombre                                          AS deposito_origen,
         NULL                                              AS deposito_destino,
         'PRODUCCION'                                      AS tipo_transaccion,
+        NULL                                              AS motivo,
         NULL                                              AS remito_referencia,
         NULL                                              AS obra,
         NULL                                              AS version,
@@ -201,6 +207,7 @@ exports.getAll = async (_req, res) => {
         NULL                                              AS deposito_origen,
         d.nombre                                          AS deposito_destino,
         'PRODUCCION'                                      AS tipo_transaccion,
+        NULL                                              AS motivo,
         NULL                                              AS remito_referencia,
         NULL                                              AS obra,
         NULL                                              AS version,
@@ -217,27 +224,58 @@ exports.getAll = async (_req, res) => {
     `);
 
     if (!selects.length) {
-      return res.json([]);
+      return res.json({
+        data: [],
+        total: 0,
+        page: 1,
+        pageSize: 25,
+        totalPages: 1,
+      });
     }
 
-    const sqlFinal = `
-      SELECT TOP 1000 *
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1);
+    const pageSizeRaw = Math.max(parseInt(req.query.pageSize || "25", 10), 1);
+    const pageSize = Math.min(pageSizeRaw, 200);
+    const offset = (page - 1) * pageSize;
+
+    const sqlBase = `
       FROM (
         ${selects.join("\nUNION ALL\n")}
       ) movimientos
+    `;
+
+    const sqlFinal = `
+      SELECT COUNT(*) AS total
+      ${sqlBase};
+
+      SELECT *
+      ${sqlBase}
       ORDER BY fecha DESC, numero_transaccion DESC, codigo
+      OFFSET @offset ROWS
+      FETCH NEXT @pageSize ROWS ONLY;
     `;
 
     const request = pool.request();
     request.timeout = 60000;
+    request.input("offset", sql.Int, offset);
+    request.input("pageSize", sql.Int, pageSize);
 
     const r = await request.query(sqlFinal);
 
-    res.json(r.recordset || []);
+    const total = Number(r.recordsets?.[0]?.[0]?.total || 0);
+    const data = r.recordsets?.[1] || [];
+
+    return res.json({
+      data,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize) || 1,
+    });
   } catch (err) {
     console.error("movimientos.getAll:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Error al obtener movimientos",
       detalle: err.message,
     });
@@ -246,10 +284,6 @@ exports.getAll = async (_req, res) => {
 
 // ============================================================================
 // PUT /movimientos
-// Actualiza datos de cabecera desde la pantalla Movimientos
-// Permite editar:
-// - AJUSTE: remito_referencia, obra, version, id_referente
-// - TRANSFERENCIA: remito_referencia, id_referente
 // ============================================================================
 exports.updateMovimientoCabecera = async (req, res) => {
   try {
@@ -302,7 +336,6 @@ exports.updateMovimientoCabecera = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    // Validar actuante si viene informado
     if (referenteFinal !== null) {
       const ref = await pool
         .request()
@@ -322,9 +355,6 @@ exports.updateMovimientoCabecera = async (req, res) => {
       }
     }
 
-    // ==========================
-    // AJUSTE
-    // ==========================
     if (tipo === "AJUSTE") {
       const numero = Number(numeroRaw);
 
@@ -361,9 +391,6 @@ exports.updateMovimientoCabecera = async (req, res) => {
       });
     }
 
-    // ==========================
-    // TRANSFERENCIA
-    // ==========================
     if (tipo === "TRANSFERENCIA") {
       const r = await pool
         .request()
@@ -386,7 +413,7 @@ exports.updateMovimientoCabecera = async (req, res) => {
 
       return res.json({
         ok: true,
-        message: "Transferencia actualizada correctamente",
+        message: "Transferencia actualizado correctamente",
       });
     }
 
@@ -405,8 +432,6 @@ exports.updateMovimientoCabecera = async (req, res) => {
 
 // ============================================================================
 // GET /movimientos/transaccion/:numero
-// Busca todos los movimientos editables de una transacción.
-// Por ahora permite traer AJUSTE y TRANSFERENCIA, que son los tipos editables.
 // ============================================================================
 exports.getByNumeroTransaccion = async (req, res) => {
   try {
@@ -436,9 +461,6 @@ exports.getByNumeroTransaccion = async (req, res) => {
 
     const selects = [];
 
-    // ==========================
-    // TRANSFERENCIAS
-    // ==========================
     if (transfDetalleTable) {
       selects.push(`
         SELECT
@@ -451,6 +473,7 @@ exports.getByNumeroTransaccion = async (req, res) => {
           t.origen                                         AS deposito_origen,
           t.destino                                        AS deposito_destino,
           'TRANSFERENCIA'                                  AS tipo_transaccion,
+          NULL                                             AS motivo,
           t.remito_referencia                              AS remito_referencia,
           NULL                                             AS obra,
           NULL                                             AS version,
@@ -470,9 +493,6 @@ exports.getByNumeroTransaccion = async (req, res) => {
       `);
     }
 
-    // ==========================
-    // AJUSTES
-    // ==========================
     if (ajustesTable && ajusteDetalleTable) {
       selects.push(`
         SELECT
@@ -491,6 +511,7 @@ exports.getByNumeroTransaccion = async (req, res) => {
             ELSE NULL 
           END                                              AS deposito_destino,
           'AJUSTE'                                         AS tipo_transaccion,
+          COALESCE(am.nombre, a.motivo)                    AS motivo,
           a.remito_referencia                              AS remito_referencia,
           a.obra                                           AS obra,
           a.version                                        AS version,
@@ -506,6 +527,8 @@ exports.getByNumeroTransaccion = async (req, res) => {
         FROM dbo.${ajustesTable} a
         JOIN dbo.${ajusteDetalleTable} ad
           ON ad.ajuste_id = a.numero_ajuste
+        LEFT JOIN dbo.ajustes_motivos am
+          ON am.id_motivo = a.motivo_id
         LEFT JOIN dbo.articulos art
           ON UPPER(LTRIM(RTRIM(art.codigo))) = UPPER(LTRIM(RTRIM(ad.cod_articulo)))
         LEFT JOIN dbo.referentes ref
@@ -544,10 +567,6 @@ exports.getByNumeroTransaccion = async (req, res) => {
 
 // ============================================================================
 // PUT /movimientos/masivo
-// Actualiza masivamente la cabecera de una transacción.
-// IMPORTANTE:
-// No modifica artículo por artículo.
-// Modifica la cabecera: ajustes o transferencias.
 // ============================================================================
 exports.updateMovimientoCabeceraMasivo = async (req, res) => {
   try {
@@ -600,7 +619,6 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    // Validar actuante si viene informado
     if (referenteFinal !== null) {
       const ref = await pool
         .request()
@@ -620,9 +638,6 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
       }
     }
 
-    // ==========================
-    // AJUSTE
-    // ==========================
     if (tipo === "AJUSTE") {
       const numero = Number(numeroRaw);
 
@@ -659,9 +674,6 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
       });
     }
 
-    // ==========================
-    // TRANSFERENCIA
-    // ==========================
     if (tipo === "TRANSFERENCIA") {
       const r = await pool
         .request()

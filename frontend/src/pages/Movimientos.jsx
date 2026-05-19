@@ -11,6 +11,9 @@ function Movimientos() {
   const [pageSize, setPageSize] = useState(25);
   const [gotoPage, setGotoPage] = useState("");
 
+  const [totalRows, setTotalRows] = useState(0);
+  const [serverTotalPages, setServerTotalPages] = useState(1);
+
   const [showEdit, setShowEdit] = useState(false);
   const [movEdit, setMovEdit] = useState(null);
   const [referentes, setReferentes] = useState([]);
@@ -31,6 +34,7 @@ function Movimientos() {
     deposito_origen: "",
     deposito_destino: "",
     tipo_transaccion: "",
+    motivo: "",
     remito_referencia: "",
     obra: "",
     version: "",
@@ -52,33 +56,35 @@ function Movimientos() {
     return d.toLocaleDateString("es-AR");
   };
 
-  const limpiarFiltros = () => {
-    setFiltros(filtrosIniciales);
-    setFiltered(rows || []);
-    setCurrentPage(1);
-    setGotoPage("");
-  };
-
   const cargarMovimientos = () => {
     api
-      .get("/movimientos")
+      .get("/movimientos", {
+        params: {
+          page: currentPage,
+          pageSize,
+        },
+      })
       .then((res) => {
-        const data = Array.isArray(res.data) ? res.data : [];
+        const payload = res.data || {};
 
-        if (!Array.isArray(res.data)) {
-          console.error(
-            "La respuesta de /movimientos no es un array:",
-            res.data,
-          );
-        }
+        const data = Array.isArray(payload.data)
+          ? payload.data
+          : Array.isArray(payload)
+          ? payload
+          : [];
 
         setRows(data);
         setFiltered(data);
+
+        setTotalRows(Number(payload.total || data.length || 0));
+        setServerTotalPages(Number(payload.totalPages || 1));
       })
       .catch((err) => {
         console.error("Error cargando movimientos:", err);
         setRows([]);
         setFiltered([]);
+        setTotalRows(0);
+        setServerTotalPages(1);
       });
   };
 
@@ -101,9 +107,19 @@ function Movimientos() {
   };
 
   useEffect(() => {
-    cargarMovimientos();
     cargarReferentes();
   }, []);
+
+  useEffect(() => {
+    cargarMovimientos();
+  }, [currentPage, pageSize]);
+
+  const limpiarFiltros = () => {
+    setFiltros(filtrosIniciales);
+    setFiltered(rows || []);
+    setCurrentPage(1);
+    setGotoPage("");
+  };
 
   const getValueForFilter = (r, key) => {
     const values = {
@@ -116,6 +132,7 @@ function Movimientos() {
       deposito_origen: r.deposito_origen ?? "",
       deposito_destino: r.deposito_destino ?? "",
       tipo_transaccion: r.tipo_transaccion ?? "",
+      motivo: r.motivo ?? "",
       remito_referencia: r.remito_referencia ?? "",
       obra: r.obra ?? "",
       version: r.version ?? "",
@@ -140,12 +157,11 @@ function Movimientos() {
 
     const f = (rows || []).filter((r) =>
       Object.keys(nf).every((k) =>
-        getValueForFilter(r, k).toLowerCase().includes(nf[k]),
-      ),
+        getValueForFilter(r, k).toLowerCase().includes(nf[k])
+      )
     );
 
     setFiltered(f);
-    setCurrentPage(1);
   };
 
   const abrirEdicion = (r) => {
@@ -182,7 +198,7 @@ function Movimientos() {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "Error al actualizar movimiento",
+          "Error al actualizar movimiento"
       );
     }
   };
@@ -206,7 +222,7 @@ function Movimientos() {
       setBuscandoMasivo(true);
 
       const res = await api.get(
-        `/movimientos/transaccion/${encodeURIComponent(numero)}`,
+        `/movimientos/transaccion/${encodeURIComponent(numero)}`
       );
 
       const data = Array.isArray(res.data) ? res.data : [];
@@ -240,7 +256,7 @@ function Movimientos() {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "Error al buscar la transacción",
+          "Error al buscar la transacción"
       );
     } finally {
       setBuscandoMasivo(false);
@@ -252,7 +268,7 @@ function Movimientos() {
 
     const confirmar = window.confirm(
       `Vas a modificar la transacción ${masivoEdit.numero_transaccion} completa. ` +
-        `Esto afectará a todos los artículos involucrados. ¿Confirmás?`,
+        `Esto afectará a todos los artículos involucrados. ¿Confirmás?`
     );
 
     if (!confirmar) return;
@@ -279,25 +295,21 @@ function Movimientos() {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "Error al actualizar la transacción",
+          "Error al actualizar la transacción"
       );
     }
   };
 
-  const totalPages = Math.ceil(filtered.length / pageSize) || 1;
-
-  const paginated = filtered.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize,
-  );
+  const totalPages = serverTotalPages || 1;
+  const paginated = filtered;
 
   const irPagina = (p) => {
     if (p < 1 || p > totalPages) return;
     setCurrentPage(p);
   };
 
-  const from = filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
-  const to = Math.min(currentPage * pageSize, filtered.length);
+  const from = totalRows === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const to = Math.min(currentPage * pageSize, totalRows);
 
   const exportarExcel = () => {
     const data = (filtered.length ? filtered : rows).map((r) => ({
@@ -310,6 +322,7 @@ function Movimientos() {
       "Depósito Origen": r.deposito_origen ?? "",
       "Depósito Destino": r.deposito_destino ?? "",
       "Tipo de transacción": r.tipo_transaccion ?? "",
+      Motivo: r.motivo ?? "",
       "Remito/Referencia": r.remito_referencia ?? "",
       Obra: r.obra ?? "",
       Versión: r.version ?? "",
@@ -323,7 +336,7 @@ function Movimientos() {
     const wb = XLSX.utils.book_new();
 
     XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
-    XLSX.writeFile(wb, "movimientos.xlsx");
+    XLSX.writeFile(wb, "movimientos_pagina_actual.xlsx");
   };
 
   return (
@@ -339,12 +352,12 @@ function Movimientos() {
           flexWrap: "wrap",
         }}
       >
-        <button onClick={exportarExcel}>Exportar a Excel</button>
+        <button onClick={exportarExcel}>Exportar página a Excel</button>
         <button onClick={limpiarFiltros}>Limpiar filtros</button>
         <button onClick={cargarMovimientos}>↻ Actualizar</button>
+
         <button className="btn-primary" onClick={abrirMasivo}>
-          {" "}
-          Editar transacción completa{" "}
+          Editar transacción completa
         </button>
       </div>
 
@@ -377,7 +390,9 @@ function Movimientos() {
                 <br />
                 <input
                   value={filtros.fecha_real}
-                  onChange={(e) => onFilterChange("fecha_real", e.target.value)}
+                  onChange={(e) =>
+                    onFilterChange("fecha_real", e.target.value)
+                  }
                 />
               </th>
 
@@ -440,6 +455,15 @@ function Movimientos() {
                   onChange={(e) =>
                     onFilterChange("tipo_transaccion", e.target.value)
                   }
+                />
+              </th>
+
+              <th>
+                Motivo
+                <br />
+                <input
+                  value={filtros.motivo}
+                  onChange={(e) => onFilterChange("motivo", e.target.value)}
                 />
               </th>
 
@@ -517,7 +541,7 @@ function Movimientos() {
           <tbody>
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={17}>Sin movimientos.</td>
+                <td colSpan={18}>Sin movimientos.</td>
               </tr>
             ) : (
               paginated.map((r, i) => {
@@ -536,6 +560,7 @@ function Movimientos() {
                     <td>{r.deposito_origen ?? ""}</td>
                     <td>{r.deposito_destino ?? ""}</td>
                     <td>{r.tipo_transaccion ?? ""}</td>
+                    <td>{r.motivo ?? ""}</td>
                     <td>{r.remito_referencia ?? ""}</td>
                     <td>{r.obra ?? ""}</td>
                     <td>{r.version ?? ""}</td>
@@ -565,7 +590,7 @@ function Movimientos() {
 
       <div className="paginado-pro">
         <div className="paginado-info">
-          Mostrando {from}-{to} de {filtered.length}
+          Mostrando {from}-{to} de {totalRows}
         </div>
 
         <div className="paginado-size">
@@ -620,7 +645,9 @@ function Movimientos() {
           {Array.from({ length: totalPages }, (_, i) => i + 1)
             .filter(
               (p) =>
-                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
+                p === 1 ||
+                p === totalPages ||
+                Math.abs(p - currentPage) <= 1
             )
             .map((p, i, arr) => (
               <React.Fragment key={p}>
@@ -920,7 +947,7 @@ function Movimientos() {
                                 <td>{m.deposito_destino ?? ""}</td>
                                 <td>{m.ingreso_egreso ?? ""}</td>
                               </tr>
-                            ),
+                            )
                           )}
                         </tbody>
                       </table>
