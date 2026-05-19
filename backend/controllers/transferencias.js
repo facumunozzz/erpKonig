@@ -722,20 +722,10 @@ exports.create = async (req, res) => {
   }
 };
 
-// ============================================================================
-// GET /transferencias/stock-articulo?codigo=XXX&deposito_id=1
-//
-// Nuevo criterio:
-// - Si no viene ubicacion_id, devuelve stock total del depósito.
-// - Si viene ubicacion_id, lo respeta por compatibilidad con pantallas viejas.
-// ============================================================================
 exports.getStockArticulo = async (req, res) => {
   try {
     const codigo = String(req.query.codigo || "").trim().toUpperCase();
     const depositoId = Number(req.query.deposito_id);
-    const ubicacionId = req.query.ubicacion_id
-      ? Number(req.query.ubicacion_id)
-      : null;
 
     if (!codigo || !depositoId) {
       return res.status(400).json({
@@ -750,27 +740,41 @@ exports.getStockArticulo = async (req, res) => {
       .request()
       .input("codigo", sql.VarChar, codigo)
       .input("dep", sql.Int, depositoId)
-      .input("ub", sql.Int, ubicacionId)
       .query(`
-        SELECT 
-          ISNULL(SUM(s.cantidad), 0) AS stock
+        SELECT
+          UPPER(LTRIM(RTRIM(a.codigo))) AS codigo,
+          a.descripcion,
+          ISNULL(SUM(s.cantidad), 0) AS stock,
+          ISNULL(NULLIF(LTRIM(RTRIM(CAST(a.ubicacion AS VARCHAR(100)))), ''), '') AS ubicacion
         FROM dbo.articulos a
-        LEFT JOIN dbo.stock s 
+        LEFT JOIN dbo.stock s
           ON s.id_articulo = a.id_articulo
          AND s.id_deposito = @dep
-         AND (@ub IS NULL OR s.id_ubicacion = @ub)
         WHERE UPPER(LTRIM(RTRIM(a.codigo))) = @codigo
+        GROUP BY
+          a.codigo,
+          a.descripcion,
+          a.ubicacion
       `);
 
-    res.json({
-      codigo,
+    const row = r.recordset?.[0];
+
+    if (!row) {
+      return res.status(404).json({
+        error: "Artículo no encontrado",
+      });
+    }
+
+    return res.json({
+      codigo: row.codigo,
       deposito_id: depositoId,
-      ubicacion_id: ubicacionId,
-      stock: Number(r.recordset[0]?.stock || 0),
+      stock: Number(row.stock || 0),
+      ubicacion: row.ubicacion || "",
     });
   } catch (err) {
     console.error("transferencias.getStockArticulo:", err);
-    res.status(500).json({
+
+    return res.status(500).json({
       error: "Error al consultar stock del artículo",
       detalle: err.message,
     });

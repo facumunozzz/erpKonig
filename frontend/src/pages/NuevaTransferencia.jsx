@@ -19,7 +19,13 @@ export default function NuevaTransferencia() {
   });
 
   const [items, setItems] = useState([
-    { codigo: "", descripcion: "", stock: "", cantidad: "" },
+    {
+      codigo: "",
+      descripcion: "",
+      stock: "",
+      ubicacion: "",
+      cantidad: "",
+    },
   ]);
 
   const [errorMsg, setErrorMsg] = useState("");
@@ -41,7 +47,8 @@ export default function NuevaTransferencia() {
     api
       .get("/depositos")
       .then((res) => {
-        const lista = res.data || [];
+        const lista = Array.isArray(res.data) ? res.data : [];
+
         setDepositos(lista);
         setErrorDepositos("");
 
@@ -52,22 +59,34 @@ export default function NuevaTransferencia() {
       })
       .catch((err) => {
         console.error(err);
+        setDepositos([]);
         setErrorDepositos("No se pudo cargar la lista de depósitos.");
       });
 
     cargarReferentes();
   }, []);
 
+  useEffect(() => {
+    setItems((prev) =>
+      prev.map((it) => ({
+        ...it,
+        stock: "",
+        ubicacion: "",
+      }))
+    );
+  }, [origenId]);
+
   const cargarReferentes = async () => {
     try {
       setLoadingReferentes(true);
 
       const res = await api.get("/referentes");
-      const list = res.data || [];
+      const list = Array.isArray(res.data) ? res.data : [];
 
       setReferentes(list.filter((r) => r.activo));
     } catch (err) {
       console.error("Error cargando referentes:", err);
+      setReferentes([]);
       setErrorMsg("No se pudieron cargar los referentes.");
     } finally {
       setLoadingReferentes(false);
@@ -84,7 +103,10 @@ export default function NuevaTransferencia() {
     const c = String(codigo || "").trim().toUpperCase();
 
     if (!c || !origenId) {
-      actualizarItem(index, { stock: "" });
+      actualizarItem(index, {
+        stock: "",
+        ubicacion: "",
+      });
       return;
     }
 
@@ -98,10 +120,18 @@ export default function NuevaTransferencia() {
 
       actualizarItem(index, {
         stock: res.data?.stock ?? 0,
+        ubicacion:
+          res.data?.ubicacion ||
+          res.data?.ubicacion_nombre ||
+          res.data?.ubicacion_articulo ||
+          "",
       });
     } catch (err) {
       console.error("Error consultando stock:", err);
-      actualizarItem(index, { stock: "Error" });
+      actualizarItem(index, {
+        stock: "Error",
+        ubicacion: "",
+      });
     }
   };
 
@@ -112,6 +142,7 @@ export default function NuevaTransferencia() {
       actualizarItem(index, {
         descripcion: "",
         stock: "",
+        ubicacion: "",
       });
 
       return false;
@@ -145,6 +176,7 @@ export default function NuevaTransferencia() {
         codigo: c,
         descripcion: "Artículo no encontrado",
         stock: "",
+        ubicacion: "",
       });
 
       return false;
@@ -160,6 +192,7 @@ export default function NuevaTransferencia() {
           codigo: "",
           descripcion: "",
           stock: "",
+          ubicacion: "",
           cantidad: "",
         });
       }
@@ -202,14 +235,28 @@ export default function NuevaTransferencia() {
 
       return nuevo.length
         ? nuevo
-        : [{ codigo: "", descripcion: "", stock: "", cantidad: "" }];
+        : [
+            {
+              codigo: "",
+              descripcion: "",
+              stock: "",
+              ubicacion: "",
+              cantidad: "",
+            },
+          ];
     });
   };
 
   const agregarFila = () => {
     setItems((prev) => [
       ...prev,
-      { codigo: "", descripcion: "", stock: "", cantidad: "" },
+      {
+        codigo: "",
+        descripcion: "",
+        stock: "",
+        ubicacion: "",
+        cantidad: "",
+      },
     ]);
 
     setTimeout(() => {
@@ -306,9 +353,7 @@ export default function NuevaTransferencia() {
     Number(destinoId) &&
     Number(origenId) === Number(destinoId);
 
-  const hayItemsConDatos = items.some((it) =>
-    String(it.codigo || "").trim()
-  );
+  const hayItemsConDatos = items.some((it) => String(it.codigo || "").trim());
 
   return (
     <div className="nueva-transferencia-page">
@@ -325,6 +370,7 @@ export default function NuevaTransferencia() {
 
       {errorDepositos && <div className="nt-error">{errorDepositos}</div>}
       {errorMsg && <div className="nt-error">{errorMsg}</div>}
+
       {sameDeposito && (
         <div className="nt-error">
           El depósito origen y destino deben ser distintos.
@@ -409,9 +455,7 @@ export default function NuevaTransferencia() {
               onChange={(e) => setFechaReal(e.target.value)}
             />
           </div>
-
         </div>
-
       </div>
 
       <div className="nt-card">
@@ -421,14 +465,19 @@ export default function NuevaTransferencia() {
           <table className="tabla-articulos">
             <thead>
               <tr>
-                <th style={{ width: "180px" }}>Código</th>
+                <th style={{ width: "170px" }}>Código</th>
                 <th>Descripción</th>
+
                 <th style={{ width: "120px", textAlign: "right" }}>
                   Stock origen
                 </th>
+
+                <th style={{ width: "170px" }}>Ubicación</th>
+
                 <th style={{ width: "140px", textAlign: "right" }}>
                   Cantidad
                 </th>
+
                 <th style={{ width: "110px" }}>Acción</th>
               </tr>
             </thead>
@@ -447,6 +496,7 @@ export default function NuevaTransferencia() {
                           codigo: e.target.value.toUpperCase(),
                           descripcion: "",
                           stock: "",
+                          ubicacion: "",
                         })
                       }
                       onBlur={() => buscarArticulo(it.codigo, idx)}
@@ -466,6 +516,8 @@ export default function NuevaTransferencia() {
                   </td>
 
                   <td style={{ textAlign: "right" }}>{it.stock ?? ""}</td>
+
+                  <td>{it.ubicacion ?? ""}</td>
 
                   <td>
                     <input
@@ -506,7 +558,9 @@ export default function NuevaTransferencia() {
           <button
             className="btn-primary"
             onClick={confirmar}
-            disabled={!origenId || !destinoId || !hayItemsConDatos || sameDeposito}
+            disabled={
+              !origenId || !destinoId || !hayItemsConDatos || sameDeposito
+            }
           >
             Confirmar transferencia
           </button>

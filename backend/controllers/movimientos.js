@@ -402,3 +402,301 @@ exports.updateMovimientoCabecera = async (req, res) => {
     });
   }
 };
+
+// ============================================================================
+// GET /movimientos/transaccion/:numero
+// Busca todos los movimientos editables de una transacción.
+// Por ahora permite traer AJUSTE y TRANSFERENCIA, que son los tipos editables.
+// ============================================================================
+exports.getByNumeroTransaccion = async (req, res) => {
+  try {
+    const numeroRaw = String(req.params.numero || "").trim();
+
+    if (!numeroRaw) {
+      return res.status(400).json({
+        error: "Debe indicar un número de transacción",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const transfDetalleTable = await pickExistingTable(pool, [
+      "transferencias_detalle",
+      "transferencia_detalles",
+      "transferencias_detalles",
+    ]);
+
+    const ajusteDetalleTable = await pickExistingTable(pool, [
+      "ajustes_detalles",
+      "ajuste_detalles",
+    ]);
+
+    const ajustesTable = await pickExistingTable(pool, ["ajustes"]);
+
+    const selects = [];
+
+    // ==========================
+    // TRANSFERENCIAS
+    // ==========================
+    if (transfDetalleTable) {
+      selects.push(`
+        SELECT
+          t.numero_transferencia                          AS numero_transaccion,
+          CONVERT(date, t.fecha)                          AS fecha,
+          CONVERT(date, ISNULL(t.fecha_real, t.fecha))     AS fecha_real,
+          a.codigo                                         AS codigo,
+          a.descripcion                                    AS descripcion,
+          CAST(td.cantidad AS INT)                         AS cantidad,
+          t.origen                                         AS deposito_origen,
+          t.destino                                        AS deposito_destino,
+          'TRANSFERENCIA'                                  AS tipo_transaccion,
+          t.remito_referencia                              AS remito_referencia,
+          NULL                                             AS obra,
+          NULL                                             AS version,
+          ref.nombre                                       AS referente,
+          t.id_referente                                   AS id_referente,
+          a.proveedor                                      AS proveedor,
+          NULL                                             AS ingreso_egreso,
+          t.usuario                                        AS usuario
+        FROM dbo.transferencias t
+        JOIN dbo.${transfDetalleTable} td
+          ON td.transferencia_id = t.id
+        JOIN dbo.articulos a
+          ON a.id_articulo = td.articulo_id
+        LEFT JOIN dbo.referentes ref
+          ON ref.id_referente = t.id_referente
+        WHERE CAST(t.numero_transferencia AS VARCHAR(50)) = @numero
+      `);
+    }
+
+    // ==========================
+    // AJUSTES
+    // ==========================
+    if (ajustesTable && ajusteDetalleTable) {
+      selects.push(`
+        SELECT
+          a.numero_ajuste                                  AS numero_transaccion,
+          CONVERT(date, a.fecha)                           AS fecha,
+          CONVERT(date, ISNULL(a.fecha_real, a.fecha))      AS fecha_real,
+          ad.cod_articulo                                  AS codigo,
+          ad.descripcion                                   AS descripcion,
+          ABS(CAST(ad.cantidad AS INT))                    AS cantidad,
+          CASE 
+            WHEN CAST(ad.cantidad AS INT) < 0 THEN a.deposito 
+            ELSE NULL 
+          END                                              AS deposito_origen,
+          CASE 
+            WHEN CAST(ad.cantidad AS INT) > 0 THEN a.deposito 
+            ELSE NULL 
+          END                                              AS deposito_destino,
+          'AJUSTE'                                         AS tipo_transaccion,
+          a.remito_referencia                              AS remito_referencia,
+          a.obra                                           AS obra,
+          a.version                                        AS version,
+          ref.nombre                                       AS referente,
+          a.id_referente                                   AS id_referente,
+          art.proveedor                                    AS proveedor,
+          CASE 
+            WHEN CAST(ad.cantidad AS INT) < 0 THEN 'E'
+            WHEN CAST(ad.cantidad AS INT) > 0 THEN 'I'
+            ELSE ''
+          END                                              AS ingreso_egreso,
+          a.usuario                                        AS usuario
+        FROM dbo.${ajustesTable} a
+        JOIN dbo.${ajusteDetalleTable} ad
+          ON ad.ajuste_id = a.numero_ajuste
+        LEFT JOIN dbo.articulos art
+          ON UPPER(LTRIM(RTRIM(art.codigo))) = UPPER(LTRIM(RTRIM(ad.cod_articulo)))
+        LEFT JOIN dbo.referentes ref
+          ON ref.id_referente = a.id_referente
+        WHERE CAST(a.numero_ajuste AS VARCHAR(50)) = @numero
+      `);
+    }
+
+    if (!selects.length) {
+      return res.json([]);
+    }
+
+    const sqlFinal = `
+      SELECT *
+      FROM (
+        ${selects.join("\nUNION ALL\n")}
+      ) movimientos
+      ORDER BY tipo_transaccion, codigo
+    `;
+
+    const r = await pool
+      .request()
+      .input("numero", sql.VarChar, numeroRaw)
+      .query(sqlFinal);
+
+    return res.json(r.recordset || []);
+  } catch (err) {
+    console.error("movimientos.getByNumeroTransaccion:", err);
+
+    return res.status(500).json({
+      error: "Error al buscar la transacción",
+      detalle: err.message,
+    });
+  }
+};
+
+// ============================================================================
+// PUT /movimientos/masivo
+// Actualiza masivamente la cabecera de una transacción.
+// IMPORTANTE:
+// No modifica artículo por artículo.
+// Modifica la cabecera: ajustes o transferencias.
+// ============================================================================
+exports.updateMovimientoCabeceraMasivo = async (req, res) => {
+  try {
+    const {
+      tipo_transaccion,
+      numero_transaccion,
+      remito_referencia,
+      obra,
+      version,
+      id_referente,
+    } = req.body || {};
+
+    const tipo = String(tipo_transaccion || "").trim().toUpperCase();
+    const numeroRaw = String(numero_transaccion || "").trim();
+
+    if (!tipo || !numeroRaw) {
+      return res.status(400).json({
+        error: "Debe indicar tipo_transaccion y numero_transaccion",
+      });
+    }
+
+    const remitoReferencia =
+      remito_referencia == null || String(remito_referencia).trim() === ""
+        ? null
+        : String(remito_referencia).trim();
+
+    const obraFinal =
+      obra == null || String(obra).trim() === "" ? null : Number(obra);
+
+    const versionFinal =
+      version == null || String(version).trim() === "" ? null : Number(version);
+
+    const referenteFinal =
+      id_referente == null || String(id_referente).trim() === ""
+        ? null
+        : Number(id_referente);
+
+    if (obraFinal !== null && !Number.isFinite(obraFinal)) {
+      return res.status(400).json({ error: "Obra inválida" });
+    }
+
+    if (versionFinal !== null && !Number.isFinite(versionFinal)) {
+      return res.status(400).json({ error: "Versión inválida" });
+    }
+
+    if (referenteFinal !== null && !Number.isFinite(referenteFinal)) {
+      return res.status(400).json({ error: "Actuante inválido" });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    // Validar actuante si viene informado
+    if (referenteFinal !== null) {
+      const ref = await pool
+        .request()
+        .input("id", sql.Int, referenteFinal)
+        .query(`
+          SELECT TOP 1 id_referente, activo
+          FROM dbo.referentes
+          WHERE id_referente = @id
+        `);
+
+      if (!ref.recordset.length) {
+        return res.status(400).json({ error: "Actuante inexistente" });
+      }
+
+      if (!ref.recordset[0].activo) {
+        return res.status(400).json({ error: "Actuante inactivo" });
+      }
+    }
+
+    // ==========================
+    // AJUSTE
+    // ==========================
+    if (tipo === "AJUSTE") {
+      const numero = Number(numeroRaw);
+
+      if (!Number.isFinite(numero)) {
+        return res.status(400).json({ error: "Número de ajuste inválido" });
+      }
+
+      const r = await pool
+        .request()
+        .input("numero", sql.Int, numero)
+        .input("remito", sql.VarChar, remitoReferencia)
+        .input("obra", sql.Int, obraFinal)
+        .input("version", sql.Int, versionFinal)
+        .input("referente", sql.Int, referenteFinal)
+        .query(`
+          UPDATE dbo.ajustes
+          SET
+            remito_referencia = @remito,
+            obra = @obra,
+            version = @version,
+            id_referente = @referente
+          WHERE numero_ajuste = @numero;
+
+          SELECT @@ROWCOUNT AS affected;
+        `);
+
+      if (Number(r.recordset[0].affected) !== 1) {
+        return res.status(404).json({ error: "Ajuste no encontrado" });
+      }
+
+      return res.json({
+        ok: true,
+        message: "Transacción de ajuste actualizada correctamente",
+      });
+    }
+
+    // ==========================
+    // TRANSFERENCIA
+    // ==========================
+    if (tipo === "TRANSFERENCIA") {
+      const r = await pool
+        .request()
+        .input("numero", sql.VarChar, numeroRaw)
+        .input("remito", sql.VarChar, remitoReferencia)
+        .input("referente", sql.Int, referenteFinal)
+        .query(`
+          UPDATE dbo.transferencias
+          SET
+            remito_referencia = @remito,
+            id_referente = @referente
+          WHERE numero_transferencia = @numero;
+
+          SELECT @@ROWCOUNT AS affected;
+        `);
+
+      if (Number(r.recordset[0].affected) !== 1) {
+        return res.status(404).json({ error: "Transferencia no encontrada" });
+      }
+
+      return res.json({
+        ok: true,
+        message: "Transacción de transferencia actualizada correctamente",
+      });
+    }
+
+    return res.status(400).json({
+      error: "Solo se permite edición masiva de AJUSTE o TRANSFERENCIA",
+    });
+  } catch (err) {
+    console.error("movimientos.updateMovimientoCabeceraMasivo:", err);
+
+    return res.status(500).json({
+      error: "Error al actualizar masivamente la transacción",
+      detalle: err.message,
+    });
+  }
+};

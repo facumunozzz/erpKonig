@@ -4,10 +4,9 @@ const router = express.Router();
 
 const controller = require("../controllers/movimientos");
 
-// Si querés proteger esta ruta, podés importar authRequired y usarlo.
-// const { authRequired } = require("../middleware/auth");
-
 router.get("/", controller.getAll);
+router.get("/transaccion/:numero", controller.getByNumeroTransaccion);
+router.put("/masivo", controller.updateMovimientoCabeceraMasivo);
 router.put("/", controller.updateMovimientoCabecera);
 
 module.exports = router;

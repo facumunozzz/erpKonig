@@ -15,6 +15,12 @@ function Movimientos() {
   const [movEdit, setMovEdit] = useState(null);
   const [referentes, setReferentes] = useState([]);
 
+  const [showMasivo, setShowMasivo] = useState(false);
+  const [numeroMasivo, setNumeroMasivo] = useState("");
+  const [movsMasivo, setMovsMasivo] = useState([]);
+  const [masivoEdit, setMasivoEdit] = useState(null);
+  const [buscandoMasivo, setBuscandoMasivo] = useState(false);
+
   const filtrosIniciales = {
     numero_transaccion: "",
     fecha: "",
@@ -57,18 +63,39 @@ function Movimientos() {
     api
       .get("/movimientos")
       .then((res) => {
-        setRows(res.data || []);
-        setFiltered(res.data || []);
+        const data = Array.isArray(res.data) ? res.data : [];
+
+        if (!Array.isArray(res.data)) {
+          console.error(
+            "La respuesta de /movimientos no es un array:",
+            res.data,
+          );
+        }
+
+        setRows(data);
+        setFiltered(data);
       })
-      .catch((err) => console.error(err));
+      .catch((err) => {
+        console.error("Error cargando movimientos:", err);
+        setRows([]);
+        setFiltered([]);
+      });
   };
 
   const cargarReferentes = async () => {
     try {
       const res = await api.get("/referentes");
-      setReferentes((res.data || []).filter((r) => r.activo));
+
+      const data = Array.isArray(res.data) ? res.data : [];
+
+      if (!Array.isArray(res.data)) {
+        console.error("La respuesta de /referentes no es un array:", res.data);
+      }
+
+      setReferentes(data.filter((r) => r.activo));
     } catch (err) {
       console.error("Error cargando actuantes:", err);
+      setReferentes([]);
       alert("No se pudieron cargar los actuantes.");
     }
   };
@@ -113,8 +140,8 @@ function Movimientos() {
 
     const f = (rows || []).filter((r) =>
       Object.keys(nf).every((k) =>
-        getValueForFilter(r, k).toLowerCase().includes(nf[k])
-      )
+        getValueForFilter(r, k).toLowerCase().includes(nf[k]),
+      ),
     );
 
     setFiltered(f);
@@ -155,7 +182,104 @@ function Movimientos() {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "Error al actualizar movimiento"
+          "Error al actualizar movimiento",
+      );
+    }
+  };
+
+  const abrirMasivo = () => {
+    setNumeroMasivo("");
+    setMovsMasivo([]);
+    setMasivoEdit(null);
+    setShowMasivo(true);
+  };
+
+  const buscarTransaccionMasiva = async () => {
+    const numero = String(numeroMasivo || "").trim();
+
+    if (!numero) {
+      alert("Ingresá un número de transacción.");
+      return;
+    }
+
+    try {
+      setBuscandoMasivo(true);
+
+      const res = await api.get(
+        `/movimientos/transaccion/${encodeURIComponent(numero)}`,
+      );
+
+      const data = Array.isArray(res.data) ? res.data : [];
+
+      if (!Array.isArray(res.data)) {
+        console.error("La respuesta no es un array:", res.data);
+      }
+
+      if (!data.length) {
+        setMovsMasivo([]);
+        setMasivoEdit(null);
+        alert("No se encontraron movimientos editables para esa transacción.");
+        return;
+      }
+
+      setMovsMasivo(data);
+
+      const primero = data[0];
+
+      setMasivoEdit({
+        numero_transaccion: primero.numero_transaccion ?? numero,
+        tipo_transaccion: primero.tipo_transaccion ?? "",
+        remito_referencia: primero.remito_referencia ?? "",
+        obra: primero.obra ?? "",
+        version: primero.version ?? "",
+        id_referente: primero.id_referente ?? "",
+      });
+    } catch (err) {
+      console.error("Error buscando transacción:", err);
+
+      alert(
+        err.response?.data?.error ||
+          err.response?.data?.detalle ||
+          "Error al buscar la transacción",
+      );
+    } finally {
+      setBuscandoMasivo(false);
+    }
+  };
+
+  const guardarEdicionMasiva = async () => {
+    if (!masivoEdit) return;
+
+    const confirmar = window.confirm(
+      `Vas a modificar la transacción ${masivoEdit.numero_transaccion} completa. ` +
+        `Esto afectará a todos los artículos involucrados. ¿Confirmás?`,
+    );
+
+    if (!confirmar) return;
+
+    try {
+      await api.put("/movimientos/masivo", {
+        tipo_transaccion: masivoEdit.tipo_transaccion,
+        numero_transaccion: masivoEdit.numero_transaccion,
+        remito_referencia: masivoEdit.remito_referencia || null,
+        obra: masivoEdit.obra || null,
+        version: masivoEdit.version || null,
+        id_referente: masivoEdit.id_referente || null,
+      });
+
+      setShowMasivo(false);
+      setNumeroMasivo("");
+      setMovsMasivo([]);
+      setMasivoEdit(null);
+
+      cargarMovimientos();
+
+      alert("Transacción actualizada correctamente.");
+    } catch (err) {
+      alert(
+        err.response?.data?.error ||
+          err.response?.data?.detalle ||
+          "Error al actualizar la transacción",
       );
     }
   };
@@ -164,7 +288,7 @@ function Movimientos() {
 
   const paginated = filtered.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
 
   const irPagina = (p) => {
@@ -218,6 +342,10 @@ function Movimientos() {
         <button onClick={exportarExcel}>Exportar a Excel</button>
         <button onClick={limpiarFiltros}>Limpiar filtros</button>
         <button onClick={cargarMovimientos}>↻ Actualizar</button>
+        <button className="btn-primary" onClick={abrirMasivo}>
+          {" "}
+          Editar transacción completa{" "}
+        </button>
       </div>
 
       <div className="tabla-articulos-container">
@@ -249,9 +377,7 @@ function Movimientos() {
                 <br />
                 <input
                   value={filtros.fecha_real}
-                  onChange={(e) =>
-                    onFilterChange("fecha_real", e.target.value)
-                  }
+                  onChange={(e) => onFilterChange("fecha_real", e.target.value)}
                 />
               </th>
 
@@ -494,9 +620,7 @@ function Movimientos() {
           {Array.from({ length: totalPages }, (_, i) => i + 1)
             .filter(
               (p) =>
-                p === 1 ||
-                p === totalPages ||
-                Math.abs(p - currentPage) <= 1
+                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
             )
             .map((p, i, arr) => (
               <React.Fragment key={p}>
@@ -541,7 +665,10 @@ function Movimientos() {
             }
           }}
         >
-          <div className="modal-card" style={{ position: "relative", zIndex: 999999 }}>
+          <div
+            className="modal-card"
+            style={{ position: "relative", zIndex: 999999 }}
+          >
             <div className="modal-head">
               <h3>Editar movimiento</h3>
               <button onClick={() => setShowEdit(false)}>✕</button>
@@ -612,7 +739,7 @@ function Movimientos() {
               >
                 <option value="">-- Sin actuante --</option>
 
-                {referentes.map((r) => (
+                {(Array.isArray(referentes) ? referentes : []).map((r) => (
                   <option key={r.id_referente} value={r.id_referente}>
                     {r.nombre}
                   </option>
@@ -625,6 +752,193 @@ function Movimientos() {
 
               <button className="btn-primary" onClick={guardarEdicion}>
                 Guardar cambios
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showMasivo && (
+        <div
+          className="modal-backdrop"
+          style={{ position: "fixed", inset: 0, zIndex: 999999 }}
+          onMouseDown={(e) => {
+            if (e.target.classList.contains("modal-backdrop")) {
+              setShowMasivo(false);
+            }
+          }}
+        >
+          <div
+            className="modal-card"
+            style={{
+              position: "relative",
+              zIndex: 999999,
+              maxWidth: 950,
+              width: "95%",
+            }}
+          >
+            <div className="modal-head">
+              <h3>Editar transacción completa</h3>
+              <button onClick={() => setShowMasivo(false)}>✕</button>
+            </div>
+
+            <div
+              className="modal-row"
+              style={{
+                flexDirection: "column",
+                alignItems: "stretch",
+                gap: 8,
+              }}
+            >
+              <label>Número de transacción</label>
+
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={numeroMasivo}
+                  onChange={(e) => setNumeroMasivo(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") buscarTransaccionMasiva();
+                  }}
+                  placeholder="Ej: 1234"
+                />
+
+                <button
+                  onClick={buscarTransaccionMasiva}
+                  disabled={buscandoMasivo}
+                >
+                  {buscandoMasivo ? "Buscando..." : "Buscar"}
+                </button>
+              </div>
+
+              {movsMasivo.length > 0 && masivoEdit && (
+                <>
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: 10,
+                      border: "1px solid #ddd",
+                      borderRadius: 8,
+                      background: "#f8fafc",
+                    }}
+                  >
+                    <strong>Movimientos encontrados:</strong>{" "}
+                    {movsMasivo.length} artículo/s involucrado/s.
+                    <br />
+                    <strong>Tipo:</strong> {masivoEdit.tipo_transaccion}
+                  </div>
+
+                  <label>Tipo de transacción</label>
+                  <input value={masivoEdit.tipo_transaccion} readOnly />
+
+                  <label>Remito / Referencia</label>
+                  <input
+                    value={masivoEdit.remito_referencia}
+                    onChange={(e) =>
+                      setMasivoEdit((prev) => ({
+                        ...prev,
+                        remito_referencia: e.target.value,
+                      }))
+                    }
+                    placeholder="Dato que se aplicará a toda la transacción"
+                  />
+
+                  {masivoEdit.tipo_transaccion === "AJUSTE" && (
+                    <>
+                      <label>Obra</label>
+                      <input
+                        type="number"
+                        value={masivoEdit.obra}
+                        onChange={(e) =>
+                          setMasivoEdit((prev) => ({
+                            ...prev,
+                            obra: e.target.value.replace(/[^0-9]/g, ""),
+                          }))
+                        }
+                        placeholder="Se aplicará a todos los artículos del ajuste"
+                      />
+
+                      <label>Versión</label>
+                      <input
+                        type="number"
+                        value={masivoEdit.version}
+                        onChange={(e) =>
+                          setMasivoEdit((prev) => ({
+                            ...prev,
+                            version: e.target.value.replace(/[^0-9]/g, ""),
+                          }))
+                        }
+                        placeholder="Se aplicará a todos los artículos del ajuste"
+                      />
+                    </>
+                  )}
+
+                  <label>Actuante</label>
+                  <select
+                    value={masivoEdit.id_referente || ""}
+                    onChange={(e) =>
+                      setMasivoEdit((prev) => ({
+                        ...prev,
+                        id_referente: e.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">-- Sin actuante --</option>
+
+                    {(Array.isArray(referentes) ? referentes : []).map((r) => (
+                      <option key={r.id_referente} value={r.id_referente}>
+                        {r.nombre}
+                      </option>
+                    ))}
+                  </select>
+
+                  <div style={{ marginTop: 14 }}>
+                    <h4>Artículos involucrados</h4>
+
+                    <div style={{ maxHeight: 260, overflow: "auto" }}>
+                      <table className="tabla-movimientos">
+                        <thead>
+                          <tr>
+                            <th>Código</th>
+                            <th>Descripción</th>
+                            <th>Cantidad</th>
+                            <th>Origen</th>
+                            <th>Destino</th>
+                            <th>E/I</th>
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {(Array.isArray(movsMasivo) ? movsMasivo : []).map(
+                            (m, idx) => (
+                              <tr key={idx}>
+                                <td>{m.codigo ?? ""}</td>
+                                <td>{m.descripcion ?? ""}</td>
+                                <td style={{ textAlign: "right" }}>
+                                  {m.cantidad ?? ""}
+                                </td>
+                                <td>{m.deposito_origen ?? ""}</td>
+                                <td>{m.deposito_destino ?? ""}</td>
+                                <td>{m.ingreso_egreso ?? ""}</td>
+                              </tr>
+                            ),
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="modal-foot">
+              <button onClick={() => setShowMasivo(false)}>Cancelar</button>
+
+              <button
+                className="btn-primary"
+                onClick={guardarEdicionMasiva}
+                disabled={!masivoEdit || movsMasivo.length === 0}
+              >
+                Aplicar cambios a toda la transacción
               </button>
             </div>
           </div>

@@ -45,6 +45,7 @@ export default function NuevoAjuste() {
       descripcion: "",
       proveedor: "",
       stock: "",
+      ubicacion: "",
       cantidad: "",
     },
   ]);
@@ -67,7 +68,8 @@ export default function NuevoAjuste() {
     api
       .get("/depositos")
       .then((res) => {
-        const lista = res.data || [];
+        const lista = Array.isArray(res.data) ? res.data : [];
+
         setDepositos(lista);
 
         const panolId = getPanolId(lista);
@@ -77,20 +79,22 @@ export default function NuevoAjuste() {
       })
       .catch((err) => {
         console.error(err);
+        setDepositos([]);
         setErrorMsg("No se pudieron cargar los depósitos.");
       });
 
     api
       .get("/ajustes/motivos")
-      .then((res) =>
+      .then((res) => {
+        const lista = Array.isArray(res.data) ? res.data : [];
+
         setMotivos(
-          (res.data || []).filter(
-            (m) => m.activo && !esMotivoOculto(m.nombre)
-          )
-        )
-      )
+          lista.filter((m) => m.activo && !esMotivoOculto(m.nombre))
+        );
+      })
       .catch((err) => {
         console.error(err);
+        setMotivos([]);
         setErrorMsg("No se pudieron cargar los motivos.");
       });
 
@@ -102,11 +106,12 @@ export default function NuevoAjuste() {
       setLoadingReferentes(true);
 
       const res = await api.get("/referentes");
-      const list = res.data || [];
+      const list = Array.isArray(res.data) ? res.data : [];
 
       setReferentes(list.filter((r) => r.activo));
     } catch (err) {
       console.error("Error cargando referentes:", err);
+      setReferentes([]);
       setErrorMsg("No se pudieron cargar los referentes.");
     } finally {
       setLoadingReferentes(false);
@@ -118,6 +123,7 @@ export default function NuevoAjuste() {
       prev.map((it) => ({
         ...it,
         stock: "",
+        ubicacion: "",
       }))
     );
   }, [depositoId]);
@@ -129,12 +135,13 @@ export default function NuevoAjuste() {
   };
 
   const consultarStock = async (codigo, index) => {
-    const c = String(codigo || "")
-      .trim()
-      .toUpperCase();
+    const c = String(codigo || "").trim().toUpperCase();
 
     if (!c || !depositoId) {
-      actualizarItem(index, { stock: "" });
+      actualizarItem(index, {
+        stock: "",
+        ubicacion: "",
+      });
       return;
     }
 
@@ -148,24 +155,33 @@ export default function NuevoAjuste() {
 
       actualizarItem(index, {
         stock: res.data?.stock ?? 0,
+        ubicacion:
+          res.data?.ubicacion ||
+          res.data?.ubicacion_nombre ||
+          res.data?.ubicacion_articulo ||
+          "",
       });
     } catch (err) {
       console.error("Error consultando stock:", err);
-      actualizarItem(index, { stock: "Error" });
+
+      actualizarItem(index, {
+        stock: "Error",
+        ubicacion: "",
+      });
     }
   };
 
   const buscarArticulo = async (codigo, index) => {
-    const c = String(codigo || "")
-      .trim()
-      .toUpperCase();
+    const c = String(codigo || "").trim().toUpperCase();
 
     if (!c) {
       actualizarItem(index, {
         descripcion: "",
         proveedor: "",
         stock: "",
+        ubicacion: "",
       });
+
       return false;
     }
 
@@ -180,6 +196,7 @@ export default function NuevoAjuste() {
           descripcion: "Artículo no encontrado",
           proveedor: "",
           stock: "",
+          ubicacion: "",
         });
 
         return false;
@@ -202,6 +219,7 @@ export default function NuevoAjuste() {
         descripcion: "Artículo no encontrado",
         proveedor: "",
         stock: "",
+        ubicacion: "",
       });
 
       return false;
@@ -218,6 +236,7 @@ export default function NuevoAjuste() {
           descripcion: "",
           proveedor: "",
           stock: "",
+          ubicacion: "",
           cantidad: "",
         });
       }
@@ -239,9 +258,7 @@ export default function NuevoAjuste() {
 
     e.preventDefault();
 
-    const c = String(items[index]?.codigo || "")
-      .trim()
-      .toUpperCase();
+    const c = String(items[index]?.codigo || "").trim().toUpperCase();
 
     if (!c) return;
 
@@ -268,6 +285,7 @@ export default function NuevoAjuste() {
               descripcion: "",
               proveedor: "",
               stock: "",
+              ubicacion: "",
               cantidad: "",
             },
           ];
@@ -282,6 +300,7 @@ export default function NuevoAjuste() {
         descripcion: "",
         proveedor: "",
         stock: "",
+        ubicacion: "",
         cantidad: "",
       },
     ]);
@@ -300,9 +319,7 @@ export default function NuevoAjuste() {
 
       const itemsValidos = items
         .map((it) => ({
-          cod_articulo: String(it.codigo || "")
-            .trim()
-            .toUpperCase(),
+          cod_articulo: String(it.codigo || "").trim().toUpperCase(),
           descripcion: String(it.descripcion || "").trim(),
           cantidad: Number(it.cantidad),
         }))
@@ -374,7 +391,6 @@ export default function NuevoAjuste() {
 
   const hayItemsConDatos = items.some((it) => String(it.codigo || "").trim());
 
-
   return (
     <div className="nueva-transferencia-page">
       <div className="nt-header">
@@ -405,7 +421,6 @@ export default function NuevoAjuste() {
               ))}
             </select>
           </div>
-
 
           <div className="nt-field">
             <label>Motivo</label>
@@ -531,14 +546,19 @@ export default function NuevoAjuste() {
           <table className="tabla-articulos">
             <thead>
               <tr>
-                <th style={{ width: "160px" }}>Código</th>
+                <th style={{ width: "150px" }}>Código</th>
                 <th>Descripción</th>
-                <th style={{ width: "180px" }}>Proveedor</th>
+                <th style={{ width: "170px" }}>Proveedor</th>
+
                 <th style={{ width: "120px", textAlign: "right" }}>Stock</th>
+
+                <th style={{ width: "170px" }}>Ubicación</th>
+
                 <th style={{ width: "140px", textAlign: "right" }}>
                   Cantidad{" "}
                   {tipoAjuste === "EGRESO" ? "a egresar" : "a ingresar"}
                 </th>
+
                 <th style={{ width: "110px" }}>Acción</th>
               </tr>
             </thead>
@@ -558,6 +578,7 @@ export default function NuevoAjuste() {
                           descripcion: "",
                           proveedor: "",
                           stock: "",
+                          ubicacion: "",
                         })
                       }
                       onBlur={() => buscarArticulo(it.codigo, idx)}
@@ -587,6 +608,8 @@ export default function NuevoAjuste() {
                   </td>
 
                   <td style={{ textAlign: "right" }}>{it.stock ?? ""}</td>
+
+                  <td>{it.ubicacion ?? ""}</td>
 
                   <td>
                     <input
