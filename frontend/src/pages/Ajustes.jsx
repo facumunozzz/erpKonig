@@ -1,9 +1,19 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
 import ReferentesModal from "../components/ReferentesModal";
+import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
 
+const AJUSTE_COLUMNS = [
+  ["fecha", "Fecha"],
+  ["fecha_real", "Fecha real"],
+  ["deposito", "Depósito"],
+  ["motivo", "Motivo"],
+  ["referente", "Referente"],
+  ["remito_referencia", "Remito / Ref."],
+  ["numero_ajuste", "Nro Ajuste"],
+];
 
   const normalizarMotivo = (v) =>
   String(v ?? "")
@@ -218,10 +228,41 @@ export default function Ajustes() {
     }
   };
 
+  const getAjusteValue = (a, key) => {
+    if (key === "fecha") {
+      return a.fecha ? new Date(a.fecha).toLocaleString("es-AR") : "";
+    }
+
+    if (key === "fecha_real") {
+      return a.fecha_real ? new Date(a.fecha_real).toLocaleDateString("es-AR") : "";
+    }
+
+    if (key === "numero_ajuste") {
+      return a.numero_ajuste ?? a.id ?? "";
+    }
+
+    return a?.[key] ?? "";
+  };
+
+  const excelColumns = useMemo(
+    () =>
+      AJUSTE_COLUMNS.map(([key, label]) => ({
+        key,
+        label,
+        getValue: (row) => getAjusteValue(row, key),
+      })),
+    []
+  );
+
+  const excel = useExcelFilters(ajustes, excelColumns, {
+    onChange: () => setCurrentPage(1),
+  });
+
   // =========================
   // Filtro
   // =========================
-  const filtrados = ajustes.filter((a) =>
+  const filtrados = excel.rows.filter((a) =>
+    !filtro ||
     Object.values(a).some((v) =>
       String(v ?? "").toLowerCase().includes(filtro.toLowerCase())
     )
@@ -258,6 +299,16 @@ export default function Ajustes() {
           👤 Actuantes
         </button>
 
+        <button
+          onClick={() => {
+            setFiltro("");
+            excel.clearAllFilters();
+            setCurrentPage(1);
+          }}
+        >
+          Limpiar filtros
+        </button>
+
         <button onClick={descargarPlantilla}>📤 Descargar plantilla</button>
 
         <label style={{ cursor: "pointer" }}>
@@ -291,13 +342,25 @@ export default function Ajustes() {
       <table className="tabla-transferencias">
         <thead>
           <tr>
-            <th>Fecha</th>
-            <th>Fecha real</th>
-            <th>Depósito</th>
-            <th>Motivo</th>
-            <th>Referente</th>
-            <th>Remito / Ref.</th>
-            <th>Nro Ajuste</th>
+            {AJUSTE_COLUMNS.map(([key, label]) => (
+              <th key={key} style={{ overflow: "visible" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "6px",
+                  }}
+                >
+                  <span>{label}</span>
+                  <ExcelFilterButton
+                    columnKey={key}
+                    label={label}
+                    excel={excel}
+                  />
+                </div>
+              </th>
+            ))}
           </tr>
         </thead>
 

@@ -1,19 +1,60 @@
 // app.js
 require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
-const path = require("path"); // ✅ NUEVO
+const path = require("path");
+const listEndpoints = require("express-list-endpoints");
 
 const app = express();
 
-// Middlewares base
+// =====================
+// MIDDLEWARES BASE
+// =====================
 app.use(cors());
 app.use(express.json());
 
-// Debug: ver qué archivo de rutas se está usando para artículos
-const listEndpoints = require("express-list-endpoints");
+// =====================
+// FRONTEND DIST PATH
+// =====================
+const distPath = path.join(__dirname, "..", "frontend", "dist");
 
-// Routers
+// Servir archivos estáticos del frontend
+app.use(express.static(distPath));
+
+// ======================================================
+// IMPORTANTE:
+// Si el navegador pide una página HTML, devolvemos React.
+// Esto evita que al actualizar /stock, /admin, /articulos, etc.
+// Express responda JSON del backend.
+// ======================================================
+app.get("*", (req, res, next) => {
+  const accept = req.headers.accept || "";
+
+  const esNavegacionHtml =
+    req.method === "GET" &&
+    accept.includes("text/html");
+
+  const esArchivo =
+    path.extname(req.path) !== "";
+
+  const esRutaTecnica =
+    req.path === "/health" ||
+    req.path === "/__routes" ||
+    req.path === "/__test500";
+
+  // Si es navegación normal del navegador, entregar React
+  if (esNavegacionHtml && !esArchivo && !esRutaTecnica) {
+    return res.sendFile(path.join(distPath, "index.html"));
+  }
+
+  // Si no es navegación HTML, dejar que siga a las APIs
+  return next();
+});
+
+// =====================
+// ROUTERS BACKEND
+// =====================
 const articulosRouter = require("./routes/articulos");
 const depositosRouter = require("./routes/depositos");
 const stockRouter = require("./routes/stock");
@@ -37,7 +78,7 @@ const estadoResumenRoutes = require("./routes/estadoResumen");
 const referentesRoutes = require("./routes/referentes");
 
 // =====================
-// 1) BACKEND ROUTES (igual que hoy)
+// BACKEND ROUTES
 // =====================
 app.use("/dropbox", dropboxMetaUsers);
 app.use("/articulos", articulosRouter);
@@ -62,74 +103,63 @@ app.use("/api/dashboard-obras", dashboardObrasRoutes);
 app.use("/api/estado-resumen", estadoResumenRoutes);
 app.use("/referentes", referentesRoutes);
 
-// Endpoint para listar rutas instaladas (útil para debug; podés borrarlo luego)
+// =====================
+// DEBUG / HEALTHCHECK
+// =====================
 app.get("/__routes", (req, res) => {
   res.json(listEndpoints(app));
 });
 
-// Bypass directo (sin pasar por el router) para aislar si el 404 es del router
 app.get("/articulos/codigo/direct/:cod?", (req, res) => {
   res.json({ direct: true, cod: req.params.cod ?? null });
 });
 
-// Healthcheck sencillo (opcional)
-app.get("/health", (_req, res) => res.json({ ok: true }));
-
-// =====================
-// 2) SERVIR FRONT (Vite dist)  ✅ NUEVO
-// =====================
-const distPath = path.join(__dirname, "..", "frontend", "dist");
-app.use(express.static(distPath));
-
-// Lista de prefijos del backend (para que el fallback NO se los coma) ✅ NUEVO
-const API_PREFIXES = [
-  "/dropbox",
-  "/articulos",
-  "/depositos",
-  "/stock",
-  "/transferencias",
-  "/movimientos",
-  "/produccion",
-  "/ajustes",
-  "/fabrica",
-  "/auth",
-  "/users",
-  "/admin",
-  "/utilidades",
-  "/articulo-clasificaciones",
-  "/clasificaciones",
-  "/remitos",
-  "/ubicaciones",
-  "/__routes",
-  "/health",
-  "/__test500",
-  "/api/dashboard-obras",
-  "/api/estado-resumen",
-];
-
-app.get("/__test500", (_req, res) => {
-  res.status(500).json({ok: false, detalle: "funciona"})
-})
-
-
-// SPA fallback: si NO es una ruta del backend, devolvemos index.html ✅ NUEVO
-app.get("*", (req, res, next) => {
-  const p = req.path || "/";
-
-  if (API_PREFIXES.some((pref) => p === pref || p.startsWith(pref + "/"))) {
-    return next(); // deja 404 backend si no existe
-  }
-
-  return res.sendFile(path.join(distPath, "index.html"));
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
 });
 
+app.get("/__test500", (_req, res) => {
+  res.status(500).json({ ok: false, detalle: "funciona" });
+});
+
+// =====================
+// FALLBACK FINAL PARA REACT
+// =====================
+// Este queda como segunda protección.
+// Si no encontró API y no es archivo, devuelve React.
+app.get("*", (req, res) => {
+  const esArchivo = path.extname(req.path) !== "";
+
+  if (!esArchivo) {
+    return res.sendFile(path.join(distPath, "index.html"));
+  }
+
+  return res.status(404).json({
+    error: "Archivo o ruta no encontrada",
+    path: req.path,
+  });
+});
+
+// =====================
+// MANEJO GLOBAL DE ERRORES
+// =====================
+app.use((err, req, res, _next) => {
+  console.log("[GLOBAL ERROR]", err?.message || err);
+
+  return res.status(500).json({
+    error: "Error interno",
+    detalle: err.message,
+  });
+});
+
+// =====================
+// SERVER
+// =====================
 const PORT = process.env.PORT || 3000;
 
-// ✅ escuchá en 0.0.0.0 para que te entre desde otra PC
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en http://0.0.0.0:${PORT}`);
 
-  // ✅ Scheduler: corre a las 12:00 y 15:30
   try {
     const { startConsumoProduccionJobs } = require("./jobs/consumoProduccion.job");
     startConsumoProduccionJobs();
@@ -137,9 +167,3 @@ app.listen(PORT, "0.0.0.0", () => {
     console.error("[JOB] No se pudo iniciar consumoProduccion:", e.message);
   }
 });
-
-app.use((err, req, res, _next) => {
-  console.log("[GLOBAL ERROR]", err?.message || err);
-  return res.status(500).json({ error: "Error interno", detalle: err.message });
-});
-

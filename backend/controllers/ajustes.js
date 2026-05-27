@@ -854,8 +854,8 @@ const fechaReal =
   .input("motId", sql.Int, motivoId)
   .input("motNom", sql.VarChar, motivoNombre)
   .input("usr", sql.VarChar, usuario)
-  .input("obra", sql.Int, obra)
-  .input("version", sql.Int, version)
+  .input("obra", sql.NVarChar(sql.MAX), obra)
+  .input("version", sql.NVarChar(sql.MAX), version)
   .input("remitoReferencia", sql.VarChar, remitoReferencia)
   .input("referenteId", sql.Int, referenteId)
   .input("fechaReal", sql.Date, fechaReal).query(`
@@ -1179,7 +1179,6 @@ exports.importarDesdeExcel = async (req, res) => {
 // ==========================
 async function runConsumoProduccion() {
   let trans = null;
-  let nextNro = null;
 
   await poolConnect;
   const pool = await getPool();
@@ -1199,8 +1198,9 @@ async function runConsumoProduccion() {
     }
 
     const fileRef = String(idRes.recordset[0].valor || "").trim();
-    if (!fileRef)
+    if (!fileRef) {
       return { ok: false, error: "DROPBOX_PRODUCCION_FILE_ID vacío" };
+    }
 
     // 1) descargar excel
     const buffer = await downloadByPath(fileRef);
@@ -1210,13 +1210,14 @@ async function runConsumoProduccion() {
     if (!ws) return { ok: false, error: 'No existe hoja "materiales"' };
 
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-    if (!rows.length)
+    if (!rows.length) {
       return {
         ok: true,
         message: "Hoja materiales vacía",
         ajustados: 0,
         fallidos: 0,
       };
+    }
 
     const header = rows[0];
     const dataRows = rows.slice(1);
@@ -1229,8 +1230,10 @@ async function runConsumoProduccion() {
       trans,
       "CONSUMO PRODUCCIÓN (DROPBOX)",
     );
+
     if (!motivoIdDropbox) {
       await trans.rollback();
+      trans = null;
       return {
         ok: false,
         error:
@@ -1247,23 +1250,30 @@ async function runConsumoProduccion() {
 
     if (!depRes.recordset.length) {
       await trans.rollback();
-      return { ok: false, error: 'Depósito "Producción" no existe' };
+      trans = null;
+      return {
+        ok: false,
+        error: 'No existe depósito "Producción". Crealo para continuar.',
+      };
     }
 
     const depositoId = Number(depRes.recordset[0].id_deposito);
-    const depositoNombre = String(depRes.recordset[0].nombre || "");
+    const depositoNombre = String(depRes.recordset[0].nombre || "Producción");
 
-    // 2.2) ubicación GENERAL
-    const ubRes = await new sql.Request(trans).input("dep", sql.Int, depositoId)
+    // 2.2) ubicación GENERAL dentro de Producción
+    const ubRes = await new sql.Request(trans)
+      .input("dep", sql.Int, depositoId)
       .query(`
         SELECT TOP 1 id_ubicacion
         FROM dbo.ubicaciones WITH (UPDLOCK, HOLDLOCK)
         WHERE id_deposito = @dep
           AND UPPER(LTRIM(RTRIM(nombre))) = 'GENERAL'
+        ORDER BY id_ubicacion
       `);
 
     if (!ubRes.recordset.length) {
       await trans.rollback();
+      trans = null;
       return {
         ok: false,
         error:
@@ -1273,10 +1283,36 @@ async function runConsumoProduccion() {
 
     const ubicacionId = Number(ubRes.recordset[0].id_ubicacion);
 
-    // 3) procesar filas
+    // 3) Procesar filas y agrupar por obra + version.
+    // Columnas del Excel:
+    // A = obra      => r[0]
+    // B = código    => r[1]
+    // E = version   => r[4]
+    // F = requerido => r[5]
+    // G = ajustado  => r[6]
     const okItems = [];
     const failItems = [];
-    const agg = new Map(); // codigo -> { desc, deltaNegativo }
+    const grupos = new Map(); // key obra||version -> { obra, version, agg, fallidos }
+
+    const getGrupo = (obra, version) => {
+      const key = `${obra ?? "NULL"}||${version ?? "NULL"}`;
+
+      if (!grupos.has(key)) {
+        grupos.set(key, {
+          obra,
+          version,
+          agg: new Map(), // codigo -> { desc, delta, requerido, faltante, observacion }
+          fallidos: [],
+        });
+      }
+
+      return grupos.get(key);
+    };
+
+    const registrarFallo = (grupo, item) => {
+      failItems.push(item);
+      if (grupo) grupo.fallidos.push(item);
+    };
 
     for (let i = 0; i < dataRows.length; i++) {
       const excelRowIndex = i + 2;
@@ -1284,6 +1320,25 @@ async function runConsumoProduccion() {
 
       const colA = String(r[0] ?? "").trim();
       if (!colA) break;
+
+      const obraRaw = r[0];
+const versionRaw = r[4];
+
+const obra =
+  obraRaw === null ||
+  obraRaw === undefined ||
+  String(obraRaw).trim() === ""
+    ? null
+    : String(obraRaw).trim();
+
+const version =
+  versionRaw === null ||
+  versionRaw === undefined ||
+  String(versionRaw).trim() === ""
+    ? null
+    : String(versionRaw).trim();
+
+      const grupo = getGrupo(obra, version);
 
       const f = toNumber0(r[5]);
       const g = toNumber0(r[6]);
@@ -1294,158 +1349,171 @@ async function runConsumoProduccion() {
       if (delta <= 0) continue;
 
       const codigo = up(r[1]);
+
       if (!codigo) {
-        failItems.push({
-        row: excelRowIndex,
-        codigo,
-        desc: "",
-        requerido: delta,
-        ajustado: 0,
-        faltante: delta,
-        reason: "No existe registro en dbo.stock para Producción/GENERAL",
-      });
+        registrarFallo(grupo, {
+          row: excelRowIndex,
+          codigo: "SIN_CODIGO",
+          desc: "",
+          requerido: delta,
+          ajustado: 0,
+          faltante: delta,
+          obra,
+          version,
+          reason: "Código vacío",
+        });
         continue;
       }
 
-      const artRes = await new sql.Request(trans).input(
-        "c",
-        sql.VarChar,
-        codigo,
-      ).query(`
+      const artRes = await new sql.Request(trans)
+        .input("c", sql.VarChar, codigo)
+        .query(`
           SELECT TOP 1 id_articulo, descripcion
           FROM dbo.articulos WITH (UPDLOCK, HOLDLOCK)
           WHERE UPPER(LTRIM(RTRIM(codigo))) = @c
         `);
 
       if (!artRes.recordset.length) {
-        failItems.push({
-        row: excelRowIndex,
-        codigo,
-        desc: "",
-        requerido: delta,
-        ajustado: 0,
-        faltante: delta,
-        reason: "Código no existe en dbo.articulos",
-      });
+        registrarFallo(grupo, {
+          row: excelRowIndex,
+          codigo,
+          desc: "",
+          requerido: delta,
+          ajustado: 0,
+          faltante: delta,
+          obra,
+          version,
+          reason: "Código no existe en dbo.articulos",
+        });
         continue;
       }
 
       const idArt = Number(artRes.recordset[0].id_articulo);
       const desc = String(artRes.recordset[0].descripcion || "");
 
-      // debe existir registro en stock (no crear)
       const existsStock = await new sql.Request(trans)
         .input("dep", sql.Int, depositoId)
         .input("art", sql.Int, idArt)
-        .input("ub", sql.Int, ubicacionId).query(`
+        .input("ub", sql.Int, ubicacionId)
+        .query(`
           SELECT TOP 1 cantidad
           FROM dbo.stock WITH (UPDLOCK, HOLDLOCK)
-          WHERE id_deposito = @dep AND id_articulo = @art AND id_ubicacion = @ub
+          WHERE id_deposito = @dep
+            AND id_articulo = @art
+            AND id_ubicacion = @ub
         `);
 
       if (!existsStock.recordset.length) {
-        failItems.push({
-        row: excelRowIndex,
-        codigo,
-        desc: "",
-        requerido: delta,
-        ajustado: 0,
-        faltante: delta,
-        reason: "No existe registro en dbo.stock para Producción/GENERAL",
-      });
+        registrarFallo(grupo, {
+          row: excelRowIndex,
+          codigo,
+          desc,
+          requerido: delta,
+          ajustado: 0,
+          faltante: delta,
+          obra,
+          version,
+          reason: "No existe registro en dbo.stock para Producción/GENERAL",
+        });
         continue;
       }
 
-const disponible = Number(existsStock.recordset[0].cantidad || 0);
+      const disponible = Number(existsStock.recordset[0].cantidad || 0);
+      const cantidadAjustable = Math.min(disponible, delta);
+      const cantidadFaltante = delta - cantidadAjustable;
 
-const cantidadAjustable = Math.min(disponible, delta);
-const cantidadFaltante = delta - cantidadAjustable;
+      if (cantidadAjustable <= 0) {
+        registrarFallo(grupo, {
+          row: excelRowIndex,
+          codigo,
+          desc,
+          requerido: delta,
+          ajustado: 0,
+          faltante: delta,
+          obra,
+          version,
+          reason: "Sin stock disponible para ajustar",
+        });
 
-if (cantidadAjustable <= 0) {
-  failItems.push({
-    row: excelRowIndex,
-    codigo,
-    desc,
-    requerido: delta,
-    ajustado: 0,
-    faltante: delta,
-    reason: "Sin stock disponible para ajustar",
-  });
+        const prev = grupo.agg.get(codigo);
+        grupo.agg.set(codigo, {
+          desc,
+          delta: prev?.delta || 0,
+          requerido: (prev?.requerido || 0) + delta,
+          faltante: (prev?.faltante || 0) + delta,
+          observacion: "Sin stock disponible para ajustar",
+        });
 
-  const prev = agg.get(codigo);
-  agg.set(codigo, {
-    desc,
-    delta: prev?.delta || 0,
-    requerido: (prev?.requerido || 0) + delta,
-    faltante: (prev?.faltante || 0) + delta,
-    observacion: "Sin stock disponible para ajustar",
-  });
+        continue;
+      }
 
-  continue;
-}
+      const ok = await tryDescontarStock(trans, {
+        depositoId,
+        articuloId: idArt,
+        ubicacionId,
+        deltaNegativo: -cantidadAjustable,
+      });
 
-const ok = await tryDescontarStock(trans, {
-  depositoId,
-  articuloId: idArt,
-  ubicacionId,
-  deltaNegativo: -cantidadAjustable,
-});
+      if (!ok) {
+        registrarFallo(grupo, {
+          row: excelRowIndex,
+          codigo,
+          desc,
+          requerido: delta,
+          ajustado: 0,
+          faltante: delta,
+          obra,
+          version,
+          reason: "No se pudo descontar stock",
+        });
+        continue;
+      }
 
-if (!ok) {
-  failItems.push({
-    row: excelRowIndex,
-    codigo,
-    desc,
-    requerido: delta,
-    ajustado: 0,
-    faltante: delta,
-    reason: "No se pudo descontar stock",
-  });
+      // Marcar Excel sólo hasta lo que efectivamente se pudo ajustar.
+      r[6] = g + cantidadAjustable;
 
-  continue;
-}
+      okItems.push({
+        row: excelRowIndex,
+        codigo,
+        idArt,
+        desc,
+        requerido: delta,
+        ajustado: cantidadAjustable,
+        faltante: cantidadFaltante,
+        obra,
+        version,
+      });
 
-// marcar Excel solo hasta lo que se pudo ajustar
-r[6] = g + cantidadAjustable;
+      if (cantidadFaltante > 0) {
+        registrarFallo(grupo, {
+          row: excelRowIndex,
+          codigo,
+          desc,
+          requerido: delta,
+          ajustado: cantidadAjustable,
+          faltante: cantidadFaltante,
+          obra,
+          version,
+          reason: "Stock parcial: se ajustó hasta cero",
+        });
+      }
 
-okItems.push({
-  row: excelRowIndex,
-  codigo,
-  idArt,
-  desc,
-  requerido: delta,
-  ajustado: cantidadAjustable,
-  faltante: cantidadFaltante,
-});
-
-if (cantidadFaltante > 0) {
-  failItems.push({
-    row: excelRowIndex,
-    codigo,
-    desc,
-    requerido: delta,
-    ajustado: cantidadAjustable,
-    faltante: cantidadFaltante,
-    reason: "Stock parcial: se ajustó hasta cero",
-  });
-}
-
-const prev = agg.get(codigo);
-agg.set(codigo, {
-  desc,
-  delta: (prev?.delta || 0) - cantidadAjustable,
-  requerido: (prev?.requerido || 0) + delta,
-  faltante: (prev?.faltante || 0) + cantidadFaltante,
-  observacion:
-    cantidadFaltante > 0
-      ? "Stock parcial: se ajustó hasta cero"
-      : prev?.observacion || null,
-});
+      const prev = grupo.agg.get(codigo);
+      grupo.agg.set(codigo, {
+        desc,
+        delta: (prev?.delta || 0) - cantidadAjustable,
+        requerido: (prev?.requerido || 0) + delta,
+        faltante: (prev?.faltante || 0) + cantidadFaltante,
+        observacion:
+          cantidadFaltante > 0
+            ? "Stock parcial: se ajustó hasta cero"
+            : prev?.observacion || null,
+      });
     }
 
-    // si no hay nada: rollback
     if (okItems.length === 0 && failItems.length === 0) {
       await trans.rollback();
+      trans = null;
       return {
         ok: true,
         message: "No hay diferencias para ajustar",
@@ -1455,70 +1523,115 @@ agg.set(codigo, {
       };
     }
 
-    // 4) cabecera ajuste
-    const nroRes = await new sql.Request(trans).query(`
-      SELECT ISNULL(MAX(numero_ajuste), 0) + 1 AS nextNro
-      FROM dbo.ajustes WITH (UPDLOCK, HOLDLOCK)
-    `);
-    nextNro = Number(nroRes.recordset[0].nextNro);
+    // 4) Crear un ajuste por cada combinación obra + version.
+    const ajustesCreados = [];
 
-    await new sql.Request(trans)
-      .input("nro", sql.Int, nextNro)
-      .input("depNom", sql.VarChar, depositoNombre)
-      .input("motId", sql.Int, motivoIdDropbox)
-      .input("mot", sql.VarChar, "CONSUMO PRODUCCIÓN (DROPBOX)")
-      .input("usr", sql.VarChar, "sistema").query(`
-        INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo_id, motivo, fecha, usuario)
-        VALUES (@nro, @depNom, @motId, @mot, GETDATE(), @usr)
+    for (const grupo of grupos.values()) {
+      const tieneDetalle =
+        grupo.fallidos.length > 0 ||
+        Array.from(grupo.agg.values()).some(
+          (v) => (v.delta || 0) !== 0 || (v.faltante || 0) !== 0,
+        );
+
+      if (!tieneDetalle) continue;
+
+      const nroRes = await new sql.Request(trans).query(`
+        SELECT ISNULL(MAX(numero_ajuste), 0) + 1 AS nextNro
+        FROM dbo.ajustes WITH (UPDLOCK, HOLDLOCK)
       `);
 
-    // 5) detalles consolidado: ajustados/parciales
-    for (const [codigo, v] of agg.entries()) {
-      if ((v.delta || 0) === 0 && (v.faltante || 0) === 0) continue;
+      const nextNro = Number(nroRes.recordset[0].nextNro);
 
-      await insertDetalle(trans, {
-        ajusteId: nextNro,
-        cod: codigo,
-        desc: v.desc || "",
-        cantidad: v.delta || 0,
-        usuario: "sistema",
-        cantidadRequerida: v.requerido || null,
-        cantidadFaltante: v.faltante || null,
-        observacion: v.observacion || null,
+      await new sql.Request(trans)
+        .input("nro", sql.Int, nextNro)
+        .input("depNom", sql.VarChar, depositoNombre)
+        .input("motId", sql.Int, motivoIdDropbox)
+        .input("mot", sql.VarChar, "CONSUMO PRODUCCIÓN (DROPBOX)")
+        .input("obra", sql.Int, grupo.obra)
+        .input("version", sql.Int, grupo.version)
+        .input("usr", sql.VarChar, "sistema")
+        .query(`
+          INSERT INTO dbo.ajustes
+          (
+            numero_ajuste,
+            deposito,
+            motivo_id,
+            motivo,
+            obra,
+            version,
+            fecha,
+            usuario
+          )
+          VALUES
+          (
+            @nro,
+            @depNom,
+            @motId,
+            @mot,
+            @obra,
+            @version,
+            GETDATE(),
+            @usr
+          )
+        `);
+
+      // 5) Detalles consolidados del grupo.
+      for (const [codigo, v] of grupo.agg.entries()) {
+        if ((v.delta || 0) === 0 && (v.faltante || 0) === 0) continue;
+
+        await insertDetalle(trans, {
+          ajusteId: nextNro,
+          cod: codigo,
+          desc: v.desc || "",
+          cantidad: v.delta || 0,
+          usuario: "sistema",
+          cantidadRequerida: v.requerido || null,
+          cantidadFaltante: v.faltante || null,
+          observacion: v.observacion || null,
+        });
+      }
+
+      // 5.b) Detalles no ajustados por error dentro de su obra/version.
+      for (const f of grupo.fallidos) {
+        await insertDetalle(trans, {
+          ajusteId: nextNro,
+          cod: f.codigo || "SIN_CODIGO",
+          desc: f.desc || "",
+          cantidad: 0,
+          usuario: "sistema",
+          cantidadRequerida: f.requerido || null,
+          cantidadFaltante: f.faltante || null,
+          observacion: `Fila ${f.row}: ${f.reason}`,
+        });
+      }
+
+      ajustesCreados.push({
+        numero_ajuste: nextNro,
+        obra: grupo.obra,
+        version: grupo.version,
       });
     }
 
-    // 5.b) detalles no ajustados por error
-    for (const f of failItems) {
-      await insertDetalle(trans, {
-        ajusteId: nextNro,
-        cod: f.codigo || "SIN_CODIGO",
-        desc: f.desc || "",
-        cantidad: 0,
-        usuario: "sistema",
-        cantidadRequerida: f.requerido || null,
-        cantidadFaltante: f.faltante || null,
-        observacion: `Fila ${f.row}: ${f.reason}`,
-      });
-    }
-
-    // 6) re-escribir excel
+    // 6) Re-escribir Excel.
     const outRows = [header, ...dataRows];
     workbook.Sheets["materiales"] = XLSX.utils.aoa_to_sheet(outRows);
+
     const outBuffer = XLSX.write(workbook, {
       type: "buffer",
       bookType: "xlsx",
     });
 
-    // 7) subir overwrite
+    // 7) Subir overwrite.
     await uploadOverwriteByPath(fileRef, outBuffer);
 
-    // 8) commit
+    // 8) Commit.
     await trans.commit();
+    trans = null;
 
     return {
       ok: true,
-      numero_ajuste: nextNro,
+      ajustes: ajustesCreados,
+      cantidad_ajustes: ajustesCreados.length,
       ajustados: okItems.length,
       fallidos: failItems.length,
       resumen_fallidos: failItems,

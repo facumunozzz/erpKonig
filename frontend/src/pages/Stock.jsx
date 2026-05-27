@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/axiosConfig";
 import * as XLSX from "xlsx";
 import "./../styles/stock.css";
+import UbicacionesModal from "../components/UbicacionesModal";
+import UbicacionAutocomplete from "../components/UbicacionesAutocomplete";
+import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
 
 const normalizeHeader = (txt) => {
   const clean = String(txt || "")
@@ -113,9 +116,13 @@ function Stock() {
   // cache por código
   const [detalleCache, setDetalleCache] = useState({});
   const [savingUbicacionId, setSavingUbicacionId] = useState(null);
+  const [openUbicaciones, setOpenUbicaciones] = useState(false);
+  const [ubicaciones, setUbicaciones] = useState([]);
+  const excelRef = useRef(null);
 
   useEffect(() => {
     fetchStock();
+    fetchUbicaciones();
   }, []);
 
   useEffect(() => {
@@ -197,8 +204,19 @@ function Stock() {
       .catch((err) => console.error(err));
   };
 
+  const fetchUbicaciones = async () => {
+    try {
+      const res = await api.get("/ubicaciones");
+      setUbicaciones(res.data || []);
+    } catch (err) {
+      console.error("No se pudieron cargar ubicaciones:", err);
+      setUbicaciones([]);
+    }
+  };
+
   const refreshAll = async () => {
     fetchStock();
+    fetchUbicaciones();
     setDetalleCache({});
   };
 
@@ -254,15 +272,51 @@ function Stock() {
 
     setFiltros(vacios);
     setFiltered(stock || []);
+    excelRef.current?.clearAllFilters?.();
     setCurrentPage(1);
     setGoTo("");
   };
 
+  const getStockFilterValue = (item, key) => {
+    const valores = {
+      codigo: item.codigo ?? "",
+      descripcion: item.descripcion ?? "",
+      folio: item.folio ?? "",
+      proveedor: item.proveedor ?? "",
+      almacen: item.almacen_label ?? "",
+      ubicacion: item.ubicacion ?? "",
+      cantidad_total: item.cantidad_total ?? 0,
+      punto_pedido: item.punto_pedido ?? "",
+      tipo: item.tipo ?? "",
+      categoriaRecuento: item.categoriaRecuento ?? "",
+      proximaFechaRecuento: item.proximaFechaRecuento ?? "",
+      recuentoSiNo: item.recuentoSiNo ?? "",
+    };
+
+    return valores[key] ?? "";
+  };
+
+  const excelColumns = useMemo(
+    () =>
+      STOCK_HEADERS.map(([key, label]) => ({
+        key,
+        label,
+        getValue: (row) => getStockFilterValue(row, key),
+      })),
+    []
+  );
+
+  const excel = useExcelFilters(stock, excelColumns, {
+    onChange: () => setCurrentPage(1),
+  });
+
+  excelRef.current = excel;
+
   // ================= PAGINADO PRO =================
-  const totalItems = filtered.length;
+  const totalItems = excel.rows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
-  const paginated = filtered.slice(
+  const paginated = excel.rows.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   );
@@ -405,7 +459,7 @@ function Stock() {
   );
 };
 
-const guardarUbicacion = async (item) => {
+const guardarUbicacion = async (item, ubicacionValidada) => {
   try {
     const idArticulo = item?.id_articulo;
 
@@ -417,8 +471,10 @@ const guardarUbicacion = async (item) => {
     setSavingUbicacionId(idArticulo);
 
     await api.patch(`/articulos/${idArticulo}/ubicacion`, {
-      ubicacion: item.ubicacion ?? "",
+      ubicacion: ubicacionValidada ?? item.ubicacion ?? "",
     });
+
+    await refreshAll();
   } catch (err) {
     console.error("Error guardando ubicación:", err);
 
@@ -605,9 +661,16 @@ const agrupado = useMemo(() => {
       <div className="acciones">
         <button onClick={() => setMostrarModal(true)}>Crear depósito</button>
         <button onClick={abrirVerDepositos}>Ver depósitos</button>
+        <button onClick={() => setOpenUbicaciones(true)}>Administrar ubicaciones</button>
         <button onClick={exportarExcel}>Exportar a Excel</button>
         <button onClick={limpiarFiltros}>Limpiar filtros</button>
       </div>
+
+      <UbicacionesModal
+        isOpen={openUbicaciones}
+        onClose={() => setOpenUbicaciones(false)}
+        onSaved={refreshAll}
+      />
 
       {mostrarModal && (
         <div className="modal">
@@ -728,7 +791,7 @@ const agrupado = useMemo(() => {
                   key={key}
                   style={{
                     position: "relative",
-                    overflow: "hidden",
+                    overflow: "visible",
                     whiteSpace: "nowrap",
                     textOverflow: "ellipsis",
                     minWidth: 0,
@@ -737,18 +800,21 @@ const agrupado = useMemo(() => {
                     boxSizing: "border-box",
                   }}
                 >
-                  <div style={{ paddingRight: "10px" }}>
-                    {label}
-                    <br />
-                    <input
-                      value={filtros[key] ?? ""}
-                      onChange={(e) => handleFilter(e, key)}
-                      style={{
-                        width: "100%",
-                        maxWidth: "100%",
-                        minWidth: 0,
-                        boxSizing: "border-box",
-                      }}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "6px",
+                      paddingRight: "8px",
+                    }}
+                  >
+                    <span title={label}>{label}</span>
+
+                    <ExcelFilterButton
+                      columnKey={key}
+                      label={label}
+                      excel={excel}
                     />
                   </div>
 
@@ -758,7 +824,7 @@ const agrupado = useMemo(() => {
                       position: "absolute",
                       top: 0,
                       right: 0,
-                      width: "10px",
+                      width: "5px",
                       height: "100%",
                       cursor: "col-resize",
                       userSelect: "none",
@@ -794,28 +860,13 @@ const agrupado = useMemo(() => {
                   boxSizing: "border-box",
                 }}
               >
-                <input
+                <UbicacionAutocomplete
                   value={item.ubicacion ?? ""}
+                  ubicaciones={ubicaciones}
                   disabled={savingUbicacionId === item.id_articulo}
-                  onChange={(e) =>
-                    actualizarUbicacionLocal(item.id_articulo, e.target.value)
-                  }
-                  onBlur={() => guardarUbicacion(item)}
-                  onKeyDown={(e) => handleUbicacionKeyDown(e, item)}
-                  placeholder="Ubicación"
-                  style={{
-                    width: "100%",
-                    height: "28px",
-                    boxSizing: "border-box",
-                    border: "1px solid #d0d7de",
-                    borderRadius: "6px",
-                    padding: "3px 6px",
-                    fontSize: "13px",
-                    background:
-                      savingUbicacionId === item.id_articulo
-                        ? "#f3f4f6"
-                        : "white",
-                  }}
+                  onChange={(value) => actualizarUbicacionLocal(item.id_articulo, value)}
+                  onValidSave={(value) => guardarUbicacion(item, value)}
+                  onCancel={refreshAll}
                 />
               </td>
             );

@@ -1,9 +1,21 @@
 // frontend/src/pages/Transferencias.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
 import ReferentesModal from "../components/ReferentesModal";
+import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
+
+const TRANSFERENCIA_COLUMNS = [
+  ["fecha", "Fecha"],
+  ["fecha_real", "Fecha real"],
+  ["origen", "Origen"],
+  ["destino", "Destino"],
+  ["referente", "Referente"],
+  ["remito_referencia", "Remito / Ref."],
+  ["numero_transferencia", "Nro Transferencia"],
+];
+
 
 function Transferencias() {
   const navigate = useNavigate();
@@ -27,10 +39,41 @@ function Transferencias() {
     fetchTransferencias();
   }, []);
 
+  const getTransferenciaValue = (t, key) => {
+    if (key === "fecha") {
+      return t.fecha ? new Date(t.fecha).toLocaleString("es-AR") : "";
+    }
+
+    if (key === "fecha_real") {
+      return t.fecha_real ? new Date(t.fecha_real).toLocaleDateString("es-AR") : "";
+    }
+
+    if (key === "numero_transferencia") {
+      return t.numero_transferencia ?? t.id ?? "";
+    }
+
+    return t?.[key] ?? "";
+  };
+
+  const excelColumns = useMemo(
+    () =>
+      TRANSFERENCIA_COLUMNS.map(([key, label]) => ({
+        key,
+        label,
+        getValue: (row) => getTransferenciaValue(row, key),
+      })),
+    []
+  );
+
+  const excel = useExcelFilters(transferencias, excelColumns, {
+    onChange: () => setCurrentPage(1),
+  });
+
   // ==========================
   // Filtro global
   // ==========================
-  const transferenciasFiltradas = transferencias.filter((t) =>
+  const transferenciasFiltradas = excel.rows.filter((t) =>
+    !filtro ||
     Object.values(t).some((val) =>
       String(val ?? "").toLowerCase().includes(filtro.toLowerCase())
     )
@@ -71,6 +114,16 @@ function Transferencias() {
           👤 Actuantes
         </button>
 
+        <button
+          onClick={() => {
+            setFiltro("");
+            excel.clearAllFilters();
+            setCurrentPage(1);
+          }}
+        >
+          Limpiar filtros
+        </button>
+
         <input
           type="text"
           placeholder="Filtrar transferencias"
@@ -85,13 +138,25 @@ function Transferencias() {
       <table className="tabla-transferencias">
         <thead>
           <tr>
-            <th>Fecha</th>
-            <th>Fecha real</th>
-            <th>Origen</th>
-            <th>Destino</th>
-            <th>Referente</th>
-            <th>Remito / Ref.</th>
-            <th>Nro Transferencia</th>
+            {TRANSFERENCIA_COLUMNS.map(([key, label]) => (
+              <th key={key} style={{ overflow: "visible" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "6px",
+                  }}
+                >
+                  <span>{label}</span>
+                  <ExcelFilterButton
+                    columnKey={key}
+                    label={label}
+                    excel={excel}
+                  />
+                </div>
+              </th>
+            ))}
           </tr>
         </thead>
 

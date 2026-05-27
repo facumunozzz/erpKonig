@@ -1,18 +1,19 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/axiosConfig";
 import * as XLSX from "xlsx";
 import "./../styles/transferencias.css";
+import ServerExcelFilterButton from "../components/ServerExcelFilterButton";
 
 function Movimientos() {
   const [rows, setRows] = useState([]);
-  const [filtered, setFiltered] = useState([]);
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(100);
   const [gotoPage, setGotoPage] = useState("");
 
   const [totalRows, setTotalRows] = useState(0);
   const [serverTotalPages, setServerTotalPages] = useState(1);
+  const [loading, setLoading] = useState(false);
 
   const [showEdit, setShowEdit] = useState(false);
   const [movEdit, setMovEdit] = useState(null);
@@ -24,27 +25,11 @@ function Movimientos() {
   const [masivoEdit, setMasivoEdit] = useState(null);
   const [buscandoMasivo, setBuscandoMasivo] = useState(false);
 
-  const filtrosIniciales = {
-    numero_transaccion: "",
-    fecha: "",
-    fecha_real: "",
-    codigo: "",
-    descripcion: "",
-    cantidad: "",
-    deposito_origen: "",
-    deposito_destino: "",
-    tipo_transaccion: "",
-    motivo: "",
-    remito_referencia: "",
-    obra: "",
-    version: "",
-    referente: "",
-    proveedor: "",
-    ingreso_egreso: "",
-    usuario: "",
-  };
-
-  const [filtros, setFiltros] = useState(filtrosIniciales);
+  const [serverFilters, setServerFilters] = useState({});
+  const [sortState, setSortState] = useState({
+    key: "",
+    dir: "",
+  });
 
   const formatFecha = (value) => {
     if (!value) return "";
@@ -56,36 +41,121 @@ function Movimientos() {
     return d.toLocaleDateString("es-AR");
   };
 
-  const cargarMovimientos = () => {
-    api
-      .get("/movimientos", {
+  const columnas = useMemo(
+    () => [
+      {
+        key: "numero_transaccion",
+        label: "Número de transacción",
+      },
+      {
+        key: "fecha",
+        label: "Fecha",
+      },
+      {
+        key: "fecha_real",
+        label: "Fecha Real",
+      },
+      {
+        key: "codigo",
+        label: "Código",
+      },
+      {
+        key: "descripcion",
+        label: "Descripción",
+      },
+      {
+        key: "cantidad",
+        label: "Cantidad",
+      },
+      {
+        key: "deposito_origen",
+        label: "Depósito Origen",
+      },
+      {
+        key: "deposito_destino",
+        label: "Depósito Destino",
+      },
+      {
+        key: "tipo_transaccion",
+        label: "Tipo de transacción",
+      },
+      {
+        key: "motivo",
+        label: "Motivo",
+      },
+      {
+        key: "remito_referencia",
+        label: "Remito/Referencia",
+      },
+      {
+        key: "obra",
+        label: "Obra",
+      },
+      {
+        key: "version",
+        label: "Versión",
+      },
+      {
+        key: "referente",
+        label: "Actuante",
+      },
+      {
+        key: "proveedor",
+        label: "Proveedor",
+      },
+      {
+        key: "ingreso_egreso",
+        label: "E/I",
+      },
+      {
+        key: "usuario",
+        label: "Usuario",
+      },
+    ],
+    []
+  );
+
+  const cargarMovimientos = async () => {
+    try {
+      setLoading(true);
+
+      const res = await api.get("/movimientos", {
         params: {
           page: currentPage,
           pageSize,
+          filters: JSON.stringify(serverFilters),
+          sortKey: sortState.key || "",
+          sortDir: sortState.dir || "",
         },
-      })
-      .then((res) => {
-        const payload = res.data || {};
+        timeout: 120000,
+      });
 
-        const data = Array.isArray(payload.data)
-          ? payload.data
-          : Array.isArray(payload)
+      const payload = res.data || {};
+
+      const data = Array.isArray(payload.data)
+        ? payload.data
+        : Array.isArray(payload)
           ? payload
           : [];
 
-        setRows(data);
-        setFiltered(data);
+      setRows(data);
+      setTotalRows(Number(payload.total || data.length || 0));
+      setServerTotalPages(Number(payload.totalPages || 1));
+    } catch (err) {
+      console.error("Error cargando movimientos:", err);
 
-        setTotalRows(Number(payload.total || data.length || 0));
-        setServerTotalPages(Number(payload.totalPages || 1));
-      })
-      .catch((err) => {
-        console.error("Error cargando movimientos:", err);
-        setRows([]);
-        setFiltered([]);
-        setTotalRows(0);
-        setServerTotalPages(1);
-      });
+      setRows([]);
+      setTotalRows(0);
+      setServerTotalPages(1);
+
+      alert(
+        err.response?.data?.error ||
+          err.response?.data?.detalle ||
+          "Error cargando movimientos."
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   const cargarReferentes = async () => {
@@ -112,56 +182,16 @@ function Movimientos() {
 
   useEffect(() => {
     cargarMovimientos();
-  }, [currentPage, pageSize]);
+  }, [currentPage, pageSize, serverFilters, sortState]);
 
   const limpiarFiltros = () => {
-    setFiltros(filtrosIniciales);
-    setFiltered(rows || []);
+    setServerFilters({});
+    setSortState({
+      key: "",
+      dir: "",
+    });
     setCurrentPage(1);
     setGotoPage("");
-  };
-
-  const getValueForFilter = (r, key) => {
-    const values = {
-      numero_transaccion: r.numero_transaccion ?? "",
-      fecha: formatFecha(r.fecha),
-      fecha_real: formatFecha(r.fecha_real),
-      codigo: r.codigo ?? "",
-      descripcion: r.descripcion ?? "",
-      cantidad: String(r.cantidad ?? ""),
-      deposito_origen: r.deposito_origen ?? "",
-      deposito_destino: r.deposito_destino ?? "",
-      tipo_transaccion: r.tipo_transaccion ?? "",
-      motivo: r.motivo ?? "",
-      remito_referencia: r.remito_referencia ?? "",
-      obra: r.obra ?? "",
-      version: r.version ?? "",
-      referente: r.referente ?? "",
-      proveedor: r.proveedor ?? "",
-      ingreso_egreso: r.ingreso_egreso ?? "",
-      usuario: r.usuario ?? "",
-    };
-
-    return String(values[key] ?? "");
-  };
-
-  const onFilterChange = (key, val) => {
-    const value = String(val ?? "").toLowerCase();
-
-    const nf = {
-      ...filtros,
-      [key]: value,
-    };
-
-    setFiltros(nf);
-
-    const f = (rows || []).filter((r) =>
-      Object.keys(nf).every((k) =>
-        getValueForFilter(r, k).toLowerCase().includes(nf[k])
-      )
-    );
-
-    setFiltered(f);
   };
 
   const abrirEdicion = (r) => {
@@ -301,42 +331,66 @@ function Movimientos() {
   };
 
   const totalPages = serverTotalPages || 1;
-  const paginated = filtered;
+  const paginated = rows;
 
   const irPagina = (p) => {
-    if (p < 1 || p > totalPages) return;
-    setCurrentPage(p);
+    const n = Number(p);
+    if (!Number.isFinite(n)) return;
+    if (n < 1 || n > totalPages) return;
+
+    setCurrentPage(n);
   };
 
   const from = totalRows === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const to = Math.min(currentPage * pageSize, totalRows);
 
-  const exportarExcel = () => {
-    const data = (filtered.length ? filtered : rows).map((r) => ({
-      "Número de transacción": r.numero_transaccion ?? "",
-      Fecha: formatFecha(r.fecha),
-      "Fecha Real": formatFecha(r.fecha_real),
-      Código: r.codigo ?? "",
-      Descripción: r.descripcion ?? "",
-      Cantidad: r.cantidad ?? "",
-      "Depósito Origen": r.deposito_origen ?? "",
-      "Depósito Destino": r.deposito_destino ?? "",
-      "Tipo de transacción": r.tipo_transaccion ?? "",
-      Motivo: r.motivo ?? "",
-      "Remito/Referencia": r.remito_referencia ?? "",
-      Obra: r.obra ?? "",
-      Versión: r.version ?? "",
-      Actuante: r.referente ?? "",
-      Proveedor: r.proveedor ?? "",
-      "E/I": r.ingreso_egreso ?? "",
-      Usuario: r.usuario ?? "",
-    }));
+  const exportarExcel = async () => {
+    try {
+      const res = await api.get("/movimientos/export", {
+        params: {
+          filters: JSON.stringify(serverFilters),
+          sortKey: sortState.key || "",
+          sortDir: sortState.dir || "",
+        },
+        timeout: 180000,
+      });
 
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
+      const dataBase = Array.isArray(res.data) ? res.data : [];
 
-    XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
-    XLSX.writeFile(wb, "movimientos_pagina_actual.xlsx");
+      const data = dataBase.map((r) => ({
+        "Número de transacción": r.numero_transaccion ?? "",
+        Fecha: formatFecha(r.fecha),
+        "Fecha Real": formatFecha(r.fecha_real),
+        Código: r.codigo ?? "",
+        Descripción: r.descripcion ?? "",
+        Cantidad: r.cantidad ?? "",
+        "Depósito Origen": r.deposito_origen ?? "",
+        "Depósito Destino": r.deposito_destino ?? "",
+        "Tipo de transacción": r.tipo_transaccion ?? "",
+        Motivo: r.motivo ?? "",
+        "Remito/Referencia": r.remito_referencia ?? "",
+        Obra: r.obra ?? "",
+        Versión: r.version ?? "",
+        Actuante: r.referente ?? "",
+        Proveedor: r.proveedor ?? "",
+        "E/I": r.ingreso_egreso ?? "",
+        Usuario: r.usuario ?? "",
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+
+      XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
+      XLSX.writeFile(wb, "movimientos_filtrados.xlsx");
+    } catch (err) {
+      console.error("Error exportando movimientos:", err);
+
+      alert(
+        err.response?.data?.error ||
+          err.response?.data?.detalle ||
+          "No se pudo exportar movimientos."
+      );
+    }
   };
 
   return (
@@ -352,187 +406,47 @@ function Movimientos() {
           flexWrap: "wrap",
         }}
       >
-        <button onClick={exportarExcel}>Exportar página a Excel</button>
+        <button onClick={exportarExcel}>Exportar a Excel</button>
         <button onClick={limpiarFiltros}>Limpiar filtros</button>
         <button onClick={cargarMovimientos}>↻ Actualizar</button>
 
         <button className="btn-primary" onClick={abrirMasivo}>
           Editar transacción completa
         </button>
+
+        {loading && <span style={{ padding: "6px 10px" }}>Cargando...</span>}
       </div>
 
       <div className="tabla-articulos-container">
         <table className="tabla-movimientos">
           <thead>
             <tr>
-              <th>
-                Número de transacción
-                <br />
-                <input
-                  value={filtros.numero_transaccion}
-                  onChange={(e) =>
-                    onFilterChange("numero_transaccion", e.target.value)
-                  }
-                />
-              </th>
+              {columnas.map((col) => (
+                <th key={col.key}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 6,
+                    }}
+                  >
+                    <span>{col.label}</span>
 
-              <th>
-                Fecha
-                <br />
-                <input
-                  value={filtros.fecha}
-                  onChange={(e) => onFilterChange("fecha", e.target.value)}
-                />
-              </th>
-
-              <th>
-                Fecha Real
-                <br />
-                <input
-                  value={filtros.fecha_real}
-                  onChange={(e) =>
-                    onFilterChange("fecha_real", e.target.value)
-                  }
-                />
-              </th>
-
-              <th>
-                Código
-                <br />
-                <input
-                  value={filtros.codigo}
-                  onChange={(e) => onFilterChange("codigo", e.target.value)}
-                />
-              </th>
-
-              <th>
-                Descripción
-                <br />
-                <input
-                  value={filtros.descripcion}
-                  onChange={(e) =>
-                    onFilterChange("descripcion", e.target.value)
-                  }
-                />
-              </th>
-
-              <th style={{ textAlign: "right" }}>
-                Cantidad
-                <br />
-                <input
-                  value={filtros.cantidad}
-                  onChange={(e) => onFilterChange("cantidad", e.target.value)}
-                />
-              </th>
-
-              <th>
-                Depósito Origen
-                <br />
-                <input
-                  value={filtros.deposito_origen}
-                  onChange={(e) =>
-                    onFilterChange("deposito_origen", e.target.value)
-                  }
-                />
-              </th>
-
-              <th>
-                Depósito Destino
-                <br />
-                <input
-                  value={filtros.deposito_destino}
-                  onChange={(e) =>
-                    onFilterChange("deposito_destino", e.target.value)
-                  }
-                />
-              </th>
-
-              <th>
-                Tipo de transacción
-                <br />
-                <input
-                  value={filtros.tipo_transaccion}
-                  onChange={(e) =>
-                    onFilterChange("tipo_transaccion", e.target.value)
-                  }
-                />
-              </th>
-
-              <th>
-                Motivo
-                <br />
-                <input
-                  value={filtros.motivo}
-                  onChange={(e) => onFilterChange("motivo", e.target.value)}
-                />
-              </th>
-
-              <th>
-                Remito/Referencia
-                <br />
-                <input
-                  value={filtros.remito_referencia}
-                  onChange={(e) =>
-                    onFilterChange("remito_referencia", e.target.value)
-                  }
-                />
-              </th>
-
-              <th>
-                Obra
-                <br />
-                <input
-                  value={filtros.obra}
-                  onChange={(e) => onFilterChange("obra", e.target.value)}
-                />
-              </th>
-
-              <th>
-                Versión
-                <br />
-                <input
-                  value={filtros.version}
-                  onChange={(e) => onFilterChange("version", e.target.value)}
-                />
-              </th>
-
-              <th>
-                Actuante
-                <br />
-                <input
-                  value={filtros.referente}
-                  onChange={(e) => onFilterChange("referente", e.target.value)}
-                />
-              </th>
-
-              <th>
-                Proveedor
-                <br />
-                <input
-                  value={filtros.proveedor}
-                  onChange={(e) => onFilterChange("proveedor", e.target.value)}
-                />
-              </th>
-
-              <th>
-                E/I
-                <br />
-                <input
-                  value={filtros.ingreso_egreso}
-                  onChange={(e) =>
-                    onFilterChange("ingreso_egreso", e.target.value)
-                  }
-                />
-              </th>
-
-              <th>
-                Usuario
-                <br />
-                <input
-                  value={filtros.usuario}
-                  onChange={(e) => onFilterChange("usuario", e.target.value)}
-                />
-              </th>
+                    <ServerExcelFilterButton
+                      columnKey={col.key}
+                      label={col.label}
+                      filters={serverFilters}
+                      setFilters={setServerFilters}
+                      sortState={sortState}
+                      setSortState={setSortState}
+                      onApply={() => {
+                        setCurrentPage(1);
+                      }}
+                    />
+                  </div>
+                </th>
+              ))}
 
               <th>Acción</th>
             </tr>
@@ -550,7 +464,9 @@ function Movimientos() {
                   r.tipo_transaccion === "TRANSFERENCIA";
 
                 return (
-                  <tr key={i}>
+                  <tr
+                    key={`${r.tipo_transaccion}-${r.numero_transaccion}-${r.codigo}-${i}`}
+                  >
                     <td>{r.numero_transaccion ?? ""}</td>
                     <td>{formatFecha(r.fecha)}</td>
                     <td>{formatFecha(r.fecha_real)}</td>
@@ -601,10 +517,11 @@ function Movimientos() {
               setCurrentPage(1);
             }}
           >
-            <option value={10}>10</option>
             <option value={25}>25</option>
             <option value={50}>50</option>
             <option value={100}>100</option>
+            <option value={200}>200</option>
+            <option value={500}>500</option>
           </select>
         </div>
 
@@ -683,102 +600,96 @@ function Movimientos() {
       </div>
 
       {showEdit && movEdit && (
-        <div
-          className="modal-backdrop"
-          style={{ position: "fixed", inset: 0, zIndex: 999999 }}
-          onMouseDown={(e) => {
-            if (e.target.classList.contains("modal-backdrop")) {
-              setShowEdit(false);
-            }
-          }}
-        >
-          <div
-            className="modal-card"
-            style={{ position: "relative", zIndex: 999999 }}
-          >
-            <div className="modal-head">
-              <h3>Editar movimiento</h3>
-              <button onClick={() => setShowEdit(false)}>✕</button>
+        <div className="modal">
+          <div className="modal-content modal-wide">
+            <h3>Editar movimiento</h3>
+
+            <div className="form-grid">
+              <label>
+                Tipo
+                <input value={movEdit.tipo_transaccion} disabled />
+              </label>
+
+              <label>
+                Nro transacción
+                <input value={movEdit.numero_transaccion} disabled />
+              </label>
+
+              <label>
+                Remito / Referencia
+                <input
+                  value={movEdit.remito_referencia}
+                  onChange={(e) =>
+                    setMovEdit((prev) => ({
+                      ...prev,
+                      remito_referencia: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                Obra
+                <input
+                  value={movEdit.obra}
+                  onChange={(e) =>
+                    setMovEdit((prev) => ({
+                      ...prev,
+                      obra: e.target.value,
+                    }))
+                  }
+                  disabled={movEdit.tipo_transaccion !== "AJUSTE"}
+                />
+              </label>
+
+              <label>
+                Versión
+                <input
+                  value={movEdit.version}
+                  onChange={(e) =>
+                    setMovEdit((prev) => ({
+                      ...prev,
+                      version: e.target.value,
+                    }))
+                  }
+                  disabled={movEdit.tipo_transaccion !== "AJUSTE"}
+                />
+              </label>
+
+              <label>
+                Actuante
+                <select
+                  value={movEdit.id_referente || ""}
+                  onChange={(e) =>
+                    setMovEdit((prev) => ({
+                      ...prev,
+                      id_referente: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Sin actuante</option>
+                  {referentes.map((r) => (
+                    <option key={r.id_referente} value={r.id_referente}>
+                      {r.nombre}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
 
-            <div
-              className="modal-row"
-              style={{
-                flexDirection: "column",
-                alignItems: "stretch",
-                gap: 8,
-              }}
-            >
-              <label>Número de transacción</label>
-              <input value={movEdit.numero_transaccion} readOnly />
-
-              <label>Tipo</label>
-              <input value={movEdit.tipo_transaccion} readOnly />
-
-              <label>Remito / Referencia</label>
-              <input
-                value={movEdit.remito_referencia}
-                onChange={(e) =>
-                  setMovEdit((prev) => ({
-                    ...prev,
-                    remito_referencia: e.target.value,
-                  }))
-                }
-              />
-
-              {movEdit.tipo_transaccion === "AJUSTE" && (
-                <>
-                  <label>Obra</label>
-                  <input
-                    type="number"
-                    value={movEdit.obra}
-                    onChange={(e) =>
-                      setMovEdit((prev) => ({
-                        ...prev,
-                        obra: e.target.value.replace(/[^0-9]/g, ""),
-                      }))
-                    }
-                  />
-
-                  <label>Versión</label>
-                  <input
-                    type="number"
-                    value={movEdit.version}
-                    onChange={(e) =>
-                      setMovEdit((prev) => ({
-                        ...prev,
-                        version: e.target.value.replace(/[^0-9]/g, ""),
-                      }))
-                    }
-                  />
-                </>
-              )}
-
-              <label>Actuante</label>
-              <select
-                value={movEdit.id_referente || ""}
-                onChange={(e) =>
-                  setMovEdit((prev) => ({
-                    ...prev,
-                    id_referente: e.target.value,
-                  }))
-                }
-              >
-                <option value="">-- Sin actuante --</option>
-
-                {(Array.isArray(referentes) ? referentes : []).map((r) => (
-                  <option key={r.id_referente} value={r.id_referente}>
-                    {r.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="modal-foot">
-              <button onClick={() => setShowEdit(false)}>Cancelar</button>
-
+            <div className="modal-botones">
               <button className="btn-primary" onClick={guardarEdicion}>
-                Guardar cambios
+                Guardar
+              </button>
+
+              <button
+                className="btn-light"
+                onClick={() => {
+                  setShowEdit(false);
+                  setMovEdit(null);
+                }}
+              >
+                Cancelar
               </button>
             </div>
           </div>
@@ -786,186 +697,129 @@ function Movimientos() {
       )}
 
       {showMasivo && (
-        <div
-          className="modal-backdrop"
-          style={{ position: "fixed", inset: 0, zIndex: 999999 }}
-          onMouseDown={(e) => {
-            if (e.target.classList.contains("modal-backdrop")) {
-              setShowMasivo(false);
-            }
-          }}
-        >
-          <div
-            className="modal-card"
-            style={{
-              position: "relative",
-              zIndex: 999999,
-              maxWidth: 950,
-              width: "95%",
-            }}
-          >
-            <div className="modal-head">
-              <h3>Editar transacción completa</h3>
-              <button onClick={() => setShowMasivo(false)}>✕</button>
-            </div>
+        <div className="modal">
+          <div className="modal-content modal-wide">
+            <h3>Editar transacción completa</h3>
 
-            <div
-              className="modal-row"
-              style={{
-                flexDirection: "column",
-                alignItems: "stretch",
-                gap: 8,
-              }}
-            >
-              <label>Número de transacción</label>
-
-              <div style={{ display: "flex", gap: 8 }}>
+            <div className="form-grid">
+              <label>
+                Número de transacción
                 <input
                   value={numeroMasivo}
                   onChange={(e) => setNumeroMasivo(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") buscarTransaccionMasiva();
                   }}
-                  placeholder="Ej: 1234"
                 />
+              </label>
 
+              <div style={{ display: "flex", alignItems: "end", gap: 8 }}>
                 <button
+                  className="btn-primary"
                   onClick={buscarTransaccionMasiva}
                   disabled={buscandoMasivo}
                 >
                   {buscandoMasivo ? "Buscando..." : "Buscar"}
                 </button>
               </div>
-
-              {movsMasivo.length > 0 && masivoEdit && (
-                <>
-                  <div
-                    style={{
-                      marginTop: 12,
-                      padding: 10,
-                      border: "1px solid #ddd",
-                      borderRadius: 8,
-                      background: "#f8fafc",
-                    }}
-                  >
-                    <strong>Movimientos encontrados:</strong>{" "}
-                    {movsMasivo.length} artículo/s involucrado/s.
-                    <br />
-                    <strong>Tipo:</strong> {masivoEdit.tipo_transaccion}
-                  </div>
-
-                  <label>Tipo de transacción</label>
-                  <input value={masivoEdit.tipo_transaccion} readOnly />
-
-                  <label>Remito / Referencia</label>
-                  <input
-                    value={masivoEdit.remito_referencia}
-                    onChange={(e) =>
-                      setMasivoEdit((prev) => ({
-                        ...prev,
-                        remito_referencia: e.target.value,
-                      }))
-                    }
-                    placeholder="Dato que se aplicará a toda la transacción"
-                  />
-
-                  {masivoEdit.tipo_transaccion === "AJUSTE" && (
-                    <>
-                      <label>Obra</label>
-                      <input
-                        type="number"
-                        value={masivoEdit.obra}
-                        onChange={(e) =>
-                          setMasivoEdit((prev) => ({
-                            ...prev,
-                            obra: e.target.value.replace(/[^0-9]/g, ""),
-                          }))
-                        }
-                        placeholder="Se aplicará a todos los artículos del ajuste"
-                      />
-
-                      <label>Versión</label>
-                      <input
-                        type="number"
-                        value={masivoEdit.version}
-                        onChange={(e) =>
-                          setMasivoEdit((prev) => ({
-                            ...prev,
-                            version: e.target.value.replace(/[^0-9]/g, ""),
-                          }))
-                        }
-                        placeholder="Se aplicará a todos los artículos del ajuste"
-                      />
-                    </>
-                  )}
-
-                  <label>Actuante</label>
-                  <select
-                    value={masivoEdit.id_referente || ""}
-                    onChange={(e) =>
-                      setMasivoEdit((prev) => ({
-                        ...prev,
-                        id_referente: e.target.value,
-                      }))
-                    }
-                  >
-                    <option value="">-- Sin actuante --</option>
-
-                    {(Array.isArray(referentes) ? referentes : []).map((r) => (
-                      <option key={r.id_referente} value={r.id_referente}>
-                        {r.nombre}
-                      </option>
-                    ))}
-                  </select>
-
-                  <div style={{ marginTop: 14 }}>
-                    <h4>Artículos involucrados</h4>
-
-                    <div style={{ maxHeight: 260, overflow: "auto" }}>
-                      <table className="tabla-movimientos">
-                        <thead>
-                          <tr>
-                            <th>Código</th>
-                            <th>Descripción</th>
-                            <th>Cantidad</th>
-                            <th>Origen</th>
-                            <th>Destino</th>
-                            <th>E/I</th>
-                          </tr>
-                        </thead>
-
-                        <tbody>
-                          {(Array.isArray(movsMasivo) ? movsMasivo : []).map(
-                            (m, idx) => (
-                              <tr key={idx}>
-                                <td>{m.codigo ?? ""}</td>
-                                <td>{m.descripcion ?? ""}</td>
-                                <td style={{ textAlign: "right" }}>
-                                  {m.cantidad ?? ""}
-                                </td>
-                                <td>{m.deposito_origen ?? ""}</td>
-                                <td>{m.deposito_destino ?? ""}</td>
-                                <td>{m.ingreso_egreso ?? ""}</td>
-                              </tr>
-                            )
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </>
-              )}
             </div>
 
-            <div className="modal-foot">
-              <button onClick={() => setShowMasivo(false)}>Cancelar</button>
+            {movsMasivo.length > 0 && masivoEdit && (
+              <>
+                <hr />
+
+                <p>
+                  Se encontraron <b>{movsMasivo.length}</b> movimientos para la
+                  transacción <b>{masivoEdit.numero_transaccion}</b>.
+                </p>
+
+                <div className="form-grid">
+                  <label>
+                    Tipo
+                    <input value={masivoEdit.tipo_transaccion} disabled />
+                  </label>
+
+                  <label>
+                    Remito / Referencia
+                    <input
+                      value={masivoEdit.remito_referencia}
+                      onChange={(e) =>
+                        setMasivoEdit((prev) => ({
+                          ...prev,
+                          remito_referencia: e.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    Obra
+                    <input
+                      value={masivoEdit.obra}
+                      onChange={(e) =>
+                        setMasivoEdit((prev) => ({
+                          ...prev,
+                          obra: e.target.value,
+                        }))
+                      }
+                      disabled={masivoEdit.tipo_transaccion !== "AJUSTE"}
+                    />
+                  </label>
+
+                  <label>
+                    Versión
+                    <input
+                      value={masivoEdit.version}
+                      onChange={(e) =>
+                        setMasivoEdit((prev) => ({
+                          ...prev,
+                          version: e.target.value,
+                        }))
+                      }
+                      disabled={masivoEdit.tipo_transaccion !== "AJUSTE"}
+                    />
+                  </label>
+
+                  <label>
+                    Actuante
+                    <select
+                      value={masivoEdit.id_referente || ""}
+                      onChange={(e) =>
+                        setMasivoEdit((prev) => ({
+                          ...prev,
+                          id_referente: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">Sin actuante</option>
+                      {referentes.map((r) => (
+                        <option key={r.id_referente} value={r.id_referente}>
+                          {r.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </>
+            )}
+
+            <div className="modal-botones">
+              {movsMasivo.length > 0 && (
+                <button className="btn-primary" onClick={guardarEdicionMasiva}>
+                  Guardar transacción completa
+                </button>
+              )}
 
               <button
-                className="btn-primary"
-                onClick={guardarEdicionMasiva}
-                disabled={!masivoEdit || movsMasivo.length === 0}
+                className="btn-light"
+                onClick={() => {
+                  setShowMasivo(false);
+                  setNumeroMasivo("");
+                  setMovsMasivo([]);
+                  setMasivoEdit(null);
+                }}
               >
-                Aplicar cambios a toda la transacción
+                Cerrar
               </button>
             </div>
           </div>

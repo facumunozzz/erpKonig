@@ -6,6 +6,9 @@ import CatalogoModal from "../components/CatalogoModal";
 import ArticuloCrearModal from "../components/ArticuloCrearModal";
 import ArticuloEditarModal from "../components/ArticuloEditarModal";
 import ArticuloEliminarModal from "../components/ArticuloEliminarModal";
+import UbicacionesModal from "../components/UbicacionesModal";
+import UbicacionAutocomplete from "./../components/UbicacionesAutocomplete";
+import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
 
 const STORAGE_KEY = "articulos_col_widths_v1";
 const CAMPOS_OCULTOS = ["almacen", "cantidad", "traspasa"];
@@ -32,6 +35,7 @@ export default function Articulos() {
   const [openFolio, setOpenFolio] = useState(false);
   const [openTipo, setOpenTipo] = useState(false);
 
+
   // ================= PAGINADO PRO =================
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -42,10 +46,14 @@ export default function Articulos() {
   const [openEditar, setOpenEditar] = useState(false);
   const [rowEditar, setRowEditar] = useState(null);
   const [savingUbicacionId, setSavingUbicacionId] = useState(null);
+  const [openUbicaciones, setOpenUbicaciones] = useState(false);
+  const [ubicaciones, setUbicaciones] = useState([]);
+  const excelRef = useRef(null);
 
   const limpiarFiltros = () => {
     setFiltros({});
     setFiltered(articulos || []);
+    excelRef.current?.clearAllFilters?.();
     setCurrentPage(1);
     setGoTo("");
   };
@@ -106,6 +114,7 @@ export default function Articulos() {
   useEffect(() => {
     fetchArticulos();
     fetchClasifActivas();
+    fetchUbicaciones();
   }, []);
 
   useEffect(() => {
@@ -139,6 +148,16 @@ export default function Articulos() {
     }
   };
 
+  const fetchUbicaciones = async () => {
+    try {
+      const res = await api.get("/ubicaciones");
+      setUbicaciones(res.data || []);
+    } catch (err) {
+      console.error("No se pudieron cargar ubicaciones:", err);
+      setUbicaciones([]);
+    }
+  };
+
   const actualizarUbicacionLocal = (idArticulo, value) => {
     setArticulos((prev) =>
       (prev || []).map((a) =>
@@ -157,17 +176,18 @@ export default function Articulos() {
     );
   };
 
-  const guardarUbicacion = async (articulo) => {
+  const guardarUbicacion = async (articulo, ubicacionValidada) => {
     try {
       const id = articulo?.id_articulo;
-
       if (!id) return;
 
       setSavingUbicacionId(id);
 
       await api.patch(`/articulos/${id}/ubicacion`, {
-        ubicacion: articulo.ubicacion ?? "",
+        ubicacion: ubicacionValidada ?? articulo.ubicacion ?? "",
       });
+
+      await fetchArticulos();
     } catch (err) {
       console.error("Error guardando ubicación:", err);
       alert(
@@ -305,11 +325,27 @@ export default function Articulos() {
     setCurrentPage(1);
   };
 
+  const excelColumns = useMemo(
+    () =>
+      (columnas || []).map((col) => ({
+        key: col,
+        label: String(col).toUpperCase(),
+        getValue: (row) => getCellValue(row, col),
+      })),
+    [columnas]
+  );
+
+  const excel = useExcelFilters(articulos, excelColumns, {
+    onChange: () => setCurrentPage(1),
+  });
+
+  excelRef.current = excel;
+
   // ================= PAGINADO PRO =================
-  const totalItems = filtered.length;
+  const totalItems = excel.rows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
-  const paginated = filtered.slice(
+  const paginated = excel.rows.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
@@ -377,6 +413,10 @@ export default function Articulos() {
         <button className="nuevo-btn" onClick={() => setOpenTipo(true)}>
           Administrar tipos
         </button>
+
+        <button className="nuevo-btn" onClick={() => setOpenUbicaciones(true)}>
+          Administrar ubicaciones
+        </button>
       </div>
 
       <CatalogoModal
@@ -443,6 +483,15 @@ export default function Articulos() {
         }}
       />
 
+      <UbicacionesModal
+        isOpen={openUbicaciones}
+        onClose={() => setOpenUbicaciones(false)}
+        onSaved={() => {
+          fetchUbicaciones();
+          fetchArticulos();
+        }}
+      />
+
       <div
         className="tabla-articulos-container"
         style={{
@@ -476,7 +525,7 @@ export default function Articulos() {
                   key={col}
                   style={{
                     position: "relative",
-                    overflow: "hidden",
+                    overflow: "visible",
                     whiteSpace: "nowrap",
                     textOverflow: "ellipsis",
                     minWidth: 0,
@@ -491,6 +540,7 @@ export default function Articulos() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       width: "100%",
+                      gap: "6px",
                     }}
                   >
                     <span
@@ -498,12 +548,18 @@ export default function Articulos() {
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
-                        paddingRight: "10px",
+                        paddingRight: "6px",
                       }}
                       title={String(col).toUpperCase()}
                     >
                       {String(col).toUpperCase()}
                     </span>
+
+                    <ExcelFilterButton
+                      columnKey={col}
+                      label={String(col).toUpperCase()}
+                      excel={excel}
+                    />
 
                     <div
                       onMouseDown={(e) => startResize(e, col)}
@@ -511,7 +567,7 @@ export default function Articulos() {
                         position: "absolute",
                         top: 0,
                         right: 0,
-                        width: "10px",
+                        width: "5px",
                         height: "100%",
                         cursor: "col-resize",
                         userSelect: "none",
@@ -543,7 +599,7 @@ export default function Articulos() {
                     position: "absolute",
                     top: 0,
                     right: 0,
-                    width: "10px",
+                    width: "5px",
                     height: "100%",
                     cursor: "col-resize",
                     userSelect: "none",
@@ -552,42 +608,6 @@ export default function Articulos() {
                   title="Arrastrar para cambiar ancho"
                 />
               </th>
-            </tr>
-
-            <tr>
-              {columnas.map((col) => (
-                <th
-                  key={col}
-                  style={{
-                    minWidth: 0,
-                    width: `${colWidths[col] || 160}px`,
-                    maxWidth: `${colWidths[col] || 160}px`,
-                    boxSizing: "border-box",
-                    overflow: "hidden",
-                  }}
-                >
-                  <input
-                    placeholder="Filtrar..."
-                    value={filtros[col] ?? ""}
-                    onChange={(e) => handleFilter(e, col)}
-                    style={{
-                      width: "100%",
-                      maxWidth: "100%",
-                      minWidth: 0,
-                      boxSizing: "border-box",
-                    }}
-                  />
-                </th>
-              ))}
-              <th
-                style={{
-                  minWidth: 0,
-                  width: `${colWidths["ACCIONES"] || 170}px`,
-                  maxWidth: `${colWidths["ACCIONES"] || 170}px`,
-                  boxSizing: "border-box",
-                  overflow: "hidden",
-                }}
-              ></th>
             </tr>
           </thead>
 
@@ -612,31 +632,13 @@ export default function Articulos() {
                       }}
                     >
                       {isUbicacion ? (
-                        <input
+                        <UbicacionAutocomplete
                           value={a.ubicacion ?? ""}
+                          ubicaciones={ubicaciones}
                           disabled={savingUbicacionId === a.id_articulo}
-                          onChange={(e) =>
-                            actualizarUbicacionLocal(
-                              a.id_articulo,
-                              e.target.value,
-                            )
-                          }
-                          onBlur={() => guardarUbicacion(a)}
-                          onKeyDown={(e) => handleUbicacionKeyDown(e, a)}
-                          placeholder="Ubicación"
-                          style={{
-                            width: "100%",
-                            height: "28px",
-                            boxSizing: "border-box",
-                            border: "1px solid #d0d7de",
-                            borderRadius: "6px",
-                            padding: "3px 6px",
-                            fontSize: "13px",
-                            background:
-                              savingUbicacionId === a.id_articulo
-                                ? "#f3f4f6"
-                                : "white",
-                          }}
+                          onChange={(value) => actualizarUbicacionLocal(a.id_articulo, value)}
+                          onValidSave={(value) => guardarUbicacion(a, value)}
+                          onCancel={() => fetchArticulos()}
                         />
                       ) : (
                         String(getCellValue(a, k) ?? "")
