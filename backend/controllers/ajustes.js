@@ -27,7 +27,6 @@ const MOTIVOS_SISTEMA = new Set([
 const esMotivoSistema = (nombre) =>
   MOTIVOS_SISTEMA.has(normalizarMotivoSistema(nombre));
 
-
 function toNumber0(v) {
   if (v === null || v === undefined) return 0;
   if (typeof v === "number" && Number.isFinite(v)) return v;
@@ -49,6 +48,18 @@ function toNumber0(v) {
 function asInt(v) {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : NaN;
+}
+
+function normalizarTipoMovimiento(v) {
+  const s = String(v ?? "").trim().toUpperCase();
+
+  if (!s) return null;
+
+  if (s === "INGRESO" || s === "EGRESO") {
+    return s;
+  }
+
+  return null;
 }
 
 // Resuelve/valida id_ubicacion para un depósito.
@@ -255,7 +266,7 @@ async function insertDetalle(
           @falt,
           @obs
         )
-      `
+      `,
   );
 }
 
@@ -303,7 +314,11 @@ exports.getMotivos = async (_req, res) => {
     const pool = await getPool();
 
     const r = await pool.request().query(`
-      SELECT id_motivo, nombre, activo
+      SELECT 
+        id_motivo, 
+        nombre, 
+        activo,
+        tipo_movimiento
       FROM dbo.ajustes_motivos
       WHERE UPPER(LTRIM(RTRIM(nombre))) NOT IN (
         N'CONSUMO PRODUCCIÓN (DROPBOX)',
@@ -327,6 +342,7 @@ exports.getMotivos = async (_req, res) => {
 exports.createMotivo = async (req, res) => {
   try {
     const nombre = String(req.body?.nombre ?? "").trim();
+    const tipoMovimiento = normalizarTipoMovimiento(req.body?.tipo_movimiento);
 
     if (!nombre) {
       return res.status(400).json({ error: "Nombre obligatorio" });
@@ -341,12 +357,26 @@ exports.createMotivo = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    const r = await pool.request().input("n", sql.VarChar, nombre).query(`
-      INSERT INTO dbo.ajustes_motivos (nombre, activo)
-      VALUES (@n, 1);
+    const r = await pool
+      .request()
+      .input("n", sql.VarChar(150), nombre)
+      .input("tipo", sql.VarChar(10), tipoMovimiento)
+      .query(`
+        INSERT INTO dbo.ajustes_motivos 
+        (
+          nombre, 
+          activo,
+          tipo_movimiento
+        )
+        VALUES 
+        (
+          @n, 
+          1,
+          @tipo
+        );
 
-      SELECT SCOPE_IDENTITY() AS id_motivo;
-    `);
+        SELECT SCOPE_IDENTITY() AS id_motivo;
+      `);
 
     return res.status(201).json({
       ok: true,
@@ -390,9 +420,14 @@ exports.updateMotivo = async (req, res) => {
       "activo"
     );
 
-    if (!vieneNombre && !vieneActivo) {
+    const vieneTipoMovimiento = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      "tipo_movimiento"
+    );
+
+    if (!vieneNombre && !vieneActivo && !vieneTipoMovimiento) {
       return res.status(400).json({
-        error: "Debe enviar al menos nombre o activo",
+        error: "Debe enviar al menos nombre, activo o tipo de movimiento",
       });
     }
 
@@ -410,6 +445,10 @@ exports.updateMotivo = async (req, res) => {
 
     const activo = vieneActivo ? (req.body.activo ? 1 : 0) : null;
 
+    const tipoMovimiento = vieneTipoMovimiento
+      ? normalizarTipoMovimiento(req.body?.tipo_movimiento)
+      : null;
+
     await poolConnect;
     const pool = await getPool();
 
@@ -417,7 +456,7 @@ exports.updateMotivo = async (req, res) => {
       .request()
       .input("id", sql.Int, id)
       .query(`
-        SELECT id_motivo, nombre, activo
+        SELECT id_motivo, nombre, activo, tipo_movimiento
         FROM dbo.ajustes_motivos
         WHERE id_motivo = @id
       `);
@@ -436,14 +475,20 @@ exports.updateMotivo = async (req, res) => {
     const rq = pool
       .request()
       .input("id", sql.Int, id)
-      .input("n", sql.VarChar, nombre)
-      .input("a", sql.Bit, activo);
+      .input("n", sql.VarChar(150), nombre)
+      .input("a", sql.Bit, activo)
+      .input("tipo", sql.VarChar(10), tipoMovimiento)
+      .input("vieneTipo", sql.Bit, vieneTipoMovimiento ? 1 : 0);
 
     const r = await rq.query(`
       UPDATE dbo.ajustes_motivos
       SET
         nombre = CASE WHEN @n IS NULL THEN nombre ELSE @n END,
-        activo = CASE WHEN @a IS NULL THEN activo ELSE @a END
+        activo = CASE WHEN @a IS NULL THEN activo ELSE @a END,
+        tipo_movimiento = CASE 
+          WHEN @vieneTipo = 0 THEN tipo_movimiento 
+          ELSE @tipo 
+        END
       WHERE id_motivo = @id;
 
       SELECT @@ROWCOUNT AS affected;
@@ -485,10 +530,7 @@ exports.deleteMotivo = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    const actual = await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
+    const actual = await pool.request().input("id", sql.Int, id).query(`
         SELECT id_motivo, nombre, activo
         FROM dbo.ajustes_motivos
         WHERE id_motivo = @id
@@ -648,28 +690,28 @@ exports.create = async (req, res) => {
   const ubicacionIdBody = req.body?.id_ubicacion ?? null;
 
   const remitoReferenciaRaw = req.body?.remito_referencia;
-const remitoReferencia =
-  remitoReferenciaRaw === null ||
-  remitoReferenciaRaw === undefined ||
-  String(remitoReferenciaRaw).trim() === ""
-    ? null
-    : String(remitoReferenciaRaw).trim();
+  const remitoReferencia =
+    remitoReferenciaRaw === null ||
+    remitoReferenciaRaw === undefined ||
+    String(remitoReferenciaRaw).trim() === ""
+      ? null
+      : String(remitoReferenciaRaw).trim();
 
-const referenteRaw = req.body?.id_referente;
-const referenteId =
-  referenteRaw === null ||
-  referenteRaw === undefined ||
-  String(referenteRaw).trim() === ""
-    ? null
-    : asInt(referenteRaw);
+  const referenteRaw = req.body?.id_referente;
+  const referenteId =
+    referenteRaw === null ||
+    referenteRaw === undefined ||
+    String(referenteRaw).trim() === ""
+      ? null
+      : asInt(referenteRaw);
 
-const fechaRealRaw = req.body?.fecha_real;
-const fechaReal =
-  fechaRealRaw === null ||
-  fechaRealRaw === undefined ||
-  String(fechaRealRaw).trim() === ""
-    ? null
-    : String(fechaRealRaw).trim();
+  const fechaRealRaw = req.body?.fecha_real;
+  const fechaReal =
+    fechaRealRaw === null ||
+    fechaRealRaw === undefined ||
+    String(fechaRealRaw).trim() === ""
+      ? null
+      : String(fechaRealRaw).trim();
 
   const motivoId = asInt(req.body?.motivo_id);
   if (!Number.isFinite(motivoId) || motivoId <= 0) {
@@ -677,17 +719,19 @@ const fechaReal =
   }
 
   const obraRaw = req.body?.obra;
-const versionRaw = req.body?.version;
+  const versionRaw = req.body?.version;
 
-const obra =
-  obraRaw === null || obraRaw === undefined || String(obraRaw).trim() === ""
-    ? null
-    : String(obraRaw).trim();
+  const obra =
+    obraRaw === null || obraRaw === undefined || String(obraRaw).trim() === ""
+      ? null
+      : String(obraRaw).trim();
 
-const version =
-  versionRaw === null || versionRaw === undefined || String(versionRaw).trim() === ""
-    ? null
-    : String(versionRaw).trim();
+  const version =
+    versionRaw === null ||
+    versionRaw === undefined ||
+    String(versionRaw).trim() === ""
+      ? null
+      : String(versionRaw).trim();
 
   if (referenteId !== null && !Number.isFinite(referenteId)) {
     return res.status(400).json({ error: "Referente inválido" });
@@ -750,8 +794,7 @@ const version =
 
     // 1.c) Validar referente si viene informado
     if (referenteId !== null) {
-      const ref = await new sql.Request(trans)
-        .input("id", sql.Int, referenteId)
+      const ref = await new sql.Request(trans).input("id", sql.Int, referenteId)
         .query(`
           SELECT id_referente, nombre, activo
           FROM dbo.referentes WITH (UPDLOCK, HOLDLOCK)
@@ -841,16 +884,16 @@ const version =
 
     // 6) Cabecera
     await new sql.Request(trans)
-  .input("nro", sql.Int, nextNro)
-  .input("depNom", sql.VarChar, nombreDeposito)
-  .input("motId", sql.Int, motivoId)
-  .input("motNom", sql.VarChar, motivoNombre)
-  .input("usr", sql.VarChar, usuario)
-  .input("obra", sql.NVarChar(sql.MAX), obra)
-  .input("version", sql.NVarChar(sql.MAX), version)
-  .input("remitoReferencia", sql.VarChar, remitoReferencia)
-  .input("referenteId", sql.Int, referenteId)
-  .input("fechaReal", sql.Date, fechaReal).query(`
+      .input("nro", sql.Int, nextNro)
+      .input("depNom", sql.VarChar, nombreDeposito)
+      .input("motId", sql.Int, motivoId)
+      .input("motNom", sql.VarChar, motivoNombre)
+      .input("usr", sql.VarChar, usuario)
+      .input("obra", sql.NVarChar(sql.MAX), obra)
+      .input("version", sql.NVarChar(sql.MAX), version)
+      .input("remitoReferencia", sql.VarChar, remitoReferencia)
+      .input("referenteId", sql.Int, referenteId)
+      .input("fechaReal", sql.Date, fechaReal).query(`
     INSERT INTO dbo.ajustes
     (
       numero_ajuste,
@@ -882,24 +925,24 @@ const version =
   `);
 
     // 7) Detalles + stock
-for (const it of normItems) {
-  const { id_articulo, descripcion } = byCode.get(it.cod);
+    for (const it of normItems) {
+      const { id_articulo, descripcion } = byCode.get(it.cod);
 
-  await insertDetalle(trans, {
-    ajusteId: nextNro,
-    cod: it.cod,
-    desc: descripcion || "",
-    cantidad: it.cant,
-    usuario,
-  });
+      await insertDetalle(trans, {
+        ajusteId: nextNro,
+        cod: it.cod,
+        desc: descripcion || "",
+        cantidad: it.cant,
+        usuario,
+      });
 
-  await upsertStockDelta(trans, {
-    depositoId,
-    articuloId: id_articulo,
-    ubicacionId,
-    delta: it.cant,
-  });
-}
+      await upsertStockDelta(trans, {
+        depositoId,
+        articuloId: id_articulo,
+        ubicacionId,
+        delta: it.cant,
+      });
+    }
 
     await trans.commit();
 
@@ -1169,6 +1212,80 @@ exports.importarDesdeExcel = async (req, res) => {
 // ==========================
 // CONSUMIR PRODUCCIÓN (DROPBOX)
 // ==========================
+
+async function insertAlertaConsumoProduccion(
+  trans,
+  {
+    numeroMovimiento,
+    obra,
+    version,
+    codigo,
+    descripcion,
+    cantidadRequerida,
+    cantidadAjustada,
+    cantidadFaltante,
+    motivo,
+  },
+) {
+  await new sql.Request(trans)
+    .input("numero", sql.Int, numeroMovimiento ?? null)
+    .input(
+      "obra",
+      sql.NVarChar(sql.MAX),
+      obra == null ? null : String(obra).trim(),
+    )
+    .input(
+      "version",
+      sql.NVarChar(sql.MAX),
+      version == null ? null : String(version).trim(),
+    )
+    .input(
+      "codigo",
+      sql.VarChar(100),
+      codigo == null ? null : String(codigo).trim(),
+    )
+    .input(
+      "descripcion",
+      sql.VarChar(500),
+      descripcion == null ? null : String(descripcion).trim(),
+    )
+    .input("req", sql.Int, cantidadRequerida ?? null)
+    .input("ajust", sql.Int, cantidadAjustada ?? null)
+    .input("falt", sql.Int, cantidadFaltante ?? null)
+    .input(
+      "motivo",
+      sql.NVarChar(sql.MAX),
+      motivo == null ? null : String(motivo).trim(),
+    ).query(`
+      INSERT INTO dbo.consumo_produccion_alertas
+      (
+        numero_movimiento,
+        obra,
+        version,
+        codigo,
+        descripcion,
+        cantidad_requerida,
+        cantidad_ajustada,
+        cantidad_faltante,
+        motivo,
+        leida
+      )
+      VALUES
+      (
+        @numero,
+        @obra,
+        @version,
+        @codigo,
+        @descripcion,
+        @req,
+        @ajust,
+        @falt,
+        @motivo,
+        0
+      )
+    `);
+}
+
 async function runConsumoProduccion() {
   let trans = null;
 
@@ -1253,8 +1370,7 @@ async function runConsumoProduccion() {
     const depositoNombre = String(depRes.recordset[0].nombre || "Producción");
 
     // 2.2) ubicación GENERAL dentro de Producción
-    const ubRes = await new sql.Request(trans)
-      .input("dep", sql.Int, depositoId)
+    const ubRes = await new sql.Request(trans).input("dep", sql.Int, depositoId)
       .query(`
         SELECT TOP 1 id_ubicacion
         FROM dbo.ubicaciones WITH (UPDLOCK, HOLDLOCK)
@@ -1314,21 +1430,21 @@ async function runConsumoProduccion() {
       if (!colA) break;
 
       const obraRaw = r[0];
-const versionRaw = r[4];
+      const versionRaw = r[4];
 
-const obra =
-  obraRaw === null ||
-  obraRaw === undefined ||
-  String(obraRaw).trim() === ""
-    ? null
-    : String(obraRaw).trim();
+      const obra =
+        obraRaw === null ||
+        obraRaw === undefined ||
+        String(obraRaw).trim() === ""
+          ? null
+          : String(obraRaw).trim();
 
-const version =
-  versionRaw === null ||
-  versionRaw === undefined ||
-  String(versionRaw).trim() === ""
-    ? null
-    : String(versionRaw).trim();
+      const version =
+        versionRaw === null ||
+        versionRaw === undefined ||
+        String(versionRaw).trim() === ""
+          ? null
+          : String(versionRaw).trim();
 
       const grupo = getGrupo(obra, version);
 
@@ -1357,9 +1473,11 @@ const version =
         continue;
       }
 
-      const artRes = await new sql.Request(trans)
-        .input("c", sql.VarChar, codigo)
-        .query(`
+      const artRes = await new sql.Request(trans).input(
+        "c",
+        sql.VarChar,
+        codigo,
+      ).query(`
           SELECT TOP 1 id_articulo, descripcion
           FROM dbo.articulos WITH (UPDLOCK, HOLDLOCK)
           WHERE UPPER(LTRIM(RTRIM(codigo))) = @c
@@ -1386,8 +1504,7 @@ const version =
       const existsStock = await new sql.Request(trans)
         .input("dep", sql.Int, depositoId)
         .input("art", sql.Int, idArt)
-        .input("ub", sql.Int, ubicacionId)
-        .query(`
+        .input("ub", sql.Int, ubicacionId).query(`
           SELECT TOP 1 cantidad
           FROM dbo.stock WITH (UPDLOCK, HOLDLOCK)
           WHERE id_deposito = @dep
@@ -1539,10 +1656,17 @@ const version =
         .input("depNom", sql.VarChar(100), String(depositoNombre ?? "").trim())
         .input("motId", sql.Int, motivoIdDropbox)
         .input("mot", sql.VarChar(150), "CONSUMO PRODUCCIÓN (DROPBOX)")
-        .input("obra", sql.NVarChar(sql.MAX), grupo.obra == null ? null : String(grupo.obra).trim())
-        .input("version", sql.NVarChar(sql.MAX), grupo.version == null ? null : String(grupo.version).trim())
-        .input("usr", sql.VarChar(100), "sistema")
-        .query(`
+        .input(
+          "obra",
+          sql.NVarChar(sql.MAX),
+          grupo.obra == null ? null : String(grupo.obra).trim(),
+        )
+        .input(
+          "version",
+          sql.NVarChar(sql.MAX),
+          grupo.version == null ? null : String(grupo.version).trim(),
+        )
+        .input("usr", sql.VarChar(100), "sistema").query(`
           INSERT INTO dbo.ajustes
           (
             numero_ajuste,
@@ -1581,6 +1705,20 @@ const version =
           cantidadFaltante: v.faltante || null,
           observacion: v.observacion || null,
         });
+
+        if ((v.faltante || 0) > 0) {
+          await insertAlertaConsumoProduccion(trans, {
+            numeroMovimiento: nextNro,
+            obra: grupo.obra,
+            version: grupo.version,
+            codigo,
+            descripcion: v.desc || "",
+            cantidadRequerida: v.requerido || null,
+            cantidadAjustada: Math.abs(v.delta || 0),
+            cantidadFaltante: v.faltante || null,
+            motivo: v.observacion || "Consumo parcial: quedó cantidad faltante",
+          });
+        }
       }
 
       // 5.b) Detalles no ajustados por error dentro de su obra/version.
@@ -1594,6 +1732,18 @@ const version =
           cantidadRequerida: f.requerido || null,
           cantidadFaltante: f.faltante || null,
           observacion: `Fila ${f.row}: ${f.reason}`,
+        });
+
+        await insertAlertaConsumoProduccion(trans, {
+          numeroMovimiento: nextNro,
+          obra: grupo.obra,
+          version: grupo.version,
+          codigo: f.codigo || "SIN_CODIGO",
+          descripcion: f.desc || "",
+          cantidadRequerida: f.requerido || null,
+          cantidadAjustada: f.ajustado || 0,
+          cantidadFaltante: f.faltante || null,
+          motivo: `Fila ${f.row}: ${f.reason}`,
         });
       }
 
@@ -1656,6 +1806,80 @@ exports.consumirProduccionDropbox = async (_req, res) => {
       detalle: err.message,
       status,
       dropbox: dropboxBody || null,
+    });
+  }
+};
+
+exports.getAlertasConsumoPendientes = async (_req, res) => {
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const r = await pool.request().query(`
+      SELECT TOP 200
+        id_alerta,
+        fecha,
+        numero_movimiento,
+        obra,
+        version,
+        codigo,
+        descripcion,
+        cantidad_requerida,
+        cantidad_ajustada,
+        cantidad_faltante,
+        motivo
+      FROM dbo.consumo_produccion_alertas
+      WHERE leida = 0
+      ORDER BY fecha ASC, id_alerta ASC
+    `);
+
+    return res.json(r.recordset || []);
+  } catch (err) {
+    console.error("getAlertasConsumoPendientes:", err);
+    return res.status(500).json({
+      error: "Error al obtener alertas de consumo",
+      detalle: err.message,
+    });
+  }
+};
+
+exports.marcarAlertasConsumoLeidas = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids)
+      ? req.body.ids.map((x) => Number(x)).filter(Number.isFinite)
+      : [];
+
+    if (!ids.length) {
+      return res.json({ ok: true, afectados: 0 });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const rq = pool.request();
+    const params = ids.map((id, i) => {
+      const p = `id${i}`;
+      rq.input(p, sql.Int, id);
+      return `@${p}`;
+    });
+
+    const r = await rq.query(`
+      UPDATE dbo.consumo_produccion_alertas
+      SET leida = 1
+      WHERE id_alerta IN (${params.join(",")});
+
+      SELECT @@ROWCOUNT AS afectados;
+    `);
+
+    return res.json({
+      ok: true,
+      afectados: Number(r.recordset?.[0]?.afectados || 0),
+    });
+  } catch (err) {
+    console.error("marcarAlertasConsumoLeidas:", err);
+    return res.status(500).json({
+      error: "Error al marcar alertas como leídas",
+      detalle: err.message,
     });
   }
 };

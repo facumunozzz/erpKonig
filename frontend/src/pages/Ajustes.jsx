@@ -3,7 +3,10 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
 import ReferentesModal from "../components/ReferentesModal";
-import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
+import {
+  useExcelFilters,
+  ExcelFilterButton,
+} from "../components/ExcelColumnFilter";
 
 const AJUSTE_COLUMNS = [
   ["fecha", "Fecha"],
@@ -15,7 +18,7 @@ const AJUSTE_COLUMNS = [
   ["numero_ajuste", "Nro Ajuste"],
 ];
 
-  const normalizarMotivo = (v) =>
+const normalizarMotivo = (v) =>
   String(v ?? "")
     .trim()
     .normalize("NFD")
@@ -30,9 +33,7 @@ const MOTIVOS_OCULTOS = new Set([
 const esMotivoOculto = (nombre) =>
   MOTIVOS_OCULTOS.has(normalizarMotivo(nombre));
 
-
 export default function Ajustes() {
-
   const navigate = useNavigate();
 
   const [ajustes, setAjustes] = useState([]);
@@ -42,6 +43,7 @@ export default function Ajustes() {
   const [showMotivos, setShowMotivos] = useState(false);
   const [motivos, setMotivos] = useState([]);
   const [nuevoMotivo, setNuevoMotivo] = useState("");
+  const [nuevoTipoMovimiento, setNuevoTipoMovimiento] = useState("");
   const [motivosError, setMotivosError] = useState("");
 
   // Referentes (ABM modal reutilizable)
@@ -70,7 +72,7 @@ export default function Ajustes() {
       alert(
         `Proceso finalizado. Ajustados: ${res.data.ajustados || 0}\nFallidos: ${
           res.data.fallidos || 0
-        }`
+        }`,
       );
 
       fetchAjustes();
@@ -141,18 +143,17 @@ export default function Ajustes() {
   // Motivos ABM
   // =========================
   const fetchMotivos = async () => {
-  const res = await api.get("/ajustes/motivos");
+    const res = await api.get("/ajustes/motivos");
 
-  setMotivos(
-    (res.data || []).filter((m) => !esMotivoOculto(m.nombre))
-  );
-};
+    setMotivos((res.data || []).filter((m) => !esMotivoOculto(m.nombre)));
+  };
 
   const abrirMotivos = async () => {
     setShowMotivos(true);
     setMotivosError("");
     setMotivos([]);
     setNuevoMotivo("");
+    setNuevoTipoMovimiento("");
 
     try {
       await fetchMotivos();
@@ -162,7 +163,7 @@ export default function Ajustes() {
       setMotivosError(
         e.response?.data?.error ||
           e.message ||
-          "No se pudieron cargar los motivos (revisar backend / rutas)."
+          "No se pudieron cargar los motivos (revisar backend / rutas).",
       );
     }
   };
@@ -173,9 +174,13 @@ export default function Ajustes() {
     if (!n) return;
 
     try {
-      await api.post("/ajustes/motivos", { nombre: n });
+      await api.post("/ajustes/motivos", {
+        nombre: n,
+        tipo_movimiento: nuevoTipoMovimiento || null,
+      });
 
       setNuevoMotivo("");
+      setNuevoTipoMovimiento("");
       await fetchMotivos();
       setMotivosError("");
     } catch (e) {
@@ -213,6 +218,19 @@ export default function Ajustes() {
     }
   };
 
+  const cambiarTipoMovimientoMotivo = async (id, tipo_movimiento) => {
+    try {
+      await api.put(`/ajustes/motivos/${id}`, {
+        tipo_movimiento: tipo_movimiento || null,
+      });
+
+      await fetchMotivos();
+      setMotivosError("");
+    } catch (e) {
+      alert(e.response?.data?.error || "Error al cambiar tipo de movimiento");
+    }
+  };
+
   const borrarMotivo = async (id) => {
     if (!confirm("¿Borrar motivo? Solo se podrá borrar si nunca fue usado.")) {
       return;
@@ -234,7 +252,9 @@ export default function Ajustes() {
     }
 
     if (key === "fecha_real") {
-      return a.fecha_real ? new Date(a.fecha_real).toLocaleDateString("es-AR") : "";
+      return a.fecha_real
+        ? new Date(a.fecha_real).toLocaleDateString("es-AR")
+        : "";
     }
 
     if (key === "numero_ajuste") {
@@ -251,7 +271,7 @@ export default function Ajustes() {
         label,
         getValue: (row) => getAjusteValue(row, key),
       })),
-    []
+    [],
   );
 
   const excel = useExcelFilters(ajustes, excelColumns, {
@@ -261,11 +281,14 @@ export default function Ajustes() {
   // =========================
   // Filtro
   // =========================
-  const filtrados = excel.rows.filter((a) =>
-    !filtro ||
-    Object.values(a).some((v) =>
-      String(v ?? "").toLowerCase().includes(filtro.toLowerCase())
-    )
+  const filtrados = excel.rows.filter(
+    (a) =>
+      !filtro ||
+      Object.values(a).some((v) =>
+        String(v ?? "")
+          .toLowerCase()
+          .includes(filtro.toLowerCase()),
+      ),
   );
 
   // =========================
@@ -275,7 +298,7 @@ export default function Ajustes() {
 
   const paginated = filtrados.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
 
   const irPagina = (p) => {
@@ -295,9 +318,7 @@ export default function Ajustes() {
 
         <button onClick={abrirMotivos}>🧾 Motivos</button>
 
-        <button onClick={() => setShowReferentes(true)}>
-          👤 Actuantes
-        </button>
+        <button onClick={() => setShowReferentes(true)}>👤 Actuantes</button>
 
         <button
           onClick={() => {
@@ -375,7 +396,9 @@ export default function Ajustes() {
                 onClick={() => navigate(`/ajustes/${id}`)}
                 title="Ver detalle"
               >
-                <td>{a.fecha ? new Date(a.fecha).toLocaleString("es-AR") : ""}</td>
+                <td>
+                  {a.fecha ? new Date(a.fecha).toLocaleString("es-AR") : ""}
+                </td>
 
                 <td>
                   {a.fecha_real
@@ -457,9 +480,7 @@ export default function Ajustes() {
           {Array.from({ length: totalPages }, (_, i) => i + 1)
             .filter(
               (p) =>
-                p === 1 ||
-                p === totalPages ||
-                Math.abs(p - currentPage) <= 1
+                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
             )
             .map((p, i, arr) => (
               <React.Fragment key={p}>
@@ -507,7 +528,10 @@ export default function Ajustes() {
             }
           }}
         >
-          <div className="modal-card" style={{ position: "relative", zIndex: 999999 }}>
+          <div
+            className="modal-card"
+            style={{ position: "relative", zIndex: 999999 }}
+          >
             <div className="modal-head">
               <h3>Motivos de Ajuste</h3>
               <button onClick={() => setShowMotivos(false)}>✕</button>
@@ -529,6 +553,16 @@ export default function Ajustes() {
                 }}
               />
 
+              <select
+                value={nuevoTipoMovimiento}
+                onChange={(e) => setNuevoTipoMovimiento(e.target.value)}
+                title="Tipo de movimiento sugerido"
+              >
+                <option value="">Ingreso / Egreso</option>
+                <option value="INGRESO">Ingreso</option>
+                <option value="EGRESO">Egreso</option>
+              </select>
+
               <button className="btn-primary" onClick={crearMotivo}>
                 Agregar
               </button>
@@ -541,6 +575,7 @@ export default function Ajustes() {
                 <thead>
                   <tr>
                     <th>Nombre</th>
+                    <th>Tipo</th>
                     <th>Activo</th>
                     <th>Acciones</th>
                   </tr>
@@ -550,6 +585,23 @@ export default function Ajustes() {
                   {motivos.map((m) => (
                     <tr key={m.id_motivo}>
                       <td>{m.nombre}</td>
+
+                      <td>
+                        <select
+                          value={m.tipo_movimiento || ""}
+                          onChange={(e) =>
+                            cambiarTipoMovimientoMotivo(
+                              m.id_motivo,
+                              e.target.value,
+                            )
+                          }
+                        >
+                          <option value="">Ingreso / Egreso</option>
+                          <option value="INGRESO">Ingreso</option>
+                          <option value="EGRESO">Egreso</option>
+                        </select>
+                      </td>
+
                       <td>{m.activo ? "SI" : "NO"}</td>
 
                       <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -579,7 +631,7 @@ export default function Ajustes() {
 
                   {motivos.length === 0 && (
                     <tr>
-                      <td colSpan={3}>Sin motivos.</td>
+                      <td colSpan={4}>Sin motivos.</td>
                     </tr>
                   )}
                 </tbody>

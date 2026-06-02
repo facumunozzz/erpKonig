@@ -17,10 +17,13 @@ router.post("/motivos", authRequired, controller.createMotivo);
 router.put("/motivos/:id", authRequired, controller.updateMotivo);
 router.delete("/motivos/:id", authRequired, controller.deleteMotivo);
 
+// alertas consumo producción
+router.get("/alertas-consumo/pendientes", authRequired, controller.getAlertasConsumoPendientes);
+router.put("/alertas-consumo/marcar-leidas", authRequired, controller.marcarAlertasConsumoLeidas);
+
 // listados
 router.get("/", authRequired, controller.getAll);
 router.get("/:id", authRequired, controller.getById);
 router.post("/", authRequired, controller.create);
 
 module.exports = router;
-

@@ -391,6 +391,12 @@ export default function NuevoAjuste() {
 
   const hayItemsConDatos = items.some((it) => String(it.codigo || "").trim());
 
+const motivoSeleccionado = motivos.find(
+  (m) => String(m.id_motivo) === String(motivoId)
+);
+
+const tipoMovimientoFijo = motivoSeleccionado?.tipo_movimiento || "";
+
   return (
     <div className="nueva-transferencia-page">
       <div className="nt-header">
@@ -426,42 +432,70 @@ export default function NuevoAjuste() {
             <label>Motivo</label>
 
             <select
-              value={motivoId}
-              onChange={(e) => setMotivoId(e.target.value)}
-            >
-              <option value="">-- Seleccioná motivo --</option>
+  value={motivoId}
+  onChange={(e) => {
+    const id = e.target.value;
+    setMotivoId(id);
 
-              {motivos.map((m) => (
-                <option key={m.id_motivo} value={m.id_motivo}>
-                  {m.nombre}
-                </option>
-              ))}
-            </select>
+    const motivo = motivos.find(
+      (m) => String(m.id_motivo) === String(id)
+    );
+
+    if (motivo?.tipo_movimiento === "INGRESO") {
+      setTipoAjuste("INGRESO");
+    }
+
+    if (motivo?.tipo_movimiento === "EGRESO") {
+      setTipoAjuste("EGRESO");
+    }
+  }}
+>
+  <option value="">-- Seleccioná motivo --</option>
+
+  {motivos.map((m) => (
+    <option key={m.id_motivo} value={m.id_motivo}>
+      {m.nombre}
+      {m.tipo_movimiento ? ` (${m.tipo_movimiento})` : " (Ingreso / Egreso)"}
+    </option>
+  ))}
+</select>
           </div>
 
           <div className="nt-field">
             <label>Tipo de ajuste</label>
 
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button
-                type="button"
-                className={`btn-light ${
-                  tipoAjuste === "INGRESO" ? "activo" : ""
-                }`}
-                onClick={() => setTipoAjuste("INGRESO")}
-              >
-                INGRESO
-              </button>
+             <button
+  type="button"
+  className={`btn-light ${
+    tipoAjuste === "INGRESO" ? "activo" : ""
+  }`}
+  disabled={tipoMovimientoFijo === "EGRESO"}
+  title={
+    tipoMovimientoFijo === "EGRESO"
+      ? "Este motivo está definido como egreso"
+      : ""
+  }
+  onClick={() => setTipoAjuste("INGRESO")}
+>
+  INGRESO
+</button>
 
               <button
-                type="button"
-                className={`btn-light ${
-                  tipoAjuste === "EGRESO" ? "activo" : ""
-                }`}
-                onClick={() => setTipoAjuste("EGRESO")}
-              >
-                EGRESO
-              </button>
+  type="button"
+  className={`btn-light ${
+    tipoAjuste === "EGRESO" ? "activo" : ""
+  }`}
+  disabled={tipoMovimientoFijo === "INGRESO"}
+  title={
+    tipoMovimientoFijo === "INGRESO"
+      ? "Este motivo está definido como ingreso"
+      : ""
+  }
+  onClick={() => setTipoAjuste("EGRESO")}
+>
+  EGRESO
+</button>
             </div>
           </div>
 
