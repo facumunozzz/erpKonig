@@ -1,14 +1,66 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import api from "../api/axiosConfig";
 import * as XLSX from "xlsx";
 import "./../styles/transferencias.css";
 import ServerExcelFilterButton from "../components/ServerExcelFilterButton";
 
+const STORAGE_KEY_MOVIMIENTOS = "movimientos_filtros_v1";
+const MOTIVO_CONSUMO_DROPBOX = "CONSUMO PRODUCCIÓN (DROPBOX)";
+
+const DEFAULT_SERVER_FILTERS = {
+  motivo: {
+    mode: "notIn",
+    values: [MOTIVO_CONSUMO_DROPBOX],
+  },
+};
+
+const DEFAULT_SORT_STATE = {
+  key: "",
+  dir: "",
+};
+
+function cargarPreferenciasMovimientos() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_MOVIMIENTOS);
+    if (!raw) {
+      return {
+        serverFilters: DEFAULT_SERVER_FILTERS,
+        sortState: DEFAULT_SORT_STATE,
+        pageSize: 100,
+      };
+    }
+
+    const parsed = JSON.parse(raw);
+
+    return {
+      serverFilters:
+        parsed?.serverFilters && typeof parsed.serverFilters === "object"
+          ? parsed.serverFilters
+          : DEFAULT_SERVER_FILTERS,
+
+      sortState:
+        parsed?.sortState && typeof parsed.sortState === "object"
+          ? parsed.sortState
+          : DEFAULT_SORT_STATE,
+
+      pageSize: Number(parsed?.pageSize) || 100,
+    };
+  } catch {
+    return {
+      serverFilters: DEFAULT_SERVER_FILTERS,
+      sortState: DEFAULT_SORT_STATE,
+      pageSize: 100,
+    };
+  }
+}
+
+
 function Movimientos() {
   const [rows, setRows] = useState([]);
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(100);
+  const preferenciasIniciales = useMemo(() => cargarPreferenciasMovimientos(), []);
+  const [pageSize, setPageSize] = useState(preferenciasIniciales.pageSize);
   const [gotoPage, setGotoPage] = useState("");
 
   const [totalRows, setTotalRows] = useState(0);
@@ -25,11 +77,17 @@ function Movimientos() {
   const [masivoEdit, setMasivoEdit] = useState(null);
   const [buscandoMasivo, setBuscandoMasivo] = useState(false);
 
-  const [serverFilters, setServerFilters] = useState({});
-  const [sortState, setSortState] = useState({
-    key: "",
-    dir: "",
-  });
+  const [serverFilters, setServerFilters] = useState(
+    preferenciasIniciales.serverFilters
+  );
+  const [sortState, setSortState] = useState(
+    preferenciasIniciales.sortState
+  );
+
+  const tableWrapRef = useRef(null);
+  const topScrollRef = useRef(null);
+  const topScrollInnerRef = useRef(null);
+  const tableRef = useRef(null);
 
   const formatFecha = (value) => {
     if (!value) return "";
@@ -43,6 +101,10 @@ function Movimientos() {
 
   const columnas = useMemo(
     () => [
+      {
+        key: "id_movimiento",
+        label: "ID Movimiento",
+      },
       {
         key: "numero_transaccion",
         label: "Número de transacción",
@@ -177,25 +239,48 @@ function Movimientos() {
   };
 
   useEffect(() => {
-    cargarReferentes();
-  }, []);
+    try {
+      localStorage.setItem(
+        STORAGE_KEY_MOVIMIENTOS,
+        JSON.stringify({
+          serverFilters,
+          sortState,
+          pageSize,
+        })
+      );
+    } catch (err) {
+      console.error("No se pudieron guardar los filtros de movimientos:", err);
+    }
+  }, [serverFilters, sortState, pageSize]);
 
   useEffect(() => {
     cargarMovimientos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, pageSize, serverFilters, sortState]);
 
   const limpiarFiltros = () => {
-    setServerFilters({});
-    setSortState({
-      key: "",
-      dir: "",
-    });
+    setServerFilters(DEFAULT_SERVER_FILTERS);
+    setSortState(DEFAULT_SORT_STATE);
     setCurrentPage(1);
     setGotoPage("");
+
+    try {
+      localStorage.setItem(
+        STORAGE_KEY_MOVIMIENTOS,
+        JSON.stringify({
+          serverFilters: DEFAULT_SERVER_FILTERS,
+          sortState: DEFAULT_SORT_STATE,
+          pageSize,
+        })
+      );
+    } catch (err) {
+      console.error("No se pudieron limpiar los filtros guardados:", err);
+    }
   };
 
   const abrirEdicion = (r) => {
     setMovEdit({
+      id_movimiento: r.id_movimiento ?? "",
       numero_transaccion: r.numero_transaccion ?? "",
       tipo_transaccion: r.tipo_transaccion ?? "",
       remito_referencia: r.remito_referencia ?? "",
@@ -273,6 +358,7 @@ function Movimientos() {
       const primero = data[0];
 
       setMasivoEdit({
+        id_movimiento: primero.id_movimiento ?? "",
         numero_transaccion: primero.numero_transaccion ?? numero,
         tipo_transaccion: primero.tipo_transaccion ?? "",
         remito_referencia: primero.remito_referencia ?? "",
@@ -358,6 +444,7 @@ function Movimientos() {
       const dataBase = Array.isArray(res.data) ? res.data : [];
 
       const data = dataBase.map((r) => ({
+        "ID Movimiento": r.id_movimiento ?? "",
         "Número de transacción": r.numero_transaccion ?? "",
         Fecha: formatFecha(r.fecha),
         "Fecha Real": formatFecha(r.fecha_real),
@@ -393,6 +480,45 @@ function Movimientos() {
     }
   };
 
+
+  useEffect(() => {
+    const wrap = tableWrapRef.current;
+    const top = topScrollRef.current;
+    const inner = topScrollInnerRef.current;
+    const table = tableRef.current;
+
+    if (!wrap || !top || !inner || !table) return;
+
+    const syncWidth = () => {
+      inner.style.width = `${table.scrollWidth}px`;
+    };
+
+    const syncFromTop = () => {
+      wrap.scrollLeft = top.scrollLeft;
+    };
+
+    const syncFromTable = () => {
+      top.scrollLeft = wrap.scrollLeft;
+    };
+
+    syncWidth();
+
+    top.addEventListener("scroll", syncFromTop);
+    wrap.addEventListener("scroll", syncFromTable);
+
+    const ro = new ResizeObserver(syncWidth);
+    ro.observe(table);
+
+    window.addEventListener("resize", syncWidth);
+
+    return () => {
+      top.removeEventListener("scroll", syncFromTop);
+      wrap.removeEventListener("scroll", syncFromTable);
+      ro.disconnect();
+      window.removeEventListener("resize", syncWidth);
+    };
+  }, [paginated]);
+
   return (
     <div className="transferencias-page">
       <h2 className="module-title">Movimientos</h2>
@@ -417,8 +543,19 @@ function Movimientos() {
         {loading && <span style={{ padding: "6px 10px" }}>Cargando...</span>}
       </div>
 
-      <div className="tabla-articulos-container">
-        <table className="tabla-movimientos">
+      <div className="tabla-scroll-top" ref={topScrollRef}>
+        <div ref={topScrollInnerRef} />
+      </div>
+
+      <div
+        className="tabla-articulos-container"
+        ref={tableWrapRef}
+        style={{
+          overflowX: "hidden",
+          overflowY: "auto",
+        }}
+      >
+        <table ref={tableRef} className="tabla-movimientos">
           <thead>
             <tr>
               {columnas.map((col) => (
@@ -455,18 +592,23 @@ function Movimientos() {
           <tbody>
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={18}>Sin movimientos.</td>
+                <td colSpan={19}>Sin movimientos.</td>
               </tr>
             ) : (
               paginated.map((r, i) => {
                 const editable =
                   r.tipo_transaccion === "AJUSTE" ||
-                  r.tipo_transaccion === "TRANSFERENCIA";
+                  r.tipo_transaccion === "TRANSFERENCIA" ||
+                  r.tipo_transaccion === "REMITO";
 
                 return (
                   <tr
-                    key={`${r.tipo_transaccion}-${r.numero_transaccion}-${r.codigo}-${i}`}
+                    key={
+                      r.id_movimiento ||
+                      `${r.tipo_transaccion}-${r.numero_transaccion}-${r.codigo}-${i}`
+                    }
                   >
+                    <td>{r.id_movimiento ?? ""}</td>
                     <td>{r.numero_transaccion ?? ""}</td>
                     <td>{formatFecha(r.fecha)}</td>
                     <td>{formatFecha(r.fecha_real)}</td>
@@ -606,6 +748,11 @@ function Movimientos() {
 
             <div className="form-grid">
               <label>
+                ID Movimiento
+                <input value={movEdit.id_movimiento} disabled />
+              </label>
+
+              <label>
                 Tipo
                 <input value={movEdit.tipo_transaccion} disabled />
               </label>
@@ -666,6 +813,7 @@ function Movimientos() {
                       id_referente: e.target.value,
                     }))
                   }
+                  disabled={movEdit.tipo_transaccion === "REMITO"}
                 >
                   <option value="">Sin actuante</option>
                   {referentes.map((r) => (
@@ -676,6 +824,13 @@ function Movimientos() {
                 </select>
               </label>
             </div>
+
+            {movEdit.tipo_transaccion === "REMITO" && (
+              <p style={{ marginTop: 10, fontSize: 13, opacity: 0.75 }}>
+                En remitos, este formulario edita la observación mostrada como
+                Remito / Referencia. No modifica artículos, cantidades ni stock.
+              </p>
+            )}
 
             <div className="modal-botones">
               <button className="btn-primary" onClick={guardarEdicion}>
@@ -790,6 +945,7 @@ function Movimientos() {
                           id_referente: e.target.value,
                         }))
                       }
+                      disabled={masivoEdit.tipo_transaccion === "REMITO"}
                     >
                       <option value="">Sin actuante</option>
                       {referentes.map((r) => (
@@ -800,6 +956,14 @@ function Movimientos() {
                     </select>
                   </label>
                 </div>
+
+                {masivoEdit.tipo_transaccion === "REMITO" && (
+                  <p style={{ marginTop: 10, fontSize: 13, opacity: 0.75 }}>
+                    En remitos, este formulario edita la observación mostrada
+                    como Remito / Referencia. No modifica artículos, cantidades
+                    ni stock.
+                  </p>
+                )}
               </>
             )}
 

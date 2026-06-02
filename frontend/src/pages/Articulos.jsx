@@ -49,6 +49,10 @@ export default function Articulos() {
   const [openUbicaciones, setOpenUbicaciones] = useState(false);
   const [ubicaciones, setUbicaciones] = useState([]);
   const excelRef = useRef(null);
+  const tableWrapRef = useRef(null);
+  const topScrollRef = useRef(null);
+  const topScrollInnerRef = useRef(null);
+  const tableRef = useRef(null);
 
   const limpiarFiltros = () => {
     setFiltros({});
@@ -378,6 +382,45 @@ export default function Articulos() {
 
   const pageButtons = buildPageButtons();
 
+
+  useEffect(() => {
+    const wrap = tableWrapRef.current;
+    const top = topScrollRef.current;
+    const inner = topScrollInnerRef.current;
+    const table = tableRef.current;
+
+    if (!wrap || !top || !inner || !table) return;
+
+    const syncWidth = () => {
+      inner.style.width = `${table.scrollWidth}px`;
+    };
+
+    const syncFromTop = () => {
+      wrap.scrollLeft = top.scrollLeft;
+    };
+
+    const syncFromTable = () => {
+      top.scrollLeft = wrap.scrollLeft;
+    };
+
+    syncWidth();
+
+    top.addEventListener("scroll", syncFromTop);
+    wrap.addEventListener("scroll", syncFromTable);
+
+    const ro = new ResizeObserver(syncWidth);
+    ro.observe(table);
+
+    window.addEventListener("resize", syncWidth);
+
+    return () => {
+      top.removeEventListener("scroll", syncFromTop);
+      wrap.removeEventListener("scroll", syncFromTable);
+      ro.disconnect();
+      window.removeEventListener("resize", syncWidth);
+    };
+  }, [paginated, colWidths]);
+
   return (
     <div
       className="articulos-container"
@@ -492,18 +535,24 @@ export default function Articulos() {
         }}
       />
 
+      <div className="tabla-scroll-top" ref={topScrollRef}>
+        <div ref={topScrollInnerRef} />
+      </div>
+
       <div
         className="tabla-articulos-container"
+        ref={tableWrapRef}
         style={{
           width: "100%",
           maxWidth: "100%",
           minWidth: 0,
-          overflowX: "auto",
+          overflowX: "hidden",
           overflowY: "auto",
           boxSizing: "border-box",
         }}
       >
         <table
+          ref={tableRef}
           className="tabla-articulos"
           style={{
             width: "max-content",

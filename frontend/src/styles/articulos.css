@@ -497,3 +497,17 @@ h2.module-title:hover::after {
 .btn-secundario:hover {
   background-color: #dbe2ea;
 }
+
+.tabla-scroll-top {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 16px;
+  margin-bottom: 6px;
+  box-sizing: border-box;
+}
+
+.tabla-scroll-top > div {
+  height: 1px;
+}

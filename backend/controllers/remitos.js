@@ -836,3 +836,110 @@ exports.importarPlanilla = async (req, res) => {
     });
   }
 };
+
+// ==========================
+// PUT /remitos/:id
+// Edita cabecera del remito
+// No toca detalle ni stock
+// ==========================
+exports.update = async (req, res) => {
+  try {
+    const numero_remito = clean(req.params.id);
+
+    if (!numero_remito) {
+      return res.status(400).json({ error: "Número de remito inválido" });
+    }
+
+    const nro_entrega =
+      req.body?.nro_entrega == null || String(req.body.nro_entrega).trim() === ""
+        ? null
+        : clean(req.body.nro_entrega);
+
+    const pedido =
+      req.body?.pedido == null || String(req.body.pedido).trim() === ""
+        ? null
+        : clean(req.body.pedido);
+
+    const proveedor =
+      req.body?.proveedor == null || String(req.body.proveedor).trim() === ""
+        ? null
+        : clean(req.body.proveedor);
+
+    const observacion =
+      req.body?.observacion == null || String(req.body.observacion).trim() === ""
+        ? null
+        : clean(req.body.observacion);
+
+    if (!proveedor) {
+      return res.status(400).json({
+        error: "Debe seleccionar proveedor",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    // Validar que exista el remito
+    const existe = await pool
+      .request()
+      .input("n", sql.VarChar(50), numero_remito)
+      .query(`
+        SELECT TOP 1 numero_remito
+        FROM dbo.remitos WITH (NOLOCK)
+        WHERE numero_remito = @n
+      `);
+
+    if (!existe.recordset.length) {
+      return res.status(404).json({
+        error: "Remito no encontrado",
+      });
+    }
+
+    // Validar proveedor existente
+    const proveedorValidado = await resolveProveedor(pool, proveedor);
+
+    if (!proveedorValidado) {
+      return res.status(400).json({
+        error: "Proveedor inexistente",
+        detalle: proveedor,
+      });
+    }
+
+    const r = await pool
+      .request()
+      .input("n", sql.VarChar(50), numero_remito)
+      .input("nroEntrega", sql.VarChar(80), nro_entrega)
+      .input("pedido", sql.VarChar(80), pedido)
+      .input("proveedor", sql.VarChar(200), proveedorValidado)
+      .input("observacion", sql.VarChar(400), observacion)
+      .query(`
+        UPDATE dbo.remitos
+        SET
+          nro_entrega = @nroEntrega,
+          pedido = @pedido,
+          proveedor = @proveedor,
+          observacion = @observacion
+        WHERE numero_remito = @n;
+
+        SELECT @@ROWCOUNT AS affected;
+      `);
+
+    if (Number(r.recordset[0].affected) !== 1) {
+      return res.status(404).json({
+        error: "Remito no encontrado",
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: "Remito actualizado correctamente",
+    });
+  } catch (err) {
+    console.error("remitos.update:", err);
+
+    return res.status(500).json({
+      error: "Error al actualizar remito",
+      detalle: err.message,
+    });
+  }
+};

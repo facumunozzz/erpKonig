@@ -1,4 +1,4 @@
-// controllers/movimientos.js
+// backend/controllers/movimientos.js
 const { sql, poolConnect, getPool } = require("../db");
 
 function q(s) {
@@ -39,6 +39,7 @@ function parseFilters(raw) {
 }
 
 const ALLOWED_SORT_COLUMNS = new Set([
+  "id_movimiento",
   "numero_transaccion",
   "fecha",
   "fecha_real",
@@ -59,6 +60,7 @@ const ALLOWED_SORT_COLUMNS = new Set([
 ]);
 
 const FILTER_COLUMNS = {
+  id_movimiento: "movimientos.id_movimiento",
   numero_transaccion: "movimientos.numero_transaccion",
   fecha: "CONVERT(VARCHAR(10), movimientos.fecha, 103)",
   fecha_real: "CONVERT(VARCHAR(10), movimientos.fecha_real, 103)",
@@ -82,11 +84,34 @@ function getOrderBy(sortKey, sortDir) {
   const key = ALLOWED_SORT_COLUMNS.has(sortKey) ? sortKey : "fecha";
   const dir = String(sortDir || "").toLowerCase() === "asc" ? "ASC" : "DESC";
 
-  if (key === "fecha" || key === "fecha_real") {
-    return `ORDER BY movimientos.${key} ${dir}, movimientos.numero_transaccion DESC, movimientos.codigo`;
+  if (!sortKey) {
+    return `
+      ORDER BY
+        movimientos.fecha DESC,
+        TRY_CONVERT(BIGINT, movimientos.numero_transaccion) DESC,
+        movimientos.numero_transaccion DESC,
+        movimientos.id_movimiento DESC
+    `;
   }
 
-  return `ORDER BY movimientos.${key} ${dir}, movimientos.fecha DESC, movimientos.numero_transaccion DESC`;
+  if (key === "fecha" || key === "fecha_real") {
+    return `
+      ORDER BY
+        movimientos.${key} ${dir},
+        TRY_CONVERT(BIGINT, movimientos.numero_transaccion) DESC,
+        movimientos.numero_transaccion DESC,
+        movimientos.id_movimiento DESC
+    `;
+  }
+
+  return `
+    ORDER BY
+      movimientos.${key} ${dir},
+      movimientos.fecha DESC,
+      TRY_CONVERT(BIGINT, movimientos.numero_transaccion) DESC,
+      movimientos.numero_transaccion DESC,
+      movimientos.id_movimiento DESC
+  `;
 }
 
 function addFilter(request, where, filters, key, columnSql) {
@@ -94,7 +119,6 @@ function addFilter(request, where, filters, key, columnSql) {
 
   if (raw === undefined || raw === null || raw === "") return;
 
-  // Texto simple: contiene
   if (typeof raw === "string") {
     const value = safeText(raw);
     if (!value) return;
@@ -105,8 +129,6 @@ function addFilter(request, where, filters, key, columnSql) {
     return;
   }
 
-  // Objeto: selección múltiple exacta
-  // { mode: "in", values: ["AJUSTE", "REINGRESO DE OBRA"] }
   if (typeof raw === "object" && raw.mode === "in") {
     const values = Array.isArray(raw.values)
       ? raw.values.map((x) => String(x ?? "").trim())
@@ -120,7 +142,9 @@ function addFilter(request, where, filters, key, columnSql) {
       const paramName = `f_${key}_${index}`;
 
       if (value === "__EMPTY__" || value === "") {
-        orParts.push(`(${columnSql} IS NULL OR CAST(${columnSql} AS NVARCHAR(MAX)) = '')`);
+        orParts.push(
+          `(${columnSql} IS NULL OR CAST(${columnSql} AS NVARCHAR(MAX)) = '')`
+        );
       } else {
         request.input(paramName, sql.NVarChar, value);
         orParts.push(`CAST(${columnSql} AS NVARCHAR(MAX)) = @${paramName}`);
@@ -131,8 +155,37 @@ function addFilter(request, where, filters, key, columnSql) {
     return;
   }
 
-  // Objeto: búsqueda contiene
-  // { mode: "contains", value: "AJU" }
+    // Objeto: exclusión múltiple exacta
+  // { mode: "notIn", values: ["CONSUMO PRODUCCIÓN (DROPBOX)"] }
+  if (typeof raw === "object" && raw.mode === "notIn") {
+    const values = Array.isArray(raw.values)
+      ? raw.values.map((x) => String(x ?? "").trim()).filter(Boolean)
+      : [];
+
+    if (!values.length) return;
+
+    const andParts = [];
+
+    values.forEach((value, index) => {
+      const paramName = `f_${key}_not_${index}`;
+
+      if (value === "__EMPTY__" || value === "") {
+        andParts.push(
+          `(${columnSql} IS NOT NULL AND CAST(${columnSql} AS NVARCHAR(MAX)) <> '')`
+        );
+      } else {
+        request.input(paramName, sql.NVarChar, value);
+        andParts.push(
+          `(${columnSql} IS NULL OR CAST(${columnSql} AS NVARCHAR(MAX)) <> @${paramName})`
+        );
+      }
+    });
+
+    where.push(`(${andParts.join(" AND ")})`);
+    return;
+  }
+
+
   if (typeof raw === "object" && raw.mode === "contains") {
     const value = safeText(raw.value);
     if (!value) return;
@@ -175,24 +228,34 @@ async function buildMovimientosBase(pool) {
   if (transfDetalleTable) {
     selects.push(`
       SELECT
-        CAST(t.numero_transferencia AS VARCHAR(50))         AS numero_transaccion,
-        CONVERT(date, t.fecha)                              AS fecha,
-        CONVERT(date, ISNULL(t.fecha_real, t.fecha))         AS fecha_real,
-        CAST(a.codigo AS VARCHAR(100))                      AS codigo,
-        CAST(a.descripcion AS VARCHAR(500))                 AS descripcion,
-        CAST(td.cantidad AS INT)                            AS cantidad,
-        CAST(t.origen AS VARCHAR(255))                      AS deposito_origen,
-        CAST(t.destino AS VARCHAR(255))                     AS deposito_destino,
-        CAST('TRANSFERENCIA' AS VARCHAR(50))                AS tipo_transaccion,
-        CAST(NULL AS VARCHAR(255))                          AS motivo,
-        CAST(t.remito_referencia AS VARCHAR(255))           AS remito_referencia,
-        CAST(NULL AS VARCHAR(255))                          AS obra,
-        CAST(NULL AS VARCHAR(255))                          AS version,
-        CAST(ref.nombre AS VARCHAR(255))                    AS referente,
-        t.id_referente                                      AS id_referente,
-        CAST(a.proveedor AS VARCHAR(255))                   AS proveedor,
-        CAST(NULL AS VARCHAR(10))                           AS ingreso_egreso,
-        CAST(t.usuario AS VARCHAR(255))                     AS usuario
+        CAST(
+          CONCAT(
+            'TRANSFERENCIA-',
+            t.numero_transferencia,
+            '-',
+            a.codigo,
+            '-',
+            td.cantidad
+          ) AS VARCHAR(300)
+        )                                                    AS id_movimiento,
+        CAST(t.numero_transferencia AS VARCHAR(50))          AS numero_transaccion,
+        CONVERT(date, t.fecha)                               AS fecha,
+        CONVERT(date, ISNULL(t.fecha_real, t.fecha))          AS fecha_real,
+        CAST(a.codigo AS VARCHAR(100))                       AS codigo,
+        CAST(a.descripcion AS VARCHAR(500))                  AS descripcion,
+        CAST(td.cantidad AS INT)                             AS cantidad,
+        CAST(t.origen AS VARCHAR(255))                       AS deposito_origen,
+        CAST(t.destino AS VARCHAR(255))                      AS deposito_destino,
+        CAST('TRANSFERENCIA' AS VARCHAR(50))                 AS tipo_transaccion,
+        CAST(NULL AS VARCHAR(255))                           AS motivo,
+        CAST(t.remito_referencia AS VARCHAR(255))            AS remito_referencia,
+        CAST(NULL AS VARCHAR(255))                           AS obra,
+        CAST(NULL AS VARCHAR(255))                           AS version,
+        CAST(ref.nombre AS VARCHAR(255))                     AS referente,
+        t.id_referente                                       AS id_referente,
+        CAST(a.proveedor AS VARCHAR(255))                    AS proveedor,
+        CAST(NULL AS VARCHAR(10))                            AS ingreso_egreso,
+        CAST(t.usuario AS VARCHAR(255))                      AS usuario
       FROM dbo.transferencias t
       JOIN dbo.${transfDetalleTable} td
         ON td.transferencia_id = t.id
@@ -206,12 +269,22 @@ async function buildMovimientosBase(pool) {
   if (ajustesTable && ajusteDetalleTable) {
     selects.push(`
       SELECT
-        CAST(a.numero_ajuste AS VARCHAR(50))                AS numero_transaccion,
-        CONVERT(date, a.fecha)                              AS fecha,
-        CONVERT(date, ISNULL(a.fecha_real, a.fecha))         AS fecha_real,
-        CAST(ad.cod_articulo AS VARCHAR(100))               AS codigo,
-        CAST(ad.descripcion AS VARCHAR(500))                AS descripcion,
-        ABS(CAST(ad.cantidad AS INT))                       AS cantidad,
+        CAST(
+          CONCAT(
+            'AJUSTE-',
+            a.numero_ajuste,
+            '-',
+            ad.cod_articulo,
+            '-',
+            ad.cantidad
+          ) AS VARCHAR(300)
+        )                                                    AS id_movimiento,
+        CAST(a.numero_ajuste AS VARCHAR(50))                 AS numero_transaccion,
+        CONVERT(date, a.fecha)                               AS fecha,
+        CONVERT(date, ISNULL(a.fecha_real, a.fecha))          AS fecha_real,
+        CAST(ad.cod_articulo AS VARCHAR(100))                AS codigo,
+        CAST(ad.descripcion AS VARCHAR(500))                 AS descripcion,
+        ABS(CAST(ad.cantidad AS INT))                        AS cantidad,
         CAST(
           CASE 
             WHEN CAST(ad.cantidad AS INT) < 0 THEN a.deposito 
@@ -224,14 +297,14 @@ async function buildMovimientosBase(pool) {
             ELSE NULL 
           END AS VARCHAR(255)
         )                                                    AS deposito_destino,
-        CAST('AJUSTE' AS VARCHAR(50))                       AS tipo_transaccion,
-        CAST(COALESCE(am.nombre, a.motivo) AS VARCHAR(255)) AS motivo,
-        CAST(a.remito_referencia AS VARCHAR(255))           AS remito_referencia,
-        CAST(a.obra AS VARCHAR(255))                        AS obra,
-        CAST(a.version AS VARCHAR(255))                     AS version,
-        CAST(ref.nombre AS VARCHAR(255))                    AS referente,
-        a.id_referente                                      AS id_referente,
-        CAST(art.proveedor AS VARCHAR(255))                 AS proveedor,
+        CAST('AJUSTE' AS VARCHAR(50))                        AS tipo_transaccion,
+        CAST(COALESCE(am.nombre, a.motivo) AS VARCHAR(255))  AS motivo,
+        CAST(a.remito_referencia AS VARCHAR(255))            AS remito_referencia,
+        CAST(a.obra AS VARCHAR(255))                         AS obra,
+        CAST(a.version AS VARCHAR(255))                      AS version,
+        CAST(ref.nombre AS VARCHAR(255))                     AS referente,
+        a.id_referente                                       AS id_referente,
+        CAST(art.proveedor AS VARCHAR(255))                  AS proveedor,
         CAST(
           CASE 
             WHEN CAST(ad.cantidad AS INT) < 0 THEN 'E'
@@ -239,7 +312,7 @@ async function buildMovimientosBase(pool) {
             ELSE ''
           END AS VARCHAR(10)
         )                                                    AS ingreso_egreso,
-        CAST(a.usuario AS VARCHAR(255))                     AS usuario
+        CAST(a.usuario AS VARCHAR(255))                      AS usuario
       FROM dbo.${ajustesTable} a
       JOIN dbo.${ajusteDetalleTable} ad
         ON ad.ajuste_id = a.numero_ajuste
@@ -255,12 +328,22 @@ async function buildMovimientosBase(pool) {
   if (remitosTable && remitosDetTable) {
     selects.push(`
       SELECT
-        CAST(r.numero_remito AS VARCHAR(50))                AS numero_transaccion,
-        CONVERT(date, r.fecha)                              AS fecha,
-        CONVERT(date, r.fecha)                              AS fecha_real,
-        CAST(rd.cod_articulo AS VARCHAR(100))               AS codigo,
-        CAST(rd.descripcion AS VARCHAR(500))                AS descripcion,
-        ABS(CAST(rd.cantidad AS INT))                       AS cantidad,
+        CAST(
+          CONCAT(
+            'REMITO-',
+            r.numero_remito,
+            '-',
+            rd.cod_articulo,
+            '-',
+            rd.cantidad
+          ) AS VARCHAR(300)
+        )                                                    AS id_movimiento,
+        CAST(r.numero_remito AS VARCHAR(50))                 AS numero_transaccion,
+        CONVERT(date, r.fecha)                               AS fecha,
+        CONVERT(date, r.fecha)                               AS fecha_real,
+        CAST(rd.cod_articulo AS VARCHAR(100))                AS codigo,
+        CAST(rd.descripcion AS VARCHAR(500))                 AS descripcion,
+        ABS(CAST(rd.cantidad AS INT))                        AS cantidad,
         CAST(
           CASE 
             WHEN r.tipo = 'SALIDA' THEN r.deposito_nombre 
@@ -273,21 +356,21 @@ async function buildMovimientosBase(pool) {
             ELSE NULL 
           END AS VARCHAR(255)
         )                                                    AS deposito_destino,
-        CAST('REMITO' AS VARCHAR(50))                       AS tipo_transaccion,
-        CAST(NULL AS VARCHAR(255))                          AS motivo,
-        CAST(r.numero_remito AS VARCHAR(255))               AS remito_referencia,
-        CAST(NULL AS VARCHAR(255))                          AS obra,
-        CAST(NULL AS VARCHAR(255))                          AS version,
-        CAST(NULL AS VARCHAR(255))                          AS referente,
-        CAST(NULL AS INT)                                   AS id_referente,
-        CAST(art.proveedor AS VARCHAR(255))                 AS proveedor,
+        CAST('REMITO' AS VARCHAR(50))                        AS tipo_transaccion,
+        CAST(NULL AS VARCHAR(255))                           AS motivo,
+        CAST(r.observacion AS VARCHAR(255))                  AS remito_referencia,
+        CAST(NULL AS VARCHAR(255))                           AS obra,
+        CAST(NULL AS VARCHAR(255))                           AS version,
+        CAST(NULL AS VARCHAR(255))                           AS referente,
+        CAST(NULL AS INT)                                    AS id_referente,
+        CAST(r.proveedor AS VARCHAR(255))                    AS proveedor,
         CAST(
           CASE 
             WHEN r.tipo = 'SALIDA' THEN 'E'
             ELSE 'I'
           END AS VARCHAR(10)
         )                                                    AS ingreso_egreso,
-        CAST(r.usuario AS VARCHAR(255))                     AS usuario
+        CAST(r.usuario AS VARCHAR(255))                      AS usuario
       FROM dbo.${remitosTable} r
       JOIN dbo.${remitosDetTable} rd
         ON rd.remito_id = r.numero_remito
@@ -298,24 +381,34 @@ async function buildMovimientosBase(pool) {
 
   selects.push(`
     SELECT
-      CAST(o.numero_orden AS VARCHAR(50))                   AS numero_transaccion,
-      CONVERT(date, o.fecha)                                AS fecha,
-      CONVERT(date, o.fecha)                                AS fecha_real,
-      CAST(a.codigo AS VARCHAR(100))                        AS codigo,
-      CAST(a.descripcion AS VARCHAR(500))                   AS descripcion,
-      CAST(od.cantidad AS INT)                              AS cantidad,
-      CAST(d.nombre AS VARCHAR(255))                        AS deposito_origen,
-      CAST(NULL AS VARCHAR(255))                            AS deposito_destino,
-      CAST('PRODUCCION' AS VARCHAR(50))                     AS tipo_transaccion,
-      CAST(NULL AS VARCHAR(255))                            AS motivo,
-      CAST(NULL AS VARCHAR(255))                            AS remito_referencia,
-      CAST(NULL AS VARCHAR(255))                            AS obra,
-      CAST(NULL AS VARCHAR(255))                            AS version,
-      CAST(NULL AS VARCHAR(255))                            AS referente,
-      CAST(NULL AS INT)                                     AS id_referente,
-      CAST(a.proveedor AS VARCHAR(255))                     AS proveedor,
-      CAST('E' AS VARCHAR(10))                              AS ingreso_egreso,
-      CAST(NULL AS VARCHAR(255))                            AS usuario
+      CAST(
+        CONCAT(
+          'PRODUCCION-E-',
+          o.numero_orden,
+          '-',
+          a.codigo,
+          '-',
+          od.cantidad
+        ) AS VARCHAR(300)
+      )                                                      AS id_movimiento,
+      CAST(o.numero_orden AS VARCHAR(50))                    AS numero_transaccion,
+      CONVERT(date, o.fecha)                                 AS fecha,
+      CONVERT(date, o.fecha)                                 AS fecha_real,
+      CAST(a.codigo AS VARCHAR(100))                         AS codigo,
+      CAST(a.descripcion AS VARCHAR(500))                    AS descripcion,
+      CAST(od.cantidad AS INT)                               AS cantidad,
+      CAST(d.nombre AS VARCHAR(255))                         AS deposito_origen,
+      CAST(NULL AS VARCHAR(255))                             AS deposito_destino,
+      CAST('PRODUCCION' AS VARCHAR(50))                      AS tipo_transaccion,
+      CAST(NULL AS VARCHAR(255))                             AS motivo,
+      CAST(NULL AS VARCHAR(255))                             AS remito_referencia,
+      CAST(NULL AS VARCHAR(255))                             AS obra,
+      CAST(NULL AS VARCHAR(255))                             AS version,
+      CAST(NULL AS VARCHAR(255))                             AS referente,
+      CAST(NULL AS INT)                                      AS id_referente,
+      CAST(a.proveedor AS VARCHAR(255))                      AS proveedor,
+      CAST('E' AS VARCHAR(10))                               AS ingreso_egreso,
+      CAST(NULL AS VARCHAR(255))                             AS usuario
     FROM dbo.produccion_orden_detalles od
     JOIN dbo.produccion_ordenes o 
       ON o.id = od.orden_id
@@ -327,24 +420,34 @@ async function buildMovimientosBase(pool) {
 
   selects.push(`
     SELECT
-      CAST(o.numero_orden AS VARCHAR(50))                   AS numero_transaccion,
-      CONVERT(date, o.fecha)                                AS fecha,
-      CONVERT(date, o.fecha)                                AS fecha_real,
-      CAST(a.codigo AS VARCHAR(100))                        AS codigo,
-      CAST(a.descripcion AS VARCHAR(500))                   AS descripcion,
-      CAST(o.cantidad AS INT)                               AS cantidad,
-      CAST(NULL AS VARCHAR(255))                            AS deposito_origen,
-      CAST(d.nombre AS VARCHAR(255))                        AS deposito_destino,
-      CAST('PRODUCCION' AS VARCHAR(50))                     AS tipo_transaccion,
-      CAST(NULL AS VARCHAR(255))                            AS motivo,
-      CAST(NULL AS VARCHAR(255))                            AS remito_referencia,
-      CAST(NULL AS VARCHAR(255))                            AS obra,
-      CAST(NULL AS VARCHAR(255))                            AS version,
-      CAST(NULL AS VARCHAR(255))                            AS referente,
-      CAST(NULL AS INT)                                     AS id_referente,
-      CAST(a.proveedor AS VARCHAR(255))                     AS proveedor,
-      CAST('I' AS VARCHAR(10))                              AS ingreso_egreso,
-      CAST(NULL AS VARCHAR(255))                            AS usuario
+      CAST(
+        CONCAT(
+          'PRODUCCION-I-',
+          o.numero_orden,
+          '-',
+          a.codigo,
+          '-',
+          o.cantidad
+        ) AS VARCHAR(300)
+      )                                                      AS id_movimiento,
+      CAST(o.numero_orden AS VARCHAR(50))                    AS numero_transaccion,
+      CONVERT(date, o.fecha)                                 AS fecha,
+      CONVERT(date, o.fecha)                                 AS fecha_real,
+      CAST(a.codigo AS VARCHAR(100))                         AS codigo,
+      CAST(a.descripcion AS VARCHAR(500))                    AS descripcion,
+      CAST(o.cantidad AS INT)                                AS cantidad,
+      CAST(NULL AS VARCHAR(255))                             AS deposito_origen,
+      CAST(d.nombre AS VARCHAR(255))                         AS deposito_destino,
+      CAST('PRODUCCION' AS VARCHAR(50))                      AS tipo_transaccion,
+      CAST(NULL AS VARCHAR(255))                             AS motivo,
+      CAST(NULL AS VARCHAR(255))                             AS remito_referencia,
+      CAST(NULL AS VARCHAR(255))                             AS obra,
+      CAST(NULL AS VARCHAR(255))                             AS version,
+      CAST(NULL AS VARCHAR(255))                             AS referente,
+      CAST(NULL AS INT)                                      AS id_referente,
+      CAST(a.proveedor AS VARCHAR(255))                      AS proveedor,
+      CAST('I' AS VARCHAR(10))                               AS ingreso_egreso,
+      CAST(NULL AS VARCHAR(255))                             AS usuario
     FROM dbo.produccion_ordenes o
     JOIN dbo.articulos a 
       ON a.id_articulo = o.producto_id
@@ -494,7 +597,9 @@ exports.getDistinctValues = async (req, res) => {
       whereParts.push(`CAST(${columnSql} AS NVARCHAR(MAX)) LIKE @search`);
     }
 
-    const whereFinal = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+    const whereFinal = whereParts.length
+      ? `WHERE ${whereParts.join(" AND ")}`
+      : "";
 
     const query = `
       SELECT TOP 300
@@ -559,23 +664,15 @@ exports.updateMovimientoCabecera = async (req, res) => {
         : String(remito_referencia).trim();
 
     const obraFinal =
-      obra == null || String(obra).trim() === "" ? null : Number(obra);
+      obra == null || String(obra).trim() === "" ? null : String(obra).trim();
 
     const versionFinal =
-      version == null || String(version).trim() === "" ? null : Number(version);
+      version == null || String(version).trim() === "" ? null : String(version).trim();
 
     const referenteFinal =
       id_referente == null || String(id_referente).trim() === ""
         ? null
         : Number(id_referente);
-
-    if (obraFinal !== null && !Number.isFinite(obraFinal)) {
-      return res.status(400).json({ error: "Obra inválida" });
-    }
-
-    if (versionFinal !== null && !Number.isFinite(versionFinal)) {
-      return res.status(400).json({ error: "Versión inválida" });
-    }
 
     if (referenteFinal !== null && !Number.isFinite(referenteFinal)) {
       return res.status(400).json({ error: "Actuante inválido" });
@@ -614,8 +711,8 @@ exports.updateMovimientoCabecera = async (req, res) => {
         .request()
         .input("numero", sql.Int, numero)
         .input("remito", sql.VarChar, remitoReferencia)
-        .input("obra", sql.Int, obraFinal)
-        .input("version", sql.Int, versionFinal)
+        .input("obra", sql.NVarChar(sql.MAX), obraFinal)
+        .input("version", sql.NVarChar(sql.MAX), versionFinal)
         .input("referente", sql.Int, referenteFinal)
         .query(`
           UPDATE dbo.ajustes
@@ -665,8 +762,33 @@ exports.updateMovimientoCabecera = async (req, res) => {
       });
     }
 
+    if (tipo === "REMITO") {
+      const r = await pool
+        .request()
+        .input("numero", sql.VarChar, numeroRaw)
+        .input("remito", sql.VarChar, remitoReferencia)
+        .query(`
+          UPDATE dbo.remitos
+          SET
+            observacion = @remito
+          WHERE numero_remito = @numero;
+
+          SELECT @@ROWCOUNT AS affected;
+        `);
+
+      if (Number(r.recordset[0].affected) !== 1) {
+        return res.status(404).json({ error: "Remito no encontrado" });
+      }
+
+      return res.json({
+        ok: true,
+        message: "Remito actualizado correctamente",
+      });
+    }
+
     return res.status(400).json({
-      error: "Solo se permite editar movimientos de tipo AJUSTE o TRANSFERENCIA",
+      error:
+        "Solo se permite editar movimientos de tipo AJUSTE, TRANSFERENCIA o REMITO",
     });
   } catch (err) {
     console.error("movimientos.updateMovimientoCabecera:", err);
@@ -704,30 +826,42 @@ exports.getByNumeroTransaccion = async (req, res) => {
     ]);
 
     const ajustesTable = await pickExistingTable(pool, ["ajustes"]);
+    const remitosTable = await pickExistingTable(pool, ["remitos"]);
+    const remitosDetTable = await pickExistingTable(pool, ["remitos_detalles"]);
 
     const selects = [];
 
     if (transfDetalleTable) {
       selects.push(`
         SELECT
-          CAST(t.numero_transferencia AS VARCHAR(50))       AS numero_transaccion,
-          CONVERT(date, t.fecha)                            AS fecha,
-          CONVERT(date, ISNULL(t.fecha_real, t.fecha))       AS fecha_real,
-          CAST(a.codigo AS VARCHAR(100))                    AS codigo,
-          CAST(a.descripcion AS VARCHAR(500))               AS descripcion,
-          CAST(td.cantidad AS INT)                          AS cantidad,
-          CAST(t.origen AS VARCHAR(255))                    AS deposito_origen,
-          CAST(t.destino AS VARCHAR(255))                   AS deposito_destino,
-          CAST('TRANSFERENCIA' AS VARCHAR(50))              AS tipo_transaccion,
-          CAST(NULL AS VARCHAR(255))                        AS motivo,
-          CAST(t.remito_referencia AS VARCHAR(255))         AS remito_referencia,
-          CAST(NULL AS VARCHAR(255))                        AS obra,
-          CAST(NULL AS VARCHAR(255))                        AS version,
-          CAST(ref.nombre AS VARCHAR(255))                  AS referente,
-          t.id_referente                                    AS id_referente,
-          CAST(a.proveedor AS VARCHAR(255))                 AS proveedor,
-          CAST(NULL AS VARCHAR(10))                         AS ingreso_egreso,
-          CAST(t.usuario AS VARCHAR(255))                   AS usuario
+          CAST(
+            CONCAT(
+              'TRANSFERENCIA-',
+              t.numero_transferencia,
+              '-',
+              a.codigo,
+              '-',
+              td.cantidad
+            ) AS VARCHAR(300)
+          )                                                  AS id_movimiento,
+          CAST(t.numero_transferencia AS VARCHAR(50))        AS numero_transaccion,
+          CONVERT(date, t.fecha)                             AS fecha,
+          CONVERT(date, ISNULL(t.fecha_real, t.fecha))        AS fecha_real,
+          CAST(a.codigo AS VARCHAR(100))                     AS codigo,
+          CAST(a.descripcion AS VARCHAR(500))                AS descripcion,
+          CAST(td.cantidad AS INT)                           AS cantidad,
+          CAST(t.origen AS VARCHAR(255))                     AS deposito_origen,
+          CAST(t.destino AS VARCHAR(255))                    AS deposito_destino,
+          CAST('TRANSFERENCIA' AS VARCHAR(50))               AS tipo_transaccion,
+          CAST(NULL AS VARCHAR(255))                         AS motivo,
+          CAST(t.remito_referencia AS VARCHAR(255))          AS remito_referencia,
+          CAST(NULL AS VARCHAR(255))                         AS obra,
+          CAST(NULL AS VARCHAR(255))                         AS version,
+          CAST(ref.nombre AS VARCHAR(255))                   AS referente,
+          t.id_referente                                     AS id_referente,
+          CAST(a.proveedor AS VARCHAR(255))                  AS proveedor,
+          CAST(NULL AS VARCHAR(10))                          AS ingreso_egreso,
+          CAST(t.usuario AS VARCHAR(255))                    AS usuario
         FROM dbo.transferencias t
         JOIN dbo.${transfDetalleTable} td
           ON td.transferencia_id = t.id
@@ -742,12 +876,22 @@ exports.getByNumeroTransaccion = async (req, res) => {
     if (ajustesTable && ajusteDetalleTable) {
       selects.push(`
         SELECT
-          CAST(a.numero_ajuste AS VARCHAR(50))              AS numero_transaccion,
-          CONVERT(date, a.fecha)                            AS fecha,
-          CONVERT(date, ISNULL(a.fecha_real, a.fecha))       AS fecha_real,
-          CAST(ad.cod_articulo AS VARCHAR(100))             AS codigo,
-          CAST(ad.descripcion AS VARCHAR(500))              AS descripcion,
-          ABS(CAST(ad.cantidad AS INT))                     AS cantidad,
+          CAST(
+            CONCAT(
+              'AJUSTE-',
+              a.numero_ajuste,
+              '-',
+              ad.cod_articulo,
+              '-',
+              ad.cantidad
+            ) AS VARCHAR(300)
+          )                                                  AS id_movimiento,
+          CAST(a.numero_ajuste AS VARCHAR(50))               AS numero_transaccion,
+          CONVERT(date, a.fecha)                             AS fecha,
+          CONVERT(date, ISNULL(a.fecha_real, a.fecha))        AS fecha_real,
+          CAST(ad.cod_articulo AS VARCHAR(100))              AS codigo,
+          CAST(ad.descripcion AS VARCHAR(500))               AS descripcion,
+          ABS(CAST(ad.cantidad AS INT))                      AS cantidad,
           CAST(
             CASE 
               WHEN CAST(ad.cantidad AS INT) < 0 THEN a.deposito 
@@ -760,14 +904,14 @@ exports.getByNumeroTransaccion = async (req, res) => {
               ELSE NULL 
             END AS VARCHAR(255)
           )                                                  AS deposito_destino,
-          CAST('AJUSTE' AS VARCHAR(50))                     AS tipo_transaccion,
+          CAST('AJUSTE' AS VARCHAR(50))                      AS tipo_transaccion,
           CAST(COALESCE(am.nombre, a.motivo) AS VARCHAR(255)) AS motivo,
-          CAST(a.remito_referencia AS VARCHAR(255))         AS remito_referencia,
-          CAST(a.obra AS VARCHAR(255))                      AS obra,
-          CAST(a.version AS VARCHAR(255))                   AS version,
-          CAST(ref.nombre AS VARCHAR(255))                  AS referente,
-          a.id_referente                                    AS id_referente,
-          CAST(art.proveedor AS VARCHAR(255))               AS proveedor,
+          CAST(a.remito_referencia AS VARCHAR(255))          AS remito_referencia,
+          CAST(a.obra AS VARCHAR(255))                       AS obra,
+          CAST(a.version AS VARCHAR(255))                    AS version,
+          CAST(ref.nombre AS VARCHAR(255))                   AS referente,
+          a.id_referente                                     AS id_referente,
+          CAST(art.proveedor AS VARCHAR(255))                AS proveedor,
           CAST(
             CASE 
               WHEN CAST(ad.cantidad AS INT) < 0 THEN 'E'
@@ -775,7 +919,7 @@ exports.getByNumeroTransaccion = async (req, res) => {
               ELSE ''
             END AS VARCHAR(10)
           )                                                  AS ingreso_egreso,
-          CAST(a.usuario AS VARCHAR(255))                   AS usuario
+          CAST(a.usuario AS VARCHAR(255))                    AS usuario
         FROM dbo.${ajustesTable} a
         JOIN dbo.${ajusteDetalleTable} ad
           ON ad.ajuste_id = a.numero_ajuste
@@ -786,6 +930,59 @@ exports.getByNumeroTransaccion = async (req, res) => {
         LEFT JOIN dbo.referentes ref
           ON ref.id_referente = a.id_referente
         WHERE CAST(a.numero_ajuste AS VARCHAR(50)) = @numero
+      `);
+    }
+
+    if (remitosTable && remitosDetTable) {
+      selects.push(`
+        SELECT
+          CAST(
+            CONCAT(
+              'REMITO-',
+              r.numero_remito,
+              '-',
+              rd.cod_articulo,
+              '-',
+              rd.cantidad
+            ) AS VARCHAR(300)
+          )                                                  AS id_movimiento,
+          CAST(r.numero_remito AS VARCHAR(50))               AS numero_transaccion,
+          CONVERT(date, r.fecha)                             AS fecha,
+          CONVERT(date, r.fecha)                             AS fecha_real,
+          CAST(rd.cod_articulo AS VARCHAR(100))              AS codigo,
+          CAST(rd.descripcion AS VARCHAR(500))               AS descripcion,
+          ABS(CAST(rd.cantidad AS INT))                      AS cantidad,
+          CAST(
+            CASE 
+              WHEN r.tipo = 'SALIDA' THEN r.deposito_nombre 
+              ELSE NULL 
+            END AS VARCHAR(255)
+          )                                                  AS deposito_origen,
+          CAST(
+            CASE 
+              WHEN r.tipo <> 'SALIDA' THEN r.deposito_nombre 
+              ELSE NULL 
+            END AS VARCHAR(255)
+          )                                                  AS deposito_destino,
+          CAST('REMITO' AS VARCHAR(50))                      AS tipo_transaccion,
+          CAST(NULL AS VARCHAR(255))                         AS motivo,
+          CAST(r.observacion AS VARCHAR(255))                AS remito_referencia,
+          CAST(NULL AS VARCHAR(255))                         AS obra,
+          CAST(NULL AS VARCHAR(255))                         AS version,
+          CAST(NULL AS VARCHAR(255))                         AS referente,
+          CAST(NULL AS INT)                                  AS id_referente,
+          CAST(r.proveedor AS VARCHAR(255))                  AS proveedor,
+          CAST(
+            CASE 
+              WHEN r.tipo = 'SALIDA' THEN 'E'
+              ELSE 'I'
+            END AS VARCHAR(10)
+          )                                                  AS ingreso_egreso,
+          CAST(r.usuario AS VARCHAR(255))                    AS usuario
+        FROM dbo.${remitosTable} r
+        JOIN dbo.${remitosDetTable} rd
+          ON rd.remito_id = r.numero_remito
+        WHERE CAST(r.numero_remito AS VARCHAR(50)) = @numero
       `);
     }
 
@@ -897,8 +1094,8 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
         .request()
         .input("numero", sql.Int, numero)
         .input("remito", sql.VarChar, remitoReferencia)
-        .input("obra", sql.Int, obraFinal)
-        .input("version", sql.Int, versionFinal)
+        .input("obra", sql.NVarChar(sql.MAX), obraFinal)
+        .input("version", sql.NVarChar(sql.MAX), versionFinal)
         .input("referente", sql.Int, referenteFinal)
         .query(`
           UPDATE dbo.ajustes
@@ -948,8 +1145,32 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
       });
     }
 
+    if (tipo === "REMITO") {
+      const r = await pool
+        .request()
+        .input("numero", sql.VarChar, numeroRaw)
+        .input("remito", sql.VarChar, remitoReferencia)
+        .query(`
+          UPDATE dbo.remitos
+          SET
+            observacion = @remito
+          WHERE numero_remito = @numero;
+
+          SELECT @@ROWCOUNT AS affected;
+        `);
+
+      if (Number(r.recordset[0].affected) !== 1) {
+        return res.status(404).json({ error: "Remito no encontrado" });
+      }
+
+      return res.json({
+        ok: true,
+        message: "Transacción de remito actualizada correctamente",
+      });
+    }
+
     return res.status(400).json({
-      error: "Solo se permite edición masiva de AJUSTE o TRANSFERENCIA",
+      error: "Solo se permite edición masiva de AJUSTE, TRANSFERENCIA o REMITO",
     });
   } catch (err) {
     console.error("movimientos.updateMovimientoCabeceraMasivo:", err);

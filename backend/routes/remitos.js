@@ -13,4 +13,6 @@ router.post("/importar-planilla", controller.importarPlanilla);
 router.get("/:id", controller.getById);
 router.post("/", controller.create);
 
+router.put("/:id", controller.update);
+
 module.exports = router;

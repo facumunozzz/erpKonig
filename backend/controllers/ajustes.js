@@ -677,25 +677,17 @@ const fechaReal =
   }
 
   const obraRaw = req.body?.obra;
-  const versionRaw = req.body?.version;
+const versionRaw = req.body?.version;
 
-  const obra =
-    obraRaw === null || obraRaw === undefined || String(obraRaw).trim() === ""
-      ? null
-      : asInt(obraRaw);
+const obra =
+  obraRaw === null || obraRaw === undefined || String(obraRaw).trim() === ""
+    ? null
+    : String(obraRaw).trim();
 
-  const version =
-    versionRaw === null || versionRaw === undefined || String(versionRaw).trim() === ""
-      ? null
-      : asInt(versionRaw);
-
-  if (obra !== null && !Number.isFinite(obra)) {
-    return res.status(400).json({ error: "Obra inválida" });
-  }
-
-  if (version !== null && !Number.isFinite(version)) {
-    return res.status(400).json({ error: "Versión inválida" });
-  }
+const version =
+  versionRaw === null || versionRaw === undefined || String(versionRaw).trim() === ""
+    ? null
+    : String(versionRaw).trim();
 
   if (referenteId !== null && !Number.isFinite(referenteId)) {
     return res.status(400).json({ error: "Referente inválido" });
@@ -1544,12 +1536,12 @@ const version =
 
       await new sql.Request(trans)
         .input("nro", sql.Int, nextNro)
-        .input("depNom", sql.VarChar, depositoNombre)
+        .input("depNom", sql.VarChar(100), String(depositoNombre ?? "").trim())
         .input("motId", sql.Int, motivoIdDropbox)
-        .input("mot", sql.VarChar, "CONSUMO PRODUCCIÓN (DROPBOX)")
-        .input("obra", sql.Int, grupo.obra)
-        .input("version", sql.Int, grupo.version)
-        .input("usr", sql.VarChar, "sistema")
+        .input("mot", sql.VarChar(150), "CONSUMO PRODUCCIÓN (DROPBOX)")
+        .input("obra", sql.NVarChar(sql.MAX), grupo.obra == null ? null : String(grupo.obra).trim())
+        .input("version", sql.NVarChar(sql.MAX), grupo.version == null ? null : String(grupo.version).trim())
+        .input("usr", sql.VarChar(100), "sistema")
         .query(`
           INSERT INTO dbo.ajustes
           (
