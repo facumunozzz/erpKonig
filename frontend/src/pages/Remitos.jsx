@@ -33,6 +33,35 @@ export default function Remitos() {
     fileInputRef.current?.click();
   };
 
+  const descargarPlanilla = () => {
+    const encabezados = [
+      "N° Remito",
+      "N° Entrega",
+      "Pedido",
+      "Proveedor",
+      "Artículo",
+      "Cantidad",
+    ];
+
+    const data = [encabezados];
+
+    const ws = XLSX.utils.aoa_to_sheet(data);
+
+    ws["!cols"] = [
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 30 },
+      { wch: 18 },
+      { wch: 12 },
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Remitos");
+
+    XLSX.writeFile(wb, "Plantilla_Importacion_Remitos.xlsx");
+  };
+
   const handleImportarArchivo = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -65,7 +94,7 @@ export default function Remitos() {
       const confirmar = window.confirm(
         `Se van a importar ${rows.length} filas desde la hoja "${sheetName}".\n\n` +
           "Si algún artículo o proveedor no existe, no se importará nada.\n\n" +
-          "¿Continuar?"
+          "¿Continuar?",
       );
 
       if (!confirmar) return;
@@ -82,7 +111,8 @@ export default function Remitos() {
       console.error(err);
 
       const data = err.response?.data;
-      let msg = data?.error || data?.detalle || "Error al importar la planilla.";
+      let msg =
+        data?.error || data?.detalle || "Error al importar la planilla.";
 
       if (Array.isArray(data?.detalle)) {
         msg += "\n\n" + data.detalle.join("\n");
@@ -98,15 +128,17 @@ export default function Remitos() {
 
   const filtrados = remitos.filter((r) =>
     Object.values(r).some((v) =>
-      String(v ?? "").toLowerCase().includes(filtro.toLowerCase())
-    )
+      String(v ?? "")
+        .toLowerCase()
+        .includes(filtro.toLowerCase()),
+    ),
   );
 
   const totalPages = Math.ceil(filtrados.length / pageSize) || 1;
 
   const paginated = filtrados.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
 
   const irPagina = (p) => {
@@ -138,9 +170,7 @@ export default function Remitos() {
           onChange={handleImportarArchivo}
         />
 
-        <button disabled title="Se habilita más adelante">
-          Descargar planilla
-        </button>
+        <button onClick={descargarPlanilla}>Descargar planilla</button>
 
         <input
           type="text"
@@ -257,7 +287,7 @@ export default function Remitos() {
           {Array.from({ length: totalPages }, (_, i) => i + 1)
             .filter(
               (p) =>
-                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1
+                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
             )
             .map((p, i, arr) => (
               <React.Fragment key={p}>
