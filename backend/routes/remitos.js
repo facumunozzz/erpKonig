@@ -1,18 +1,20 @@
 // backend/routes/remitos.js
 const express = require("express");
 const router = express.Router();
+
 const controller = require("../controllers/remitos");
+const { authRequired } = require("../middleware/auth");
 
-router.get("/", controller.getAll);
+router.get("/proveedores", authRequired, controller.getProveedores);
+router.get("/articulo", authRequired, controller.getArticuloByCodigo);
+router.get("/distinct", authRequired, controller.getDistinctValues);
 
-router.get("/proveedores", controller.getProveedores); // ✅ antes de /:id
-router.get("/articulo", controller.getArticuloByCodigo); // ✅ antes de /:id
+router.get("/", authRequired, controller.getAll);
+router.get("/:id", authRequired, controller.getById);
 
-router.post("/importar-planilla", controller.importarPlanilla);
+router.post("/", authRequired, controller.create);
+router.post("/importar-planilla", authRequired, controller.importarPlanilla);
 
-router.get("/:id", controller.getById);
-router.post("/", controller.create);
-
-router.put("/:id", controller.update);
+router.put("/:id", authRequired, controller.update);
 
 module.exports = router;

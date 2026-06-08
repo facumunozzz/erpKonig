@@ -39,6 +39,7 @@ function parseFilters(raw) {
 }
 
 const ALLOWED_SORT_COLUMNS = new Set([
+  "orden_movimiento",
   "id_movimiento",
   "numero_transaccion",
   "fecha",
@@ -60,6 +61,7 @@ const ALLOWED_SORT_COLUMNS = new Set([
 ]);
 
 const FILTER_COLUMNS = {
+  orden_movimiento: "movimientos.orden_movimiento",
   id_movimiento: "movimientos.id_movimiento",
   numero_transaccion: "movimientos.numero_transaccion",
   fecha: "movimientos.fecha",
@@ -81,15 +83,14 @@ const FILTER_COLUMNS = {
 };
 
 function getOrderBy(sortKey, sortDir) {
-  const key = ALLOWED_SORT_COLUMNS.has(sortKey) ? sortKey : "fecha";
+  const key = ALLOWED_SORT_COLUMNS.has(sortKey) ? sortKey : "";
   const dir = String(sortDir || "").toLowerCase() === "asc" ? "ASC" : "DESC";
 
-  if (!sortKey) {
+  if (!key) {
     return `
       ORDER BY
+        movimientos.orden_movimiento DESC,
         movimientos.fecha DESC,
-        TRY_CONVERT(BIGINT, movimientos.numero_transaccion) DESC,
-        movimientos.numero_transaccion DESC,
         movimientos.id_movimiento DESC
     `;
   }
@@ -98,7 +99,7 @@ function getOrderBy(sortKey, sortDir) {
     return `
       ORDER BY
         movimientos.${key} ${dir},
-        TRY_CONVERT(BIGINT, movimientos.numero_transaccion) DESC,
+        movimientos.orden_movimiento DESC,
         movimientos.numero_transaccion DESC,
         movimientos.id_movimiento DESC
     `;
@@ -107,9 +108,8 @@ function getOrderBy(sortKey, sortDir) {
   return `
     ORDER BY
       movimientos.${key} ${dir},
+      movimientos.orden_movimiento DESC,
       movimientos.fecha DESC,
-      TRY_CONVERT(BIGINT, movimientos.numero_transaccion) DESC,
-      movimientos.numero_transaccion DESC,
       movimientos.id_movimiento DESC
   `;
 }
@@ -258,6 +258,7 @@ async function buildMovimientosBase(pool) {
             td.cantidad
           ) AS VARCHAR(300)
         )                                                    AS id_movimiento,
+        TRY_CONVERT(BIGINT, t.numero_transferencia)          AS orden_movimiento,
         CAST(t.numero_transferencia AS VARCHAR(50))          AS numero_transaccion,
         CONVERT(date, t.fecha)                               AS fecha,
         CONVERT(date, ISNULL(t.fecha_real, t.fecha))          AS fecha_real,
@@ -299,6 +300,7 @@ async function buildMovimientosBase(pool) {
             ad.cantidad
           ) AS VARCHAR(300)
         )                                                    AS id_movimiento,
+        TRY_CONVERT(BIGINT, a.numero_ajuste)                 AS orden_movimiento,
         CAST(a.numero_ajuste AS VARCHAR(50))                 AS numero_transaccion,
         CONVERT(date, a.fecha)                               AS fecha,
         CONVERT(date, ISNULL(a.fecha_real, a.fecha))          AS fecha_real,
@@ -351,14 +353,15 @@ async function buildMovimientosBase(pool) {
         CAST(
           CONCAT(
             'REMITO-',
-            r.numero_remito,
+            r.numero_transaccion,
             '-',
             rd.cod_articulo,
             '-',
             rd.cantidad
           ) AS VARCHAR(300)
         )                                                    AS id_movimiento,
-        CAST(r.numero_remito AS VARCHAR(50))                 AS numero_transaccion,
+        TRY_CONVERT(BIGINT, r.numero_transaccion)            AS orden_movimiento,
+        CAST(r.numero_transaccion AS VARCHAR(50))            AS numero_transaccion,
         CONVERT(date, r.fecha)                               AS fecha,
         CONVERT(date, r.fecha)                               AS fecha_real,
         CAST(rd.cod_articulo AS VARCHAR(100))                AS codigo,
@@ -378,7 +381,7 @@ async function buildMovimientosBase(pool) {
         )                                                    AS deposito_destino,
         CAST('REMITO' AS VARCHAR(50))                        AS tipo_transaccion,
         CAST(NULL AS VARCHAR(255))                           AS motivo,
-        CAST(r.observacion AS VARCHAR(255))                  AS remito_referencia,
+        CAST(r.numero_remito AS VARCHAR(255))                AS remito_referencia,
         CAST(NULL AS VARCHAR(255))                           AS obra,
         CAST(NULL AS VARCHAR(255))                           AS version,
         CAST(NULL AS VARCHAR(255))                           AS referente,
@@ -411,6 +414,7 @@ async function buildMovimientosBase(pool) {
           od.cantidad
         ) AS VARCHAR(300)
       )                                                      AS id_movimiento,
+      TRY_CONVERT(BIGINT, o.numero_orden)                    AS orden_movimiento,
       CAST(o.numero_orden AS VARCHAR(50))                    AS numero_transaccion,
       CONVERT(date, o.fecha)                                 AS fecha,
       CONVERT(date, o.fecha)                                 AS fecha_real,
@@ -450,6 +454,7 @@ async function buildMovimientosBase(pool) {
           o.cantidad
         ) AS VARCHAR(300)
       )                                                      AS id_movimiento,
+      TRY_CONVERT(BIGINT, o.numero_orden)                    AS orden_movimiento,
       CAST(o.numero_orden AS VARCHAR(50))                    AS numero_transaccion,
       CONVERT(date, o.fecha)                                 AS fecha,
       CONVERT(date, o.fecha)                                 AS fecha_real,
@@ -672,6 +677,7 @@ exports.updateMovimientoCabecera = async (req, res) => {
     const tipo = String(tipo_transaccion || "")
       .trim()
       .toUpperCase();
+
     const numeroRaw = String(numero_transaccion || "").trim();
 
     if (!tipo || !numeroRaw) {
@@ -783,25 +789,9 @@ exports.updateMovimientoCabecera = async (req, res) => {
     }
 
     if (tipo === "REMITO") {
-      const r = await pool
-        .request()
-        .input("numero", sql.VarChar, numeroRaw)
-        .input("remito", sql.VarChar, remitoReferencia).query(`
-          UPDATE dbo.remitos
-          SET
-            observacion = @remito
-          WHERE numero_remito = @numero;
-
-          SELECT @@ROWCOUNT AS affected;
-        `);
-
-      if (Number(r.recordset[0].affected) !== 1) {
-        return res.status(404).json({ error: "Remito no encontrado" });
-      }
-
-      return res.json({
-        ok: true,
-        message: "Remito actualizado correctamente",
+      return res.status(400).json({
+        error:
+          "Los remitos no se editan desde Movimientos. Editá el remito desde el módulo Remitos.",
       });
     }
 
@@ -863,6 +853,7 @@ exports.getByNumeroTransaccion = async (req, res) => {
               td.cantidad
             ) AS VARCHAR(300)
           )                                                  AS id_movimiento,
+          TRY_CONVERT(BIGINT, t.numero_transferencia)        AS orden_movimiento,
           CAST(t.numero_transferencia AS VARCHAR(50))        AS numero_transaccion,
           CONVERT(date, t.fecha)                             AS fecha,
           CONVERT(date, ISNULL(t.fecha_real, t.fecha))        AS fecha_real,
@@ -905,6 +896,7 @@ exports.getByNumeroTransaccion = async (req, res) => {
               ad.cantidad
             ) AS VARCHAR(300)
           )                                                  AS id_movimiento,
+          TRY_CONVERT(BIGINT, a.numero_ajuste)               AS orden_movimiento,
           CAST(a.numero_ajuste AS VARCHAR(50))               AS numero_transaccion,
           CONVERT(date, a.fecha)                             AS fecha,
           CONVERT(date, ISNULL(a.fecha_real, a.fecha))        AS fecha_real,
@@ -958,14 +950,15 @@ exports.getByNumeroTransaccion = async (req, res) => {
           CAST(
             CONCAT(
               'REMITO-',
-              r.numero_remito,
+              r.numero_transaccion,
               '-',
               rd.cod_articulo,
               '-',
               rd.cantidad
             ) AS VARCHAR(300)
           )                                                  AS id_movimiento,
-          CAST(r.numero_remito AS VARCHAR(50))               AS numero_transaccion,
+          TRY_CONVERT(BIGINT, r.numero_transaccion)          AS orden_movimiento,
+          CAST(r.numero_transaccion AS VARCHAR(50))          AS numero_transaccion,
           CONVERT(date, r.fecha)                             AS fecha,
           CONVERT(date, r.fecha)                             AS fecha_real,
           CAST(rd.cod_articulo AS VARCHAR(100))              AS codigo,
@@ -985,7 +978,7 @@ exports.getByNumeroTransaccion = async (req, res) => {
           )                                                  AS deposito_destino,
           CAST('REMITO' AS VARCHAR(50))                      AS tipo_transaccion,
           CAST(NULL AS VARCHAR(255))                         AS motivo,
-          CAST(r.observacion AS VARCHAR(255))                AS remito_referencia,
+          CAST(r.numero_remito AS VARCHAR(255))              AS remito_referencia,
           CAST(NULL AS VARCHAR(255))                         AS obra,
           CAST(NULL AS VARCHAR(255))                         AS version,
           CAST(NULL AS VARCHAR(255))                         AS referente,
@@ -1001,7 +994,7 @@ exports.getByNumeroTransaccion = async (req, res) => {
         FROM dbo.${remitosTable} r
         JOIN dbo.${remitosDetTable} rd
           ON rd.remito_id = r.numero_remito
-        WHERE CAST(r.numero_remito AS VARCHAR(50)) = @numero
+        WHERE CAST(r.numero_transaccion AS VARCHAR(50)) = @numero
       `);
     }
 
@@ -1046,6 +1039,7 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
     const tipo = String(tipo_transaccion || "")
       .trim()
       .toUpperCase();
+
     const numeroRaw = String(numero_transaccion || "").trim();
 
     if (!tipo || !numeroRaw) {
@@ -1060,23 +1054,17 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
         : String(remito_referencia).trim();
 
     const obraFinal =
-      obra == null || String(obra).trim() === "" ? null : Number(obra);
+      obra == null || String(obra).trim() === "" ? null : String(obra).trim();
 
     const versionFinal =
-      version == null || String(version).trim() === "" ? null : Number(version);
+      version == null || String(version).trim() === ""
+        ? null
+        : String(version).trim();
 
     const referenteFinal =
       id_referente == null || String(id_referente).trim() === ""
         ? null
         : Number(id_referente);
-
-    if (obraFinal !== null && !Number.isFinite(obraFinal)) {
-      return res.status(400).json({ error: "Obra inválida" });
-    }
-
-    if (versionFinal !== null && !Number.isFinite(versionFinal)) {
-      return res.status(400).json({ error: "Versión inválida" });
-    }
 
     if (referenteFinal !== null && !Number.isFinite(referenteFinal)) {
       return res.status(400).json({ error: "Actuante inválido" });
@@ -1163,25 +1151,9 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
     }
 
     if (tipo === "REMITO") {
-      const r = await pool
-        .request()
-        .input("numero", sql.VarChar, numeroRaw)
-        .input("remito", sql.VarChar, remitoReferencia).query(`
-          UPDATE dbo.remitos
-          SET
-            observacion = @remito
-          WHERE numero_remito = @numero;
-
-          SELECT @@ROWCOUNT AS affected;
-        `);
-
-      if (Number(r.recordset[0].affected) !== 1) {
-        return res.status(404).json({ error: "Remito no encontrado" });
-      }
-
-      return res.json({
-        ok: true,
-        message: "Transacción de remito actualizada correctamente",
+      return res.status(400).json({
+        error:
+          "Los remitos no se editan desde Movimientos. Editá el remito desde el módulo Remitos.",
       });
     }
 

@@ -1,7 +1,10 @@
 // backend/controllers/remitos.js
 const { sql, poolConnect, getPool } = require("../db");
 
-const up = (v) => String(v ?? "").trim().toUpperCase();
+const up = (v) =>
+  String(v ?? "")
+    .trim()
+    .toUpperCase();
 
 const clean = (v) =>
   String(v ?? "")
@@ -17,9 +20,201 @@ const ESTADO_DEFAULT = "CONFIRMADO";
 const DEPOSITO_FIJO = "RECEPCION";
 const UBICACION_FIJA = "GENERAL";
 
-// ==========================
-// Helpers
-// ==========================
+function toInt(v, def) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : def;
+}
+
+function safeText(v) {
+  return String(v ?? "").trim();
+}
+
+function parseFilters(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object") return raw;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+const REMITOS_SORT_COLUMNS = new Set([
+  "numero_transaccion",
+  "numero_remito",
+  "fecha",
+  "deposito",
+  "tipo",
+  "usuario",
+  "observacion",
+  "estado",
+  "nro_entrega",
+  "pedido",
+  "proveedor",
+]);
+
+const REMITOS_FILTER_COLUMNS = {
+  numero_transaccion: "r.numero_transaccion",
+  numero_remito: "r.numero_remito",
+  fecha: "r.fecha",
+  deposito: "r.deposito_nombre",
+  tipo: "r.tipo",
+  usuario: "r.usuario",
+  observacion: "r.observacion",
+  estado: "r.estado",
+  nro_entrega: "r.nro_entrega",
+  pedido: "r.pedido",
+  proveedor: "r.proveedor",
+};
+
+function getRemitosOrderBy(sortKey, sortDir) {
+  const key = REMITOS_SORT_COLUMNS.has(sortKey) ? sortKey : "";
+  const dir = String(sortDir || "").toLowerCase() === "asc" ? "ASC" : "DESC";
+
+  const map = {
+    numero_transaccion: "r.numero_transaccion",
+    numero_remito: "r.numero_remito",
+    fecha: "r.fecha",
+    deposito: "r.deposito_nombre",
+    tipo: "r.tipo",
+    usuario: "r.usuario",
+    observacion: "r.observacion",
+    estado: "r.estado",
+    nro_entrega: "r.nro_entrega",
+    pedido: "r.pedido",
+    proveedor: "r.proveedor",
+  };
+
+  if (!key) {
+    return `
+      ORDER BY
+        r.numero_transaccion DESC,
+        r.fecha DESC,
+        r.numero_remito DESC
+    `;
+  }
+
+  return `
+    ORDER BY
+      ${map[key]} ${dir},
+      r.numero_transaccion DESC,
+      r.fecha DESC,
+      r.numero_remito DESC
+  `;
+}
+
+function addFilter(request, where, filters, key, columnSql) {
+  const raw = filters[key];
+
+  if (raw === undefined || raw === null || raw === "") return;
+
+  if (typeof raw === "string") {
+    const value = safeText(raw);
+    if (!value) return;
+
+    const paramName = `f_${key}`;
+    request.input(paramName, sql.NVarChar, `%${value}%`);
+    where.push(`CAST(${columnSql} AS NVARCHAR(MAX)) LIKE @${paramName}`);
+    return;
+  }
+
+  if (typeof raw === "object" && raw.mode === "in") {
+    const values = Array.isArray(raw.values)
+      ? raw.values.map((x) => String(x ?? "").trim())
+      : [];
+
+    if (!values.length) return;
+
+    const orParts = [];
+
+    values.forEach((value, index) => {
+      const paramName = `f_${key}_${index}`;
+
+      if (value === "__EMPTY__" || value === "") {
+        orParts.push(
+          `(${columnSql} IS NULL OR CAST(${columnSql} AS NVARCHAR(MAX)) = '')`
+        );
+      } else {
+        request.input(paramName, sql.NVarChar, value);
+        orParts.push(`CAST(${columnSql} AS NVARCHAR(MAX)) = @${paramName}`);
+      }
+    });
+
+    where.push(`(${orParts.join(" OR ")})`);
+    return;
+  }
+
+  if (typeof raw === "object" && raw.mode === "notIn") {
+    const values = Array.isArray(raw.values)
+      ? raw.values.map((x) => String(x ?? "").trim()).filter(Boolean)
+      : [];
+
+    if (!values.length) return;
+
+    const andParts = [];
+
+    values.forEach((value, index) => {
+      const paramName = `f_${key}_not_${index}`;
+
+      if (value === "__EMPTY__" || value === "") {
+        andParts.push(
+          `(${columnSql} IS NOT NULL AND CAST(${columnSql} AS NVARCHAR(MAX)) <> '')`
+        );
+      } else {
+        request.input(paramName, sql.NVarChar, value);
+        andParts.push(
+          `(${columnSql} IS NULL OR CAST(${columnSql} AS NVARCHAR(MAX)) <> @${paramName})`
+        );
+      }
+    });
+
+    where.push(`(${andParts.join(" AND ")})`);
+    return;
+  }
+
+  if (typeof raw === "object" && raw.mode === "dateRange") {
+    const from = safeText(raw.from);
+    const to = safeText(raw.to);
+
+    if (!from && !to) return;
+
+    if (from) {
+      const paramNameFrom = `f_${key}_from`;
+      request.input(paramNameFrom, sql.Date, from);
+      where.push(`CONVERT(date, ${columnSql}) >= @${paramNameFrom}`);
+    }
+
+    if (to) {
+      const paramNameTo = `f_${key}_to`;
+      request.input(paramNameTo, sql.Date, to);
+      where.push(`CONVERT(date, ${columnSql}) <= @${paramNameTo}`);
+    }
+
+    return;
+  }
+
+  if (typeof raw === "object" && raw.mode === "contains") {
+    const value = safeText(raw.value);
+    if (!value) return;
+
+    const paramName = `f_${key}`;
+    request.input(paramName, sql.NVarChar, `%${value}%`);
+    where.push(`CAST(${columnSql} AS NVARCHAR(MAX)) LIKE @${paramName}`);
+  }
+}
+
+function buildRemitosWhere(filters, request, exceptKey = null) {
+  const where = [];
+
+  Object.entries(REMITOS_FILTER_COLUMNS).forEach(([key, columnSql]) => {
+    if (key === exceptKey) return;
+    addFilter(request, where, filters, key, columnSql);
+  });
+
+  return where.length ? `WHERE ${where.join(" AND ")}` : "";
+}
+
 async function resolveDeposito(pool, { deposito_id, deposito_nombre }) {
   if (deposito_id != null) {
     const id = asInt(deposito_id);
@@ -62,8 +257,7 @@ async function resolveUbicacion(pool, depositoId, nombreUbicacion = UBICACION_FI
   const r = await pool
     .request()
     .input("dep", sql.Int, depositoId)
-    .input("nom", sql.VarChar(200), nom)
-    .query(`
+    .input("nom", sql.VarChar(200), nom).query(`
       SELECT TOP 1 id_ubicacion, id_deposito, nombre, activa
       FROM dbo.ubicaciones WITH (NOLOCK)
       WHERE id_deposito = @dep
@@ -73,26 +267,6 @@ async function resolveUbicacion(pool, depositoId, nombreUbicacion = UBICACION_FI
     `);
 
   return r.recordset[0] || null;
-}
-
-async function resolveUbicacionOrGeneral(pool, depositoId, idUbicNullable) {
-  if (idUbicNullable != null) {
-    const idU = asInt(idUbicNullable);
-    if (!Number.isFinite(idU) || idU <= 0) return null;
-
-    const r = await pool.request().input("u", sql.Int, idU).query(`
-      SELECT id_ubicacion, id_deposito, nombre, activa
-      FROM dbo.ubicaciones WITH (NOLOCK)
-      WHERE id_ubicacion = @u AND activa = 1
-    `);
-
-    if (!r.recordset.length) return null;
-    if (Number(r.recordset[0].id_deposito) !== Number(depositoId)) return null;
-
-    return r.recordset[0];
-  }
-
-  return resolveUbicacion(pool, depositoId, UBICACION_FIJA);
 }
 
 async function resolveProveedor(pool, proveedorNombre) {
@@ -139,9 +313,6 @@ async function resolveProveedor(pool, proveedorNombre) {
   return clean(r.recordset[0].proveedor);
 }
 
-// ==========================
-// GET /remitos/proveedores
-// ==========================
 exports.getProveedores = async (_req, res) => {
   try {
     await poolConnect;
@@ -207,13 +378,12 @@ async function upsertStockUbicDelta(tr, { idUbicacion, idArticulo, delta }) {
   await r
     .input("u", sql.Int, idUbicacion)
     .input("a", sql.Int, idArticulo)
-    .input("d", sql.Int, delta)
-    .query(`
+    .input("d", sql.Int, delta).query(`
       MERGE dbo.stock_ubicaciones WITH (HOLDLOCK) AS t
       USING (SELECT @u AS id_ubicacion, @a AS id_articulo) AS s
         ON (t.id_ubicacion = s.id_ubicacion AND t.id_articulo = s.id_articulo)
       WHEN MATCHED THEN
-        UPDATE SET cantidad = t.cantidad + @d
+        UPDATE SET cantidad = ISNULL(t.cantidad, 0) + @d
       WHEN NOT MATCHED THEN
         INSERT (id_ubicacion, id_articulo, cantidad)
         VALUES (s.id_ubicacion, s.id_articulo, @d);
@@ -227,8 +397,7 @@ async function upsertStockDelta(tr, { idDeposito, idUbicacion, idArticulo, delta
     .input("dep", sql.Int, idDeposito)
     .input("ub", sql.Int, idUbicacion)
     .input("a", sql.Int, idArticulo)
-    .input("d", sql.Decimal(18, 2), delta)
-    .query(`
+    .input("d", sql.Decimal(18, 2), delta).query(`
       MERGE dbo.stock WITH (HOLDLOCK) AS t
       USING (
         SELECT
@@ -291,10 +460,16 @@ function normalizeImportRows(rowsRaw) {
 
   return rows
     .map((row, index) => {
-      const nro_remito = clean(getCell(row, ["N° Remito", "Nro Remito", "Remito", "Numero Remito"]));
-      const nro_entrega = clean(getCell(row, ["N° Entrega", "Nro Entrega", "Entrega", "Numero Entrega"]));
+      const nro_remito = clean(
+        getCell(row, ["N° Remito", "Nro Remito", "Remito", "Numero Remito"])
+      );
+      const nro_entrega = clean(
+        getCell(row, ["N° Entrega", "Nro Entrega", "Entrega", "Numero Entrega"])
+      );
       const pedido = clean(getCell(row, ["Pedido", "PEDIDO"]));
-      const cod_articulo = up(getCell(row, ["Artículo", "Articulo", "Codigo", "Código", "Cod Articulo"]));
+      const cod_articulo = up(
+        getCell(row, ["Artículo", "Articulo", "Codigo", "Código", "Cod Articulo"])
+      );
       const cantidad = Number(getCell(row, ["Cantidad", "CANTIDAD"]));
       const proveedor = clean(getCell(row, ["Proveedor", "PROVEEDOR"]));
 
@@ -320,6 +495,29 @@ function normalizeImportRows(rowsRaw) {
     });
 }
 
+async function obtenerProximoNumeroTransaccionRemito(trans) {
+  const r = await new sql.Request(trans).query(`
+    SELECT ISNULL(MAX(n), 0) + 1 AS proximo
+    FROM (
+      SELECT TRY_CONVERT(BIGINT, numero_ajuste) AS n
+      FROM dbo.ajustes
+
+      UNION ALL
+
+      SELECT TRY_CONVERT(BIGINT, numero_transferencia) AS n
+      FROM dbo.transferencias
+
+      UNION ALL
+
+      SELECT TRY_CONVERT(BIGINT, numero_transaccion) AS n
+      FROM dbo.remitos
+    ) x
+    WHERE n IS NOT NULL;
+  `);
+
+  return Number(r.recordset[0]?.proximo || 1);
+}
+
 async function crearRemitoCore(pool, body) {
   const nro_remito = clean(body.nro_remito);
   const tipo = up(body.tipo || "ENTRADA");
@@ -336,7 +534,8 @@ async function crearRemitoCore(pool, body) {
     return {
       status: 400,
       payload: {
-        error: "Datos incompletos. El remito debe tener nro_remito, tipo ENTRADA e ítems.",
+        error:
+          "Datos incompletos. El remito debe tener nro_remito, tipo ENTRADA e ítems.",
       },
     };
   }
@@ -366,7 +565,6 @@ async function crearRemitoCore(pool, body) {
     .map((it) => ({
       cod: up(it.cod_articulo ?? it.cod ?? it.codigo),
       cant: Number(it.cantidad),
-      id_ubicacion: it.id_ubicacion == null ? null : asInt(it.id_ubicacion),
     }))
     .filter((i) => i.cod && Number.isFinite(i.cant) && i.cant > 0);
 
@@ -379,7 +577,6 @@ async function crearRemitoCore(pool, body) {
     };
   }
 
-  // El remito SIEMPRE ingresa en RECEPCION / GENERAL
   const dep = await resolveDeposito(pool, {
     deposito_nombre: DEPOSITO_FIJO,
   });
@@ -409,6 +606,8 @@ async function crearRemitoCore(pool, body) {
   try {
     trans = new sql.Transaction(pool);
     await trans.begin();
+
+    const numeroTransaccion = await obtenerProximoNumeroTransaccionRemito(trans);
 
     const execT = async (sqlText, bindFn) => {
       const r = new sql.Request(trans);
@@ -456,6 +655,7 @@ async function crearRemitoCore(pool, body) {
       `
       INSERT INTO dbo.remitos
         (
+          numero_transaccion,
           numero_remito,
           fecha,
           deposito_id,
@@ -470,6 +670,7 @@ async function crearRemitoCore(pool, body) {
         )
       VALUES
         (
+          @numeroTransaccion,
           @n,
           GETDATE(),
           @depId,
@@ -485,6 +686,7 @@ async function crearRemitoCore(pool, body) {
       `,
       (r) =>
         r
+          .input("numeroTransaccion", sql.BigInt, numeroTransaccion)
           .input("n", sql.VarChar(50), nro_remito)
           .input("depId", sql.Int, dep.id_deposito)
           .input("depNom", sql.VarChar(200), dep.nombre)
@@ -537,6 +739,7 @@ async function crearRemitoCore(pool, body) {
       status: 201,
       payload: {
         ok: true,
+        numero_transaccion: numeroTransaccion,
         numero_remito: nro_remito,
       },
     };
@@ -549,45 +752,154 @@ async function crearRemitoCore(pool, body) {
   }
 }
 
-// ==========================
 // GET /remitos
-// ==========================
-exports.getAll = async (_req, res) => {
+exports.getAll = async (req, res) => {
   try {
     await poolConnect;
     const pool = await getPool();
 
-    const r = await pool.request().query(`
-      SELECT
-        numero_remito AS id,
-        numero_remito,
-        deposito_nombre AS deposito,
-        deposito_id,
-        tipo,
-        usuario,
-        observacion,
-        estado,
-        fecha,
-        nro_entrega,
-        pedido,
-        proveedor
-      FROM dbo.remitos WITH (NOLOCK)
-      ORDER BY fecha DESC, numero_remito DESC
-    `);
+    const page = Math.max(toInt(req.query.page, 1), 1);
+    const pageSizeRaw = Math.max(toInt(req.query.pageSize, 25), 1);
+    const pageSize = Math.min(pageSizeRaw, 500);
+    const offset = (page - 1) * pageSize;
 
-    res.json(r.recordset || []);
+    const filters = parseFilters(req.query.filters);
+    const sortKey = safeText(req.query.sortKey);
+    const sortDir = safeText(req.query.sortDir);
+
+    const request = pool.request();
+    request.timeout = 120000;
+
+    request.input("offset", sql.Int, offset);
+    request.input("pageSize", sql.Int, pageSize);
+
+    const where = buildRemitosWhere(filters, request);
+    const orderBy = getRemitosOrderBy(sortKey, sortDir);
+
+    const sqlFinal = `
+      SELECT COUNT(*) AS total
+      FROM dbo.remitos r WITH (NOLOCK)
+      ${where};
+
+      SELECT
+        r.numero_remito AS id,
+        r.numero_transaccion,
+        r.numero_remito,
+        r.deposito_nombre AS deposito,
+        r.deposito_id,
+        r.tipo,
+        r.usuario,
+        r.observacion,
+        r.estado,
+        r.fecha,
+        r.nro_entrega,
+        r.pedido,
+        r.proveedor
+      FROM dbo.remitos r WITH (NOLOCK)
+      ${where}
+      ${orderBy}
+      OFFSET @offset ROWS
+      FETCH NEXT @pageSize ROWS ONLY;
+    `;
+
+    const r = await request.query(sqlFinal);
+
+    const total = Number(r.recordsets?.[0]?.[0]?.total || 0);
+    const data = r.recordsets?.[1] || [];
+
+    return res.json({
+      data,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize) || 1,
+    });
   } catch (err) {
     console.error("remitos.getAll:", err);
-    res.status(500).json({
+    return res.status(500).json({
       error: "Error al listar remitos",
       detalle: err.message,
     });
   }
 };
 
-// ==========================
+// GET /remitos/distinct
+exports.getDistinctValues = async (req, res) => {
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const column = safeText(req.query.column);
+    const search = safeText(req.query.search);
+    const filters = parseFilters(req.query.filters);
+
+    const columnSql = REMITOS_FILTER_COLUMNS[column];
+
+    if (!columnSql) {
+      return res.status(400).json({
+        error: "Columna inválida para filtro",
+      });
+    }
+
+    const request = pool.request();
+    request.timeout = 120000;
+
+    const filtersWithoutCurrent = { ...filters };
+    delete filtersWithoutCurrent[column];
+
+    const whereParts = [];
+
+    const whereOther = buildRemitosWhere(filtersWithoutCurrent, request);
+    if (whereOther) {
+      whereParts.push(whereOther.replace(/^WHERE\s+/i, ""));
+    }
+
+    if (search) {
+      request.input("search", sql.NVarChar, `%${search}%`);
+      whereParts.push(`CAST(${columnSql} AS NVARCHAR(MAX)) LIKE @search`);
+    }
+
+    const whereFinal = whereParts.length
+      ? `WHERE ${whereParts.join(" AND ")}`
+      : "";
+
+    const query = `
+      SELECT TOP 300
+        value
+      FROM (
+        SELECT DISTINCT
+          CASE 
+            WHEN ${columnSql} IS NULL THEN ''
+            ELSE CAST(${columnSql} AS NVARCHAR(500))
+          END AS value
+        FROM dbo.remitos r WITH (NOLOCK)
+        ${whereFinal}
+      ) x
+      ORDER BY value;
+    `;
+
+    const r = await request.query(query);
+
+    return res.json(
+      (r.recordset || []).map((x) => ({
+        value: x.value ?? "",
+        label:
+          x.value === null || x.value === undefined || x.value === ""
+            ? "(Vacíos)"
+            : String(x.value),
+      }))
+    );
+  } catch (err) {
+    console.error("remitos.getDistinctValues:", err);
+
+    return res.status(500).json({
+      error: "Error al obtener valores del filtro",
+      detalle: err.message,
+    });
+  }
+};
+
 // GET /remitos/:id
-// ==========================
 exports.getById = async (req, res) => {
   try {
     const nro = clean(req.params.id);
@@ -599,6 +911,7 @@ exports.getById = async (req, res) => {
     const cab = await pool.request().input("n", sql.VarChar(50), nro).query(`
       SELECT
         numero_remito AS id,
+        numero_transaccion,
         numero_remito,
         deposito_nombre AS deposito,
         deposito_id,
@@ -632,13 +945,13 @@ exports.getById = async (req, res) => {
       ORDER BY d.cod_articulo
     `);
 
-    res.json({
+    return res.json({
       cabecera: cab.recordset[0],
       detalle: det.recordset || [],
     });
   } catch (err) {
     console.error("remitos.getById:", err);
-    res.status(500).json({
+    return res.status(500).json({
       error: "Error al obtener detalle",
       detalle: err.message,
     });
@@ -658,8 +971,7 @@ exports.getArticuloByCodigo = async (req, res) => {
 
     const r = await pool
       .request()
-      .input("q", sql.VarChar(80), q)
-      .query(`
+      .input("q", sql.VarChar(80), q).query(`
         SELECT TOP 1
           id_articulo,
           UPPER(LTRIM(RTRIM(codigo))) AS codigo,
@@ -679,17 +991,14 @@ exports.getArticuloByCodigo = async (req, res) => {
     return res.json(r.recordset[0]);
   } catch (err) {
     console.error("remitos.getArticuloByCodigo:", err);
-    res.status(500).json({
+    return res.status(500).json({
       error: "Error al buscar artículo",
       detalle: err.message,
     });
   }
 };
 
-// ==========================
 // POST /remitos
-// Manual
-// ==========================
 exports.create = async (req, res) => {
   try {
     await poolConnect;
@@ -712,10 +1021,7 @@ exports.create = async (req, res) => {
   }
 };
 
-// ==========================
 // POST /remitos/importar-planilla
-// body: { rows: [...] }
-// ==========================
 exports.importarPlanilla = async (req, res) => {
   try {
     await poolConnect;
@@ -732,21 +1038,12 @@ exports.importarPlanilla = async (req, res) => {
     const errores = [];
 
     for (const r of rows) {
-      if (!r.nro_remito) {
-        errores.push(`Fila ${r.fila_excel}: falta N° Remito.`);
-      }
-
-      if (!r.cod_articulo) {
-        errores.push(`Fila ${r.fila_excel}: falta Artículo.`);
-      }
-
+      if (!r.nro_remito) errores.push(`Fila ${r.fila_excel}: falta N° Remito.`);
+      if (!r.cod_articulo) errores.push(`Fila ${r.fila_excel}: falta Artículo.`);
       if (!Number.isFinite(r.cantidad) || r.cantidad <= 0) {
         errores.push(`Fila ${r.fila_excel}: cantidad inválida.`);
       }
-
-      if (!r.proveedor) {
-        errores.push(`Fila ${r.fila_excel}: falta Proveedor.`);
-      }
+      if (!r.proveedor) errores.push(`Fila ${r.fila_excel}: falta Proveedor.`);
     }
 
     const remitos = Array.from(new Set(rows.map((r) => r.nro_remito).filter(Boolean)));
@@ -799,7 +1096,6 @@ exports.importarPlanilla = async (req, res) => {
       });
     }
 
-    // Consolidar artículos repetidos
     const itemMap = new Map();
 
     for (const r of rows) {
@@ -837,11 +1133,7 @@ exports.importarPlanilla = async (req, res) => {
   }
 };
 
-// ==========================
 // PUT /remitos/:id
-// Edita cabecera del remito
-// No toca detalle ni stock
-// ==========================
 exports.update = async (req, res) => {
   try {
     const numero_remito = clean(req.params.id);
@@ -879,11 +1171,9 @@ exports.update = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    // Validar que exista el remito
     const existe = await pool
       .request()
-      .input("n", sql.VarChar(50), numero_remito)
-      .query(`
+      .input("n", sql.VarChar(50), numero_remito).query(`
         SELECT TOP 1 numero_remito
         FROM dbo.remitos WITH (NOLOCK)
         WHERE numero_remito = @n
@@ -895,7 +1185,6 @@ exports.update = async (req, res) => {
       });
     }
 
-    // Validar proveedor existente
     const proveedorValidado = await resolveProveedor(pool, proveedor);
 
     if (!proveedorValidado) {
@@ -911,8 +1200,7 @@ exports.update = async (req, res) => {
       .input("nroEntrega", sql.VarChar(80), nro_entrega)
       .input("pedido", sql.VarChar(80), pedido)
       .input("proveedor", sql.VarChar(200), proveedorValidado)
-      .input("observacion", sql.VarChar(400), observacion)
-      .query(`
+      .input("observacion", sql.VarChar(400), observacion).query(`
         UPDATE dbo.remitos
         SET
           nro_entrega = @nroEntrega,
