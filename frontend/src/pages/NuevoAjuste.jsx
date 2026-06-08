@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
 
@@ -20,6 +20,13 @@ const esMotivoOculto = (nombre) =>
 
 export default function NuevoAjuste() {
   const navigate = useNavigate();
+
+  const [searchParams] = useSearchParams();
+  const borradorIdUrl = searchParams.get("borradorId");
+  const [idBorrador, setIdBorrador] = useState(borradorIdUrl || null);
+  const [guardandoBorrador, setGuardandoBorrador] = useState(false);
+  const [ultimoGuardado, setUltimoGuardado] = useState(null);
+  const cargandoBorradorRef = useRef(false);
 
   const [depositos, setDepositos] = useState([]);
   const [motivos, setMotivos] = useState([]);
@@ -58,7 +65,10 @@ export default function NuevoAjuste() {
 
   const getPanolId = (lista) => {
     const panol = (lista || []).find(
-      (d) => String(d.nombre || "").trim().toUpperCase() === "PAÑOL"
+      (d) =>
+        String(d.nombre || "")
+          .trim()
+          .toUpperCase() === "PAÑOL",
     );
 
     return panol ? String(panol.id_deposito) : "";
@@ -88,9 +98,7 @@ export default function NuevoAjuste() {
       .then((res) => {
         const lista = Array.isArray(res.data) ? res.data : [];
 
-        setMotivos(
-          lista.filter((m) => m.activo && !esMotivoOculto(m.nombre))
-        );
+        setMotivos(lista.filter((m) => m.activo && !esMotivoOculto(m.nombre)));
       })
       .catch((err) => {
         console.error(err);
@@ -119,23 +127,27 @@ export default function NuevoAjuste() {
   };
 
   useEffect(() => {
-    setItems((prev) =>
-      prev.map((it) => ({
-        ...it,
-        stock: "",
-        ubicacion: "",
-      }))
-    );
-  }, [depositoId]);
+  if (cargandoBorradorRef.current) return;
+
+  setItems((prev) =>
+    prev.map((it) => ({
+      ...it,
+      stock: "",
+      ubicacion: "",
+    }))
+  );
+}, [depositoId]);
 
   const actualizarItem = (index, cambios) => {
     setItems((prev) =>
-      prev.map((it, i) => (i === index ? { ...it, ...cambios } : it))
+      prev.map((it, i) => (i === index ? { ...it, ...cambios } : it)),
     );
   };
 
   const consultarStock = async (codigo, index) => {
-    const c = String(codigo || "").trim().toUpperCase();
+    const c = String(codigo || "")
+      .trim()
+      .toUpperCase();
 
     if (!c || !depositoId) {
       actualizarItem(index, {
@@ -172,7 +184,9 @@ export default function NuevoAjuste() {
   };
 
   const buscarArticulo = async (codigo, index) => {
-    const c = String(codigo || "").trim().toUpperCase();
+    const c = String(codigo || "")
+      .trim()
+      .toUpperCase();
 
     if (!c) {
       actualizarItem(index, {
@@ -258,7 +272,9 @@ export default function NuevoAjuste() {
 
     e.preventDefault();
 
-    const c = String(items[index]?.codigo || "").trim().toUpperCase();
+    const c = String(items[index]?.codigo || "")
+      .trim()
+      .toUpperCase();
 
     if (!c) return;
 
@@ -310,6 +326,160 @@ export default function NuevoAjuste() {
     }, 80);
   };
 
+  const hayDatosParaBorrador = () => {
+  if (motivoId) return true;
+  if (referenteId) return true;
+  if (remitoReferencia.trim()) return true;
+  if (obra.trim()) return true;
+  if (version.trim()) return true;
+
+  return items.some(
+    (it) =>
+      String(it.codigo || "").trim() ||
+      String(it.descripcion || "").trim() ||
+      String(it.cantidad || "").trim()
+  );
+};
+
+  const guardarBorrador = async ({ silencioso = true } = {}) => {
+    if (cargandoBorradorRef.current) return;
+    if (!hayDatosParaBorrador()) return;
+
+    try {
+      setGuardandoBorrador(true);
+
+      const body = {
+        id_borrador: idBorrador,
+        deposito_id: depositoId || null,
+        motivo_id: motivoId || null,
+        tipo_ajuste: tipoAjuste,
+        remito_referencia: remitoReferencia.trim() || null,
+        id_referente: referenteId || null,
+        fecha_real: fechaReal || null,
+        obra: obra || null,
+        version: version || null,
+        items: items.map((it) => ({
+          codigo: String(it.codigo || "")
+            .trim()
+            .toUpperCase(),
+          descripcion: it.descripcion || "",
+          proveedor: it.proveedor || "",
+          stock: it.stock ?? "",
+          ubicacion: it.ubicacion || "",
+          cantidad: it.cantidad ?? "",
+        })),
+      };
+
+      const res = await api.post("/ajustes/borradores", body);
+
+      if (res.data?.id_borrador) {
+        setIdBorrador(res.data.id_borrador);
+      }
+
+      setUltimoGuardado(new Date());
+
+      if (!silencioso) {
+        alert("Borrador guardado correctamente.");
+      }
+    } catch (err) {
+      console.error("Error guardando borrador:", err);
+
+      if (!silencioso) {
+        alert(
+          err.response?.data?.error ||
+            err.response?.data?.detalle ||
+            "No se pudo guardar el borrador.",
+        );
+      }
+    } finally {
+      setGuardandoBorrador(false);
+    }
+  };
+
+  const cargarBorrador = async (id) => {
+    try {
+      cargandoBorradorRef.current = true;
+
+      const res = await api.get(`/ajustes/borradores/${id}`);
+
+      const cab = res.data?.cabecera || {};
+      const det = Array.isArray(res.data?.detalle) ? res.data.detalle : [];
+
+      setDepositoId(cab.deposito_id ? String(cab.deposito_id) : "");
+      setMotivoId(cab.motivo_id ? String(cab.motivo_id) : "");
+      setReferenteId(cab.id_referente ? String(cab.id_referente) : "");
+      setRemitoReferencia(cab.remito_referencia || "");
+      setFechaReal(
+        cab.fecha_real
+          ? String(cab.fecha_real).slice(0, 10)
+          : new Date().toISOString().slice(0, 10),
+      );
+      setObra(cab.obra || "");
+      setVersion(cab.version || "");
+      setTipoAjuste(cab.tipo_ajuste || "INGRESO");
+
+      setItems(
+        det.length
+          ? det.map((it) => ({
+              codigo: it.codigo || "",
+              descripcion: it.descripcion || "",
+              proveedor: it.proveedor || "",
+              stock: it.stock || "",
+              ubicacion: it.ubicacion || "",
+              cantidad: it.cantidad || "",
+            }))
+          : [
+              {
+                codigo: "",
+                descripcion: "",
+                proveedor: "",
+                stock: "",
+                ubicacion: "",
+                cantidad: "",
+              },
+            ],
+      );
+    } catch (err) {
+      console.error("Error cargando borrador:", err);
+
+      alert(
+        err.response?.data?.error ||
+          err.response?.data?.detalle ||
+          "No se pudo cargar el borrador.",
+      );
+    } finally {
+      setTimeout(() => {
+        cargandoBorradorRef.current = false;
+      }, 300);
+    }
+  };
+
+  useEffect(() => {
+    if (borradorIdUrl) {
+      cargarBorrador(borradorIdUrl);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [borradorIdUrl]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      guardarBorrador({ silencioso: true });
+    }, 2500);
+
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    depositoId,
+    motivoId,
+    referenteId,
+    remitoReferencia,
+    fechaReal,
+    obra,
+    version,
+    tipoAjuste,
+    items,
+  ]);
+
   const confirmar = async () => {
     try {
       setErrorMsg("");
@@ -319,7 +489,9 @@ export default function NuevoAjuste() {
 
       const itemsValidos = items
         .map((it) => ({
-          cod_articulo: String(it.codigo || "").trim().toUpperCase(),
+          cod_articulo: String(it.codigo || "")
+            .trim()
+            .toUpperCase(),
           descripcion: String(it.descripcion || "").trim(),
           cantidad: Number(it.cantidad),
         }))
@@ -332,7 +504,7 @@ export default function NuevoAjuste() {
       const noEncontrados = itemsValidos.filter(
         (it) =>
           !it.descripcion ||
-          it.descripcion.toUpperCase().includes("NO ENCONTRADO")
+          it.descripcion.toUpperCase().includes("NO ENCONTRADO"),
       );
 
       if (noEncontrados.length) {
@@ -340,7 +512,7 @@ export default function NuevoAjuste() {
       }
 
       const sinCantidad = itemsValidos.filter(
-        (it) => !it.cantidad || it.cantidad <= 0
+        (it) => !it.cantidad || it.cantidad <= 0,
       );
 
       if (sinCantidad.length) {
@@ -374,8 +546,16 @@ export default function NuevoAjuste() {
           (res.data?.ajuste?.numero_ajuste ||
             res.data?.ajuste?.id ||
             res.data?.message ||
-            "OK")
+            "OK"),
       );
+
+      if (idBorrador) {
+        try {
+          await api.delete(`/ajustes/borradores/${idBorrador}`);
+        } catch (e) {
+          console.warn("No se pudo eliminar el borrador confirmado:", e);
+        }
+      }
 
       navigate("/ajustes");
     } catch (err) {
@@ -391,20 +571,41 @@ export default function NuevoAjuste() {
 
   const hayItemsConDatos = items.some((it) => String(it.codigo || "").trim());
 
-const motivoSeleccionado = motivos.find(
-  (m) => String(m.id_motivo) === String(motivoId)
-);
+  const motivoSeleccionado = motivos.find(
+    (m) => String(m.id_motivo) === String(motivoId),
+  );
 
-const tipoMovimientoFijo = motivoSeleccionado?.tipo_movimiento || "";
+  const tipoMovimientoFijo = motivoSeleccionado?.tipo_movimiento || "";
 
   return (
     <div className="nueva-transferencia-page">
       <div className="nt-header">
         <h2 className="module-title">Nuevo Ajuste</h2>
 
-        <button className="nt-volver" onClick={() => navigate("/ajustes")}>
+        <button
+          className="nt-volver"
+          onClick={async () => {
+            await guardarBorrador({ silencioso: true });
+            navigate("/ajustes");
+          }}
+        >
           ← Volver
         </button>
+
+        <button
+          className="btn-light"
+          type="button"
+          onClick={() => guardarBorrador({ silencioso: false })}
+          disabled={guardandoBorrador}
+        >
+          {guardandoBorrador ? "Guardando..." : "Guardar borrador"}
+        </button>
+
+        {ultimoGuardado && (
+          <span style={{ fontSize: 12, opacity: 0.7 }}>
+            Guardado: {ultimoGuardado.toLocaleTimeString("es-AR")}
+          </span>
+        )}
       </div>
 
       {errorMsg && <div className="nt-error">{errorMsg}</div>}
@@ -432,70 +633,72 @@ const tipoMovimientoFijo = motivoSeleccionado?.tipo_movimiento || "";
             <label>Motivo</label>
 
             <select
-  value={motivoId}
-  onChange={(e) => {
-    const id = e.target.value;
-    setMotivoId(id);
+              value={motivoId}
+              onChange={(e) => {
+                const id = e.target.value;
+                setMotivoId(id);
 
-    const motivo = motivos.find(
-      (m) => String(m.id_motivo) === String(id)
-    );
+                const motivo = motivos.find(
+                  (m) => String(m.id_motivo) === String(id),
+                );
 
-    if (motivo?.tipo_movimiento === "INGRESO") {
-      setTipoAjuste("INGRESO");
-    }
+                if (motivo?.tipo_movimiento === "INGRESO") {
+                  setTipoAjuste("INGRESO");
+                }
 
-    if (motivo?.tipo_movimiento === "EGRESO") {
-      setTipoAjuste("EGRESO");
-    }
-  }}
->
-  <option value="">-- Seleccioná motivo --</option>
+                if (motivo?.tipo_movimiento === "EGRESO") {
+                  setTipoAjuste("EGRESO");
+                }
+              }}
+            >
+              <option value="">-- Seleccioná motivo --</option>
 
-  {motivos.map((m) => (
-    <option key={m.id_motivo} value={m.id_motivo}>
-      {m.nombre}
-      {m.tipo_movimiento ? ` (${m.tipo_movimiento})` : " (Ingreso / Egreso)"}
-    </option>
-  ))}
-</select>
+              {motivos.map((m) => (
+                <option key={m.id_motivo} value={m.id_motivo}>
+                  {m.nombre}
+                  {m.tipo_movimiento
+                    ? ` (${m.tipo_movimiento})`
+                    : " (Ingreso / Egreso)"}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="nt-field">
             <label>Tipo de ajuste</label>
 
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-             <button
-  type="button"
-  className={`btn-light ${
-    tipoAjuste === "INGRESO" ? "activo" : ""
-  }`}
-  disabled={tipoMovimientoFijo === "EGRESO"}
-  title={
-    tipoMovimientoFijo === "EGRESO"
-      ? "Este motivo está definido como egreso"
-      : ""
-  }
-  onClick={() => setTipoAjuste("INGRESO")}
->
-  INGRESO
-</button>
+              <button
+                type="button"
+                className={`btn-light ${
+                  tipoAjuste === "INGRESO" ? "activo" : ""
+                }`}
+                disabled={tipoMovimientoFijo === "EGRESO"}
+                title={
+                  tipoMovimientoFijo === "EGRESO"
+                    ? "Este motivo está definido como egreso"
+                    : ""
+                }
+                onClick={() => setTipoAjuste("INGRESO")}
+              >
+                INGRESO
+              </button>
 
               <button
-  type="button"
-  className={`btn-light ${
-    tipoAjuste === "EGRESO" ? "activo" : ""
-  }`}
-  disabled={tipoMovimientoFijo === "INGRESO"}
-  title={
-    tipoMovimientoFijo === "INGRESO"
-      ? "Este motivo está definido como ingreso"
-      : ""
-  }
-  onClick={() => setTipoAjuste("EGRESO")}
->
-  EGRESO
-</button>
+                type="button"
+                className={`btn-light ${
+                  tipoAjuste === "EGRESO" ? "activo" : ""
+                }`}
+                disabled={tipoMovimientoFijo === "INGRESO"}
+                title={
+                  tipoMovimientoFijo === "INGRESO"
+                    ? "Este motivo está definido como ingreso"
+                    : ""
+                }
+                onClick={() => setTipoAjuste("EGRESO")}
+              >
+                EGRESO
+              </button>
             </div>
           </div>
 
@@ -549,9 +752,7 @@ const tipoMovimientoFijo = motivoSeleccionado?.tipo_movimiento || "";
               <input
                 type="number"
                 value={obra}
-                onChange={(e) =>
-                  setObra(e.target.value.replace(/[^0-9]/g, ""))
-                }
+                onChange={(e) => setObra(e.target.value.replace(/[^0-9]/g, ""))}
               />
             </div>
 

@@ -22,6 +22,7 @@ const DEFAULT_SORT_STATE = {
 function cargarPreferenciasMovimientos() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_MOVIMIENTOS);
+
     if (!raw) {
       return {
         serverFilters: DEFAULT_SERVER_FILTERS,
@@ -54,12 +55,40 @@ function cargarPreferenciasMovimientos() {
   }
 }
 
-
 function Movimientos() {
   const [rows, setRows] = useState([]);
 
+  const [showExportModal, setShowExportModal] = useState(false);
+
+  const [exportFilters, setExportFilters] = useState({
+    fechaDesde: "",
+    fechaHasta: "",
+    tipo_transaccion: [],
+    motivo: [],
+    codigo: "",
+    referente: [],
+    proveedor: [],
+  });
+
+  const [exportOptions, setExportOptions] = useState({
+    tipo_transaccion: [],
+    motivo: [],
+    referente: [],
+    proveedor: [],
+  });
+
+  const [loadingExportOptions, setLoadingExportOptions] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
+
+  const codigoExportRef = useRef(null);
+
   const [currentPage, setCurrentPage] = useState(1);
-  const preferenciasIniciales = useMemo(() => cargarPreferenciasMovimientos(), []);
+
+  const preferenciasIniciales = useMemo(
+    () => cargarPreferenciasMovimientos(),
+    []
+  );
+
   const [pageSize, setPageSize] = useState(preferenciasIniciales.pageSize);
   const [gotoPage, setGotoPage] = useState("");
 
@@ -80,9 +109,8 @@ function Movimientos() {
   const [serverFilters, setServerFilters] = useState(
     preferenciasIniciales.serverFilters
   );
-  const [sortState, setSortState] = useState(
-    preferenciasIniciales.sortState
-  );
+
+  const [sortState, setSortState] = useState(preferenciasIniciales.sortState);
 
   const tableWrapRef = useRef(null);
   const topScrollRef = useRef(null);
@@ -421,6 +449,7 @@ function Movimientos() {
 
   const irPagina = (p) => {
     const n = Number(p);
+
     if (!Number.isFinite(n)) return;
     if (n < 1 || n > totalPages) return;
 
@@ -430,11 +459,202 @@ function Movimientos() {
   const from = totalRows === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const to = Math.min(currentPage * pageSize, totalRows);
 
+  const toggleExportArrayValue = (field, value) => {
+    setExportFilters((prev) => {
+      const actual = Array.isArray(prev[field]) ? prev[field] : [];
+      const existe = actual.includes(value);
+
+      return {
+        ...prev,
+        [field]: existe
+          ? actual.filter((x) => x !== value)
+          : [...actual, value],
+      };
+    });
+  };
+
+  const construirFiltrosExportacion = () => {
+    const f = {};
+
+    if (exportFilters.fechaDesde || exportFilters.fechaHasta) {
+      f.fecha = {
+        mode: "dateRange",
+        from: exportFilters.fechaDesde || "",
+        to: exportFilters.fechaHasta || "",
+      };
+    }
+
+    if (exportFilters.tipo_transaccion.length > 0) {
+      f.tipo_transaccion = {
+        mode: "in",
+        values: exportFilters.tipo_transaccion,
+      };
+    }
+
+    if (exportFilters.motivo.length > 0) {
+      f.motivo = {
+        mode: "in",
+        values: exportFilters.motivo,
+      };
+    } else {
+      f.motivo = {
+        mode: "notIn",
+        values: [MOTIVO_CONSUMO_DROPBOX],
+      };
+    }
+
+    if (exportFilters.codigo) {
+      f.codigo = {
+        mode: "contains",
+        value: exportFilters.codigo.trim(),
+      };
+    }
+
+    if (exportFilters.referente.length > 0) {
+      f.referente = {
+        mode: "in",
+        values: exportFilters.referente,
+      };
+    }
+
+    if (exportFilters.proveedor.length > 0) {
+      f.proveedor = {
+        mode: "in",
+        values: exportFilters.proveedor,
+      };
+    }
+
+    return f;
+  };
+
+  const cargarOpcionesExportacion = async () => {
+    try {
+      setLoadingExportOptions(true);
+
+      const columnasExport = [
+        "tipo_transaccion",
+        "motivo",
+        "referente",
+        "proveedor",
+      ];
+
+      const resultados = await Promise.all(
+        columnasExport.map((col) =>
+          api.get("/movimientos/distinct", {
+            params: {
+              column: col,
+              filters: JSON.stringify({}),
+            },
+            timeout: 120000,
+          })
+        )
+      );
+
+      const nuevasOpciones = {};
+
+      columnasExport.forEach((col, index) => {
+        const data = Array.isArray(resultados[index].data)
+          ? resultados[index].data
+          : [];
+
+        nuevasOpciones[col] = data
+          .map((x) => String(x.value ?? "").trim())
+          .filter((x) => x !== "");
+      });
+
+      setExportOptions(nuevasOpciones);
+    } catch (err) {
+      console.error("Error cargando opciones de exportación:", err);
+
+      alert(
+        err.response?.data?.error ||
+          err.response?.data?.detalle ||
+          "No se pudieron cargar las opciones para exportar."
+      );
+    } finally {
+      setLoadingExportOptions(false);
+    }
+  };
+
+  const abrirModalExportacion = async () => {
+    setShowExportModal(true);
+    await cargarOpcionesExportacion();
+  };
+
+  const limpiarFiltrosExportacion = () => {
+    setExportFilters({
+      fechaDesde: "",
+      fechaHasta: "",
+      tipo_transaccion: [],
+      motivo: [],
+      codigo: "",
+      referente: [],
+      proveedor: [],
+    });
+  };
+
+  const validarCodigoExportacion = async () => {
+    const codigo = String(exportFilters.codigo || "").trim();
+
+    if (!codigo) return true;
+
+    try {
+      const res = await api.get("/movimientos/distinct", {
+        params: {
+          column: "codigo",
+          search: codigo,
+          filters: JSON.stringify({}),
+        },
+        timeout: 120000,
+      });
+
+      const data = Array.isArray(res.data) ? res.data : [];
+
+      const existe = data.some(
+        (x) =>
+          String(x.value ?? "").trim().toUpperCase() === codigo.toUpperCase()
+      );
+
+      if (!existe) {
+        alert(
+          `El código "${codigo}" no existe en movimientos. Corregilo antes de exportar.`
+        );
+
+        setTimeout(() => {
+          codigoExportRef.current?.focus();
+          codigoExportRef.current?.select();
+        }, 100);
+
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      console.error("Error validando código:", err);
+
+      alert(
+        err.response?.data?.error ||
+          err.response?.data?.detalle ||
+          "No se pudo validar el código ingresado."
+      );
+
+      return false;
+    }
+  };
+
   const exportarExcel = async () => {
     try {
+      const codigoValido = await validarCodigoExportacion();
+
+      if (!codigoValido) return;
+
+      setExportingExcel(true);
+
+      const filtrosParaExportar = construirFiltrosExportacion();
+
       const res = await api.get("/movimientos/export", {
         params: {
-          filters: JSON.stringify(serverFilters),
+          filters: JSON.stringify(filtrosParaExportar),
           sortKey: sortState.key || "",
           sortDir: sortState.dir || "",
         },
@@ -468,7 +688,9 @@ function Movimientos() {
       const wb = XLSX.utils.book_new();
 
       XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
-      XLSX.writeFile(wb, "movimientos_filtrados.xlsx");
+      XLSX.writeFile(wb, "movimientos_exportados.xlsx");
+
+      setShowExportModal(false);
     } catch (err) {
       console.error("Error exportando movimientos:", err);
 
@@ -477,9 +699,54 @@ function Movimientos() {
           err.response?.data?.detalle ||
           "No se pudo exportar movimientos."
       );
+    } finally {
+      setExportingExcel(false);
     }
   };
 
+  const renderExportCheckboxGroup = (
+    title,
+    field,
+    options,
+    defaultLabel = "Todos"
+  ) => {
+    const selected = Array.isArray(exportFilters[field])
+      ? exportFilters[field]
+      : [];
+
+    return (
+      <div className="export-group">
+        <div className="export-group-title">{title}</div>
+
+        <label className="export-option export-option-default">
+          <input
+            type="checkbox"
+            checked={selected.length === 0}
+            onChange={() =>
+              setExportFilters((prev) => ({
+                ...prev,
+                [field]: [],
+              }))
+            }
+          />
+          <span>{defaultLabel}</span>
+        </label>
+
+        <div className="export-options-list">
+          {options.map((x) => (
+            <label className="export-option" key={x}>
+              <input
+                type="checkbox"
+                checked={selected.includes(x)}
+                onChange={() => toggleExportArrayValue(field, x)}
+              />
+              <span>{x}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   useEffect(() => {
     const wrap = tableWrapRef.current;
@@ -532,7 +799,7 @@ function Movimientos() {
           flexWrap: "wrap",
         }}
       >
-        <button onClick={exportarExcel}>Exportar a Excel</button>
+        <button onClick={abrirModalExportacion}>Exportar a Excel</button>
         <button onClick={limpiarFiltros}>Limpiar filtros</button>
         <button onClick={cargarMovimientos}>↻ Actualizar</button>
 
@@ -704,9 +971,7 @@ function Movimientos() {
           {Array.from({ length: totalPages }, (_, i) => i + 1)
             .filter(
               (p) =>
-                p === 1 ||
-                p === totalPages ||
-                Math.abs(p - currentPage) <= 1
+                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1
             )
             .map((p, i, arr) => (
               <React.Fragment key={p}>
@@ -740,6 +1005,128 @@ function Movimientos() {
           </button>
         </div>
       </div>
+
+      {showExportModal && (
+        <div className="modal">
+          <div className="modal-content modal-export">
+            <h3>Exportar movimientos a Excel</h3>
+
+            <p className="export-help">
+              Seleccioná los filtros que quieras aplicar. Si dejás un campo
+              vacío, no se filtra por ese dato.
+            </p>
+
+            {loadingExportOptions ? (
+              <div className="export-loading">Cargando opciones...</div>
+            ) : (
+              <>
+                <div className="export-date-row">
+                  <label>
+                    Fecha desde
+                    <input
+                      type="date"
+                      value={exportFilters.fechaDesde}
+                      onChange={(e) =>
+                        setExportFilters((prev) => ({
+                          ...prev,
+                          fechaDesde: e.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    Fecha hasta
+                    <input
+                      type="date"
+                      value={exportFilters.fechaHasta}
+                      onChange={(e) =>
+                        setExportFilters((prev) => ({
+                          ...prev,
+                          fechaHasta: e.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="export-grid">
+                  {renderExportCheckboxGroup(
+                    "Tipo de transacción",
+                    "tipo_transaccion",
+                    exportOptions.tipo_transaccion,
+                    "Todas"
+                  )}
+
+                  {renderExportCheckboxGroup(
+                    "Motivo",
+                    "motivo",
+                    exportOptions.motivo,
+                    "Todos excepto CONSUMO PRODUCCIÓN (DROPBOX)"
+                  )}
+
+                  {renderExportCheckboxGroup(
+                    "Actuante",
+                    "referente",
+                    exportOptions.referente,
+                    "Todos"
+                  )}
+
+                  {renderExportCheckboxGroup(
+                    "Proveedor",
+                    "proveedor",
+                    exportOptions.proveedor,
+                    "Todos"
+                  )}
+                </div>
+
+                <div className="export-code-row">
+                  <label>
+                    Código
+                    <input
+                      ref={codigoExportRef}
+                      value={exportFilters.codigo}
+                      onChange={(e) =>
+                        setExportFilters((prev) => ({
+                          ...prev,
+                          codigo: e.target.value,
+                        }))
+                      }
+                      placeholder="Escribí un código existente"
+                    />
+                  </label>
+                </div>
+              </>
+            )}
+
+            <div className="modal-botones export-buttons">
+              <button
+                className="btn-primary"
+                onClick={exportarExcel}
+                disabled={loadingExportOptions || exportingExcel}
+              >
+                {exportingExcel ? "Exportando..." : "Exportar"}
+              </button>
+
+              <button
+                className="btn-light"
+                onClick={limpiarFiltrosExportacion}
+                disabled={exportingExcel}
+              >
+                Limpiar filtros
+              </button>
+
+              <button
+                className="btn-light"
+                onClick={() => setShowExportModal(false)}
+                disabled={exportingExcel}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showEdit && movEdit && (
         <div className="modal">

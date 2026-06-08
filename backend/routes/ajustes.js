@@ -21,6 +21,12 @@ router.delete("/motivos/:id", authRequired, controller.deleteMotivo);
 router.get("/alertas-consumo/pendientes", authRequired, controller.getAlertasConsumoPendientes);
 router.put("/alertas-consumo/marcar-leidas", authRequired, controller.marcarAlertasConsumoLeidas);
 
+// borradores
+router.post("/borradores", authRequired, controller.saveDraft);
+router.get("/borradores/:id", authRequired, controller.getDraftById);
+router.delete("/borradores/:id", authRequired, controller.deleteDraft);
+router.post("/borradores/:id/confirmar", authRequired, controller.confirmDraft);
+
 // listados
 router.get("/", authRequired, controller.getAll);
 router.get("/:id", authRequired, controller.getById);

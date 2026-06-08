@@ -62,8 +62,8 @@ const ALLOWED_SORT_COLUMNS = new Set([
 const FILTER_COLUMNS = {
   id_movimiento: "movimientos.id_movimiento",
   numero_transaccion: "movimientos.numero_transaccion",
-  fecha: "CONVERT(VARCHAR(10), movimientos.fecha, 103)",
-  fecha_real: "CONVERT(VARCHAR(10), movimientos.fecha_real, 103)",
+  fecha: "movimientos.fecha",
+  fecha_real: "movimientos.fecha_real",
   codigo: "movimientos.codigo",
   descripcion: "movimientos.descripcion",
   cantidad: "movimientos.cantidad",
@@ -143,7 +143,7 @@ function addFilter(request, where, filters, key, columnSql) {
 
       if (value === "__EMPTY__" || value === "") {
         orParts.push(
-          `(${columnSql} IS NULL OR CAST(${columnSql} AS NVARCHAR(MAX)) = '')`
+          `(${columnSql} IS NULL OR CAST(${columnSql} AS NVARCHAR(MAX)) = '')`,
         );
       } else {
         request.input(paramName, sql.NVarChar, value);
@@ -155,7 +155,7 @@ function addFilter(request, where, filters, key, columnSql) {
     return;
   }
 
-    // Objeto: exclusión múltiple exacta
+  // Objeto: exclusión múltiple exacta
   // { mode: "notIn", values: ["CONSUMO PRODUCCIÓN (DROPBOX)"] }
   if (typeof raw === "object" && raw.mode === "notIn") {
     const values = Array.isArray(raw.values)
@@ -171,12 +171,12 @@ function addFilter(request, where, filters, key, columnSql) {
 
       if (value === "__EMPTY__" || value === "") {
         andParts.push(
-          `(${columnSql} IS NOT NULL AND CAST(${columnSql} AS NVARCHAR(MAX)) <> '')`
+          `(${columnSql} IS NOT NULL AND CAST(${columnSql} AS NVARCHAR(MAX)) <> '')`,
         );
       } else {
         request.input(paramName, sql.NVarChar, value);
         andParts.push(
-          `(${columnSql} IS NULL OR CAST(${columnSql} AS NVARCHAR(MAX)) <> @${paramName})`
+          `(${columnSql} IS NULL OR CAST(${columnSql} AS NVARCHAR(MAX)) <> @${paramName})`,
         );
       }
     });
@@ -185,6 +185,26 @@ function addFilter(request, where, filters, key, columnSql) {
     return;
   }
 
+  if (typeof raw === "object" && raw.mode === "dateRange") {
+    const from = safeText(raw.from);
+    const to = safeText(raw.to);
+
+    if (!from && !to) return;
+
+    if (from) {
+      const paramNameFrom = `f_${key}_from`;
+      request.input(paramNameFrom, sql.Date, from);
+      where.push(`CONVERT(date, ${columnSql}) >= @${paramNameFrom}`);
+    }
+
+    if (to) {
+      const paramNameTo = `f_${key}_to`;
+      request.input(paramNameTo, sql.Date, to);
+      where.push(`CONVERT(date, ${columnSql}) <= @${paramNameTo}`);
+    }
+
+    return;
+  }
 
   if (typeof raw === "object" && raw.mode === "contains") {
     const value = safeText(raw.value);
@@ -625,7 +645,7 @@ exports.getDistinctValues = async (req, res) => {
           x.value === null || x.value === undefined || x.value === ""
             ? "(Vacíos)"
             : String(x.value),
-      }))
+      })),
     );
   } catch (err) {
     console.error("movimientos.getDistinctValues:", err);
@@ -649,7 +669,9 @@ exports.updateMovimientoCabecera = async (req, res) => {
       id_referente,
     } = req.body || {};
 
-    const tipo = String(tipo_transaccion || "").trim().toUpperCase();
+    const tipo = String(tipo_transaccion || "")
+      .trim()
+      .toUpperCase();
     const numeroRaw = String(numero_transaccion || "").trim();
 
     if (!tipo || !numeroRaw) {
@@ -667,7 +689,9 @@ exports.updateMovimientoCabecera = async (req, res) => {
       obra == null || String(obra).trim() === "" ? null : String(obra).trim();
 
     const versionFinal =
-      version == null || String(version).trim() === "" ? null : String(version).trim();
+      version == null || String(version).trim() === ""
+        ? null
+        : String(version).trim();
 
     const referenteFinal =
       id_referente == null || String(id_referente).trim() === ""
@@ -682,9 +706,7 @@ exports.updateMovimientoCabecera = async (req, res) => {
     const pool = await getPool();
 
     if (referenteFinal !== null) {
-      const ref = await pool
-        .request()
-        .input("id", sql.Int, referenteFinal)
+      const ref = await pool.request().input("id", sql.Int, referenteFinal)
         .query(`
           SELECT TOP 1 id_referente, activo
           FROM dbo.referentes
@@ -713,8 +735,7 @@ exports.updateMovimientoCabecera = async (req, res) => {
         .input("remito", sql.VarChar, remitoReferencia)
         .input("obra", sql.NVarChar(sql.MAX), obraFinal)
         .input("version", sql.NVarChar(sql.MAX), versionFinal)
-        .input("referente", sql.Int, referenteFinal)
-        .query(`
+        .input("referente", sql.Int, referenteFinal).query(`
           UPDATE dbo.ajustes
           SET
             remito_referencia = @remito,
@@ -741,8 +762,7 @@ exports.updateMovimientoCabecera = async (req, res) => {
         .request()
         .input("numero", sql.VarChar, numeroRaw)
         .input("remito", sql.VarChar, remitoReferencia)
-        .input("referente", sql.Int, referenteFinal)
-        .query(`
+        .input("referente", sql.Int, referenteFinal).query(`
           UPDATE dbo.transferencias
           SET
             remito_referencia = @remito,
@@ -766,8 +786,7 @@ exports.updateMovimientoCabecera = async (req, res) => {
       const r = await pool
         .request()
         .input("numero", sql.VarChar, numeroRaw)
-        .input("remito", sql.VarChar, remitoReferencia)
-        .query(`
+        .input("remito", sql.VarChar, remitoReferencia).query(`
           UPDATE dbo.remitos
           SET
             observacion = @remito
@@ -1024,7 +1043,9 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
       id_referente,
     } = req.body || {};
 
-    const tipo = String(tipo_transaccion || "").trim().toUpperCase();
+    const tipo = String(tipo_transaccion || "")
+      .trim()
+      .toUpperCase();
     const numeroRaw = String(numero_transaccion || "").trim();
 
     if (!tipo || !numeroRaw) {
@@ -1065,9 +1086,7 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
     const pool = await getPool();
 
     if (referenteFinal !== null) {
-      const ref = await pool
-        .request()
-        .input("id", sql.Int, referenteFinal)
+      const ref = await pool.request().input("id", sql.Int, referenteFinal)
         .query(`
           SELECT TOP 1 id_referente, activo
           FROM dbo.referentes
@@ -1096,8 +1115,7 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
         .input("remito", sql.VarChar, remitoReferencia)
         .input("obra", sql.NVarChar(sql.MAX), obraFinal)
         .input("version", sql.NVarChar(sql.MAX), versionFinal)
-        .input("referente", sql.Int, referenteFinal)
-        .query(`
+        .input("referente", sql.Int, referenteFinal).query(`
           UPDATE dbo.ajustes
           SET
             remito_referencia = @remito,
@@ -1124,8 +1142,7 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
         .request()
         .input("numero", sql.VarChar, numeroRaw)
         .input("remito", sql.VarChar, remitoReferencia)
-        .input("referente", sql.Int, referenteFinal)
-        .query(`
+        .input("referente", sql.Int, referenteFinal).query(`
           UPDATE dbo.transferencias
           SET
             remito_referencia = @remito,
@@ -1149,8 +1166,7 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
       const r = await pool
         .request()
         .input("numero", sql.VarChar, numeroRaw)
-        .input("remito", sql.VarChar, remitoReferencia)
-        .query(`
+        .input("remito", sql.VarChar, remitoReferencia).query(`
           UPDATE dbo.remitos
           SET
             observacion = @remito

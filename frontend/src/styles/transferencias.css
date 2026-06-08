@@ -942,3 +942,190 @@ h2.module-title:hover::after {
 .tabla-scroll-top > div {
   height: 1px;
 }
+
+.export-filter-box {
+  border: 1px solid #d7dce2;
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: #fff;
+}
+
+.export-filter-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.export-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+
+.export-check input {
+  cursor: pointer;
+}
+
+.modal-export {
+  width: min(980px, 95vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 22px 26px;
+  box-sizing: border-box;
+}
+
+.modal-export h3 {
+  margin: 0 0 8px 0;
+  text-align: center;
+}
+
+.export-help {
+  margin: 0 0 18px 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e1e5ea;
+  font-size: 13px;
+  text-align: center;
+  color: #555;
+}
+
+.export-loading {
+  padding: 24px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.export-date-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.export-date-row label,
+.export-code-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.export-date-row input,
+.export-code-row input {
+  height: 36px;
+  padding: 7px 10px;
+  border: 1px solid #cfd6df;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.export-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.export-group {
+  border: 1px solid #d7dce2;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  min-height: 170px;
+  max-height: 220px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.export-group-title {
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #edf0f3;
+}
+
+.export-options-list {
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.export-option {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: start;
+  gap: 8px;
+  margin-bottom: 7px;
+  font-size: 13px;
+  line-height: 1.25;
+  cursor: pointer;
+  text-align: left;
+  color: #222;
+}
+
+.export-option input {
+  margin-top: 1px;
+  cursor: pointer;
+}
+
+.export-option span {
+  display: block;
+  word-break: break-word;
+}
+
+.export-option-default {
+  font-weight: 600;
+  padding-bottom: 7px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #edf0f3;
+}
+
+.export-code-row {
+  margin-top: 4px;
+}
+
+.export-buttons {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px) {
+  .export-date-row,
+  .export-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-export {
+    width: 96vw;
+    padding: 18px;
+  }
+}
+
+.badge-borrador {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #fff3cd;
+  color: #856404;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.badge-confirmado {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #d4edda;
+  color: #155724;
+  font-size: 12px;
+  font-weight: 700;
+}

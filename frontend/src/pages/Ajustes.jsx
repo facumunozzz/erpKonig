@@ -9,6 +9,7 @@ import {
 } from "../components/ExcelColumnFilter";
 
 const AJUSTE_COLUMNS = [
+  ["estado", "Estado"],
   ["fecha", "Fecha"],
   ["fecha_real", "Fecha real"],
   ["deposito", "Depósito"],
@@ -393,9 +394,23 @@ export default function Ajustes() {
               <tr
                 key={id}
                 style={{ cursor: "pointer" }}
-                onClick={() => navigate(`/ajustes/${id}`)}
+                onClick={() => {
+                  if (a.estado === "BORRADOR") {
+                    navigate(`/ajustes/nuevo?borradorId=${a.id_borrador}`);
+                  } else {
+                    navigate(`/ajustes/${id}`);
+                  }
+                }}
                 title="Ver detalle"
               >
+                <td>
+                  {a.estado === "BORRADOR" ? (
+                    <span className="badge-borrador">BORRADOR</span>
+                  ) : (
+                    <span className="badge-confirmado">CONFIRMADO</span>
+                  )}
+                </td>
+
                 <td>
                   {a.fecha ? new Date(a.fecha).toLocaleString("es-AR") : ""}
                 </td>
@@ -417,7 +432,7 @@ export default function Ajustes() {
 
           {paginated.length === 0 && (
             <tr>
-              <td colSpan={7}>Sin ajustes.</td>
+              <td colSpan={8}>Sin ajustes.</td>
             </tr>
           )}
         </tbody>

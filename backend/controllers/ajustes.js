@@ -588,30 +588,56 @@ exports.getAll = async (_req, res) => {
   try {
     await poolConnect;
     const pool = await getPool();
+
     const r = await pool.request().query(`
       SELECT 
-      a.numero_ajuste AS id,
-      a.numero_ajuste,
-      a.deposito,
-      a.obra,
-      a.version,
-      m.nombre AS motivo,
-      a.fecha,
-      a.fecha_real,
-      a.remito_referencia,
-      a.id_referente,
-      r.nombre AS referente
-    FROM dbo.ajustes a
-    LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
-    LEFT JOIN dbo.referentes r ON r.id_referente = a.id_referente
-    ORDER BY a.fecha DESC, a.numero_ajuste DESC
+        CAST(a.numero_ajuste AS VARCHAR(50)) AS id,
+        a.numero_ajuste,
+        CAST(NULL AS INT) AS id_borrador,
+        CAST('CONFIRMADO' AS VARCHAR(20)) AS estado,
+        a.deposito,
+        a.obra,
+        a.version,
+        m.nombre AS motivo,
+        a.fecha,
+        a.fecha_real,
+        a.remito_referencia,
+        a.id_referente,
+        r.nombre AS referente
+      FROM dbo.ajustes a
+      LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
+      LEFT JOIN dbo.referentes r ON r.id_referente = a.id_referente
+
+      UNION ALL
+
+      SELECT
+        CONCAT('BORRADOR-', b.id_borrador) AS id,
+        CAST(NULL AS INT) AS numero_ajuste,
+        b.id_borrador,
+        CAST('BORRADOR' AS VARCHAR(20)) AS estado,
+        b.deposito,
+        b.obra,
+        b.version,
+        b.motivo,
+        b.fecha_creacion AS fecha,
+        b.fecha_real,
+        b.remito_referencia,
+        b.id_referente,
+        r.nombre AS referente
+      FROM dbo.ajustes_borradores b
+      LEFT JOIN dbo.referentes r ON r.id_referente = b.id_referente
+
+      ORDER BY fecha DESC;
     `);
+
     res.json(r.recordset || []);
   } catch (err) {
     console.error("ajustes.getAll:", err);
-    res
-      .status(500)
-      .json({ error: "Error al listar ajustes", detalle: err.message });
+
+    res.status(500).json({
+      error: "Error al listar ajustes",
+      detalle: err.message,
+    });
   }
 };
 
@@ -1879,6 +1905,490 @@ exports.marcarAlertasConsumoLeidas = async (req, res) => {
     console.error("marcarAlertasConsumoLeidas:", err);
     return res.status(500).json({
       error: "Error al marcar alertas como leídas",
+      detalle: err.message,
+    });
+  }
+};
+
+// ========================================================
+// BORRADORES DE AJUSTES
+// ========================================================
+
+function getUsuarioReq(req) {
+  return req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
+}
+
+async function getNombreDeposito(pool, depositoId) {
+  const id = Number(depositoId);
+
+  if (!Number.isFinite(id) || id <= 0) return null;
+
+  const r = await pool
+    .request()
+    .input("id", sql.Int, id)
+    .query(`
+      SELECT TOP 1 nombre
+      FROM dbo.depositos
+      WHERE id_deposito = @id
+    `);
+
+  return r.recordset[0]?.nombre || null;
+}
+
+async function getNombreMotivo(pool, motivoId) {
+  const id = Number(motivoId);
+
+  if (!Number.isFinite(id) || id <= 0) return null;
+
+  const r = await pool
+    .request()
+    .input("id", sql.Int, id)
+    .query(`
+      SELECT TOP 1 nombre
+      FROM dbo.ajustes_motivos
+      WHERE id_motivo = @id
+    `);
+
+  return r.recordset[0]?.nombre || null;
+}
+
+exports.saveDraft = async (req, res) => {
+  let trans;
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const usuario = getUsuarioReq(req);
+
+    const idBorradorRaw = req.body?.id_borrador;
+    const idBorrador =
+      idBorradorRaw === null ||
+      idBorradorRaw === undefined ||
+      String(idBorradorRaw).trim() === ""
+        ? null
+        : Number(idBorradorRaw);
+
+    const depositoId =
+      req.body?.deposito_id === "" || req.body?.deposito_id == null
+        ? null
+        : Number(req.body.deposito_id);
+
+    const motivoId =
+      req.body?.motivo_id === "" || req.body?.motivo_id == null
+        ? null
+        : Number(req.body.motivo_id);
+
+    const referenteId =
+      req.body?.id_referente === "" || req.body?.id_referente == null
+        ? null
+        : Number(req.body.id_referente);
+
+    const depositoNombre = await getNombreDeposito(pool, depositoId);
+    const motivoNombre = await getNombreMotivo(pool, motivoId);
+
+    const tipoAjuste = String(req.body?.tipo_ajuste || "INGRESO")
+      .trim()
+      .toUpperCase();
+
+    const remitoReferencia =
+      req.body?.remito_referencia == null ||
+      String(req.body.remito_referencia).trim() === ""
+        ? null
+        : String(req.body.remito_referencia).trim();
+
+    const fechaReal =
+      req.body?.fecha_real == null || String(req.body.fecha_real).trim() === ""
+        ? null
+        : String(req.body.fecha_real).trim();
+
+    const obra =
+      req.body?.obra == null || String(req.body.obra).trim() === ""
+        ? null
+        : String(req.body.obra).trim();
+
+    const version =
+      req.body?.version == null || String(req.body.version).trim() === ""
+        ? null
+        : String(req.body.version).trim();
+
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+
+    trans = new sql.Transaction(pool);
+    await trans.begin();
+
+    let draftId = idBorrador;
+
+    if (draftId) {
+      const existe = await new sql.Request(trans)
+        .input("id", sql.Int, draftId)
+        .query(`
+          SELECT TOP 1 id_borrador
+          FROM dbo.ajustes_borradores
+          WHERE id_borrador = @id
+        `);
+
+      if (!existe.recordset.length) {
+        draftId = null;
+      }
+    }
+
+    if (!draftId) {
+      const creado = await new sql.Request(trans)
+        .input("depositoId", sql.Int, depositoId)
+        .input("deposito", sql.NVarChar(255), depositoNombre)
+        .input("motivoId", sql.Int, motivoId)
+        .input("motivo", sql.NVarChar(255), motivoNombre)
+        .input("tipo", sql.VarChar(20), tipoAjuste)
+        .input("remito", sql.NVarChar(255), remitoReferencia)
+        .input("referenteId", sql.Int, referenteId)
+        .input("fechaReal", sql.Date, fechaReal)
+        .input("obra", sql.NVarChar(sql.MAX), obra)
+        .input("version", sql.NVarChar(sql.MAX), version)
+        .input("usuario", sql.NVarChar(255), usuario)
+        .query(`
+          INSERT INTO dbo.ajustes_borradores
+          (
+            deposito_id,
+            deposito,
+            motivo_id,
+            motivo,
+            tipo_ajuste,
+            remito_referencia,
+            id_referente,
+            fecha_real,
+            obra,
+            version,
+            usuario,
+            fecha_creacion,
+            fecha_actualizacion
+          )
+          VALUES
+          (
+            @depositoId,
+            @deposito,
+            @motivoId,
+            @motivo,
+            @tipo,
+            @remito,
+            @referenteId,
+            @fechaReal,
+            @obra,
+            @version,
+            @usuario,
+            GETDATE(),
+            GETDATE()
+          );
+
+          SELECT SCOPE_IDENTITY() AS id_borrador;
+        `);
+
+      draftId = Number(creado.recordset[0].id_borrador);
+    } else {
+      await new sql.Request(trans)
+        .input("id", sql.Int, draftId)
+        .input("depositoId", sql.Int, depositoId)
+        .input("deposito", sql.NVarChar(255), depositoNombre)
+        .input("motivoId", sql.Int, motivoId)
+        .input("motivo", sql.NVarChar(255), motivoNombre)
+        .input("tipo", sql.VarChar(20), tipoAjuste)
+        .input("remito", sql.NVarChar(255), remitoReferencia)
+        .input("referenteId", sql.Int, referenteId)
+        .input("fechaReal", sql.Date, fechaReal)
+        .input("obra", sql.NVarChar(sql.MAX), obra)
+        .input("version", sql.NVarChar(sql.MAX), version)
+        .input("usuario", sql.NVarChar(255), usuario)
+        .query(`
+          UPDATE dbo.ajustes_borradores
+          SET
+            deposito_id = @depositoId,
+            deposito = @deposito,
+            motivo_id = @motivoId,
+            motivo = @motivo,
+            tipo_ajuste = @tipo,
+            remito_referencia = @remito,
+            id_referente = @referenteId,
+            fecha_real = @fechaReal,
+            obra = @obra,
+            version = @version,
+            usuario = @usuario,
+            fecha_actualizacion = GETDATE()
+          WHERE id_borrador = @id;
+        `);
+
+      await new sql.Request(trans)
+        .input("id", sql.Int, draftId)
+        .query(`
+          DELETE FROM dbo.ajustes_borradores_detalles
+          WHERE id_borrador = @id;
+        `);
+    }
+
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i] || {};
+
+      const codigo = String(it.codigo || "").trim().toUpperCase();
+      const descripcion = String(it.descripcion || "").trim();
+      const proveedor = String(it.proveedor || "").trim();
+      const stock = String(it.stock ?? "").trim();
+      const ubicacion = String(it.ubicacion || "").trim();
+      const cantidad = String(it.cantidad ?? "").trim();
+
+      if (!codigo && !descripcion && !cantidad) continue;
+
+      await new sql.Request(trans)
+        .input("id", sql.Int, draftId)
+        .input("codigo", sql.NVarChar(100), codigo || null)
+        .input("descripcion", sql.NVarChar(500), descripcion || null)
+        .input("proveedor", sql.NVarChar(255), proveedor || null)
+        .input("stock", sql.NVarChar(50), stock || null)
+        .input("ubicacion", sql.NVarChar(255), ubicacion || null)
+        .input("cantidad", sql.NVarChar(50), cantidad || null)
+        .input("orden", sql.Int, i)
+        .query(`
+          INSERT INTO dbo.ajustes_borradores_detalles
+          (
+            id_borrador,
+            codigo,
+            descripcion,
+            proveedor,
+            stock,
+            ubicacion,
+            cantidad,
+            orden
+          )
+          VALUES
+          (
+            @id,
+            @codigo,
+            @descripcion,
+            @proveedor,
+            @stock,
+            @ubicacion,
+            @cantidad,
+            @orden
+          );
+        `);
+    }
+
+    await trans.commit();
+
+    return res.json({
+      ok: true,
+      id_borrador: draftId,
+      message: "Borrador guardado",
+    });
+  } catch (err) {
+    console.error("ajustes.saveDraft:", err);
+
+    try {
+      if (trans) await trans.rollback();
+    } catch {}
+
+    return res.status(500).json({
+      error: "Error al guardar borrador",
+      detalle: err.message,
+    });
+  }
+};
+
+exports.getDraftById = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Borrador inválido" });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const cab = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT 
+          b.*,
+          r.nombre AS referente
+        FROM dbo.ajustes_borradores b
+        LEFT JOIN dbo.referentes r ON r.id_referente = b.id_referente
+        WHERE b.id_borrador = @id
+      `);
+
+    if (!cab.recordset.length) {
+      return res.status(404).json({ error: "Borrador no encontrado" });
+    }
+
+    const det = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT
+          codigo,
+          descripcion,
+          proveedor,
+          stock,
+          ubicacion,
+          cantidad
+        FROM dbo.ajustes_borradores_detalles
+        WHERE id_borrador = @id
+        ORDER BY orden ASC, id_detalle ASC
+      `);
+
+    return res.json({
+      cabecera: cab.recordset[0],
+      detalle: det.recordset || [],
+    });
+  } catch (err) {
+    console.error("ajustes.getDraftById:", err);
+
+    return res.status(500).json({
+      error: "Error al obtener borrador",
+      detalle: err.message,
+    });
+  }
+};
+
+exports.deleteDraft = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Borrador inválido" });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        DELETE FROM dbo.ajustes_borradores
+        WHERE id_borrador = @id;
+      `);
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("ajustes.deleteDraft:", err);
+
+    return res.status(500).json({
+      error: "Error al eliminar borrador",
+      detalle: err.message,
+    });
+  }
+};
+
+exports.confirmDraft = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Borrador inválido" });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const borrador = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT *
+        FROM dbo.ajustes_borradores
+        WHERE id_borrador = @id
+      `);
+
+    if (!borrador.recordset.length) {
+      return res.status(404).json({ error: "Borrador no encontrado" });
+    }
+
+    const b = borrador.recordset[0];
+
+    const detalle = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT codigo, descripcion, cantidad
+        FROM dbo.ajustes_borradores_detalles
+        WHERE id_borrador = @id
+        ORDER BY orden ASC, id_detalle ASC
+      `);
+
+    const items = (detalle.recordset || [])
+      .map((it) => {
+        const cantidad = Number(it.cantidad);
+        if (!it.codigo || !Number.isFinite(cantidad) || cantidad <= 0) {
+          return null;
+        }
+
+        return {
+          cod_articulo: String(it.codigo).trim().toUpperCase(),
+          cantidad:
+            String(b.tipo_ajuste || "").toUpperCase() === "EGRESO"
+              ? Math.abs(cantidad) * -1
+              : Math.abs(cantidad),
+        };
+      })
+      .filter(Boolean);
+
+    if (!items.length) {
+      return res.status(400).json({
+        error: "El borrador no tiene ítems válidos para confirmar",
+      });
+    }
+
+    req.body = {
+      deposito_id: b.deposito_id,
+      id_ubicacion: null,
+      motivo_id: b.motivo_id,
+      obra: b.obra,
+      version: b.version,
+      remito_referencia: b.remito_referencia,
+      id_referente: b.id_referente,
+      fecha_real: b.fecha_real,
+      items,
+    };
+
+    const originalJson = res.json.bind(res);
+    const originalStatus = res.status.bind(res);
+
+    let statusCode = 200;
+    let responsePayload = null;
+
+    res.status = (code) => {
+      statusCode = code;
+      return res;
+    };
+
+    res.json = (payload) => {
+      responsePayload = payload;
+      return res;
+    };
+
+    await exports.create(req, res);
+
+    res.status = originalStatus;
+    res.json = originalJson;
+
+    if (statusCode >= 400) {
+      return res.status(statusCode).json(responsePayload);
+    }
+
+    await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        DELETE FROM dbo.ajustes_borradores
+        WHERE id_borrador = @id;
+      `);
+
+    return res.status(statusCode).json(responsePayload);
+  } catch (err) {
+    console.error("ajustes.confirmDraft:", err);
+
+    return res.status(500).json({
+      error: "Error al confirmar borrador",
       detalle: err.message,
     });
   }
