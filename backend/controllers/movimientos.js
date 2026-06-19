@@ -1170,6 +1170,73 @@ exports.updateMovimientoCabeceraMasivo = async (req, res) => {
   }
 };
 
+// GET /movimientos/referencia/:referencia
+exports.getByReferencia = async (req, res) => {
+  try {
+    const referencia = String(req.params.referencia || "").trim();
+
+    if (!referencia) {
+      return res.status(400).json({
+        error: "Debe indicar una referencia",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const sqlBase = await buildMovimientosBase(pool);
+
+    const result = await pool
+      .request()
+      .input(
+        "referencia",
+        sql.NVarChar(255),
+        referencia,
+      )
+      .query(`
+        SELECT *
+        ${sqlBase}
+
+        WHERE
+          UPPER(
+            LTRIM(
+              RTRIM(
+                ISNULL(
+                  CAST(
+                    movimientos.remito_referencia AS NVARCHAR(255)
+                  ),
+                  ''
+                )
+              )
+            )
+          ) = UPPER(
+            LTRIM(
+              RTRIM(@referencia)
+            )
+          )
+
+        ORDER BY
+          movimientos.tipo_transaccion,
+          movimientos.numero_transaccion,
+          movimientos.codigo;
+      `);
+
+    return res.json(
+      result.recordset || [],
+    );
+  } catch (err) {
+    console.error(
+      "movimientos.getByReferencia:",
+      err,
+    );
+
+    return res.status(500).json({
+      error: "Error al buscar movimientos por referencia",
+      detalle: err.message,
+    });
+  }
+};
+
 // Alias para rutas existentes
 exports.update = exports.updateMovimientoCabecera;
 exports.updateMasivo = exports.updateMovimientoCabeceraMasivo;

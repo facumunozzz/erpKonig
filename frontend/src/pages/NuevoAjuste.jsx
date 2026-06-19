@@ -3,8 +3,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
 
-const normalizarMotivo = (v) =>
-  String(v ?? "")
+const normalizarMotivo = (value) =>
+  String(value ?? "")
     .trim()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -18,14 +18,30 @@ const MOTIVOS_OCULTOS = new Set([
 const esMotivoOculto = (nombre) =>
   MOTIVOS_OCULTOS.has(normalizarMotivo(nombre));
 
+const crearItemVacio = () => ({
+  codigo: "",
+  descripcion: "",
+  proveedor: "",
+  stock: "",
+  stockTotal: "",
+  ubicacion: "",
+  cantidad: "",
+});
+
 export default function NuevoAjuste() {
   const navigate = useNavigate();
-
   const [searchParams] = useSearchParams();
+
   const borradorIdUrl = searchParams.get("borradorId");
+
   const [idBorrador, setIdBorrador] = useState(borradorIdUrl || null);
+
   const [guardandoBorrador, setGuardandoBorrador] = useState(false);
+
   const [ultimoGuardado, setUltimoGuardado] = useState(null);
+
+  const [confirmando, setConfirmando] = useState(false);
+
   const cargandoBorradorRef = useRef(false);
 
   const [depositos, setDepositos] = useState([]);
@@ -37,27 +53,20 @@ export default function NuevoAjuste() {
   const [referenteId, setReferenteId] = useState("");
 
   const [remitoReferencia, setRemitoReferencia] = useState("");
-  const [fechaReal, setFechaReal] = useState(() => {
-    return new Date().toISOString().slice(0, 10);
-  });
+
+  const [fechaReal, setFechaReal] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
 
   const [obra, setObra] = useState("");
   const [version, setVersion] = useState("");
 
   const [tipoAjuste, setTipoAjuste] = useState("INGRESO");
 
-  const [items, setItems] = useState([
-    {
-      codigo: "",
-      descripcion: "",
-      proveedor: "",
-      stock: "",
-      ubicacion: "",
-      cantidad: "",
-    },
-  ]);
+  const [items, setItems] = useState([crearItemVacio()]);
 
   const [errorMsg, setErrorMsg] = useState("");
+
   const [loadingReferentes, setLoadingReferentes] = useState(false);
 
   const codigoRefs = useRef([]);
@@ -65,8 +74,8 @@ export default function NuevoAjuste() {
 
   const getPanolId = (lista) => {
     const panol = (lista || []).find(
-      (d) =>
-        String(d.nombre || "")
+      (deposito) =>
+        String(deposito.nombre || "")
           .trim()
           .toUpperCase() === "PAÑOL",
     );
@@ -74,52 +83,33 @@ export default function NuevoAjuste() {
     return panol ? String(panol.id_deposito) : "";
   };
 
-  useEffect(() => {
-    api
-      .get("/depositos")
-      .then((res) => {
-        const lista = Array.isArray(res.data) ? res.data : [];
-
-        setDepositos(lista);
-
-        const panolId = getPanolId(lista);
-        if (panolId) {
-          setDepositoId((prev) => prev || panolId);
-        }
-      })
-      .catch((err) => {
-        console.error(err);
-        setDepositos([]);
-        setErrorMsg("No se pudieron cargar los depósitos.");
-      });
-
-    api
-      .get("/ajustes/motivos")
-      .then((res) => {
-        const lista = Array.isArray(res.data) ? res.data : [];
-
-        setMotivos(lista.filter((m) => m.activo && !esMotivoOculto(m.nombre)));
-      })
-      .catch((err) => {
-        console.error(err);
-        setMotivos([]);
-        setErrorMsg("No se pudieron cargar los motivos.");
-      });
-
-    cargarReferentes();
-  }, []);
+  const actualizarItem = (index, cambios) => {
+    setItems((itemsActuales) =>
+      itemsActuales.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              ...cambios,
+            }
+          : item,
+      ),
+    );
+  };
 
   const cargarReferentes = async () => {
     try {
       setLoadingReferentes(true);
 
-      const res = await api.get("/referentes");
-      const list = Array.isArray(res.data) ? res.data : [];
+      const response = await api.get("/referentes");
 
-      setReferentes(list.filter((r) => r.activo));
-    } catch (err) {
-      console.error("Error cargando referentes:", err);
+      const lista = Array.isArray(response.data) ? response.data : [];
+
+      setReferentes(lista.filter((referente) => referente.activo));
+    } catch (error) {
+      console.error("Error cargando referentes:", error);
+
       setReferentes([]);
+
       setErrorMsg("No se pudieron cargar los referentes.");
     } finally {
       setLoadingReferentes(false);
@@ -127,72 +117,85 @@ export default function NuevoAjuste() {
   };
 
   useEffect(() => {
-  if (cargandoBorradorRef.current) return;
+    const cargarDatosIniciales = async () => {
+      try {
+        const responseDepositios = await api.get("/depositos");
 
-  setItems((prev) =>
-    prev.map((it) => ({
-      ...it,
-      stock: "",
-      ubicacion: "",
-    }))
-  );
-}, [depositoId]);
+        const listaDepositos = Array.isArray(responseDepositios.data)
+          ? responseDepositios.data
+          : [];
 
-  const actualizarItem = (index, cambios) => {
-    setItems((prev) =>
-      prev.map((it, i) => (i === index ? { ...it, ...cambios } : it)),
-    );
-  };
+        setDepositos(listaDepositos);
 
-  const consultarStock = async (codigo, index) => {
-    const c = String(codigo || "")
-      .trim()
-      .toUpperCase();
+        const panolId = getPanolId(listaDepositos);
 
-    if (!c || !depositoId) {
-      actualizarItem(index, {
-        stock: "",
-        ubicacion: "",
-      });
+        if (panolId) {
+          setDepositoId((valorActual) => valorActual || panolId);
+        }
+      } catch (error) {
+        console.error("Error cargando depósitos:", error);
+
+        setDepositos([]);
+
+        setErrorMsg("No se pudieron cargar los depósitos.");
+      }
+
+      try {
+        const responseMotivos = await api.get("/ajustes/motivos");
+
+        const listaMotivos = Array.isArray(responseMotivos.data)
+          ? responseMotivos.data
+          : [];
+
+        setMotivos(
+          listaMotivos.filter(
+            (motivo) => motivo.activo && !esMotivoOculto(motivo.nombre),
+          ),
+        );
+      } catch (error) {
+        console.error("Error cargando motivos:", error);
+
+        setMotivos([]);
+
+        setErrorMsg("No se pudieron cargar los motivos.");
+      }
+
+      await cargarReferentes();
+    };
+
+    cargarDatosIniciales();
+  }, []);
+
+  /*
+   * Cuando cambia el depósito se limpia el stock
+   * correspondiente al depósito anterior.
+   *
+   * La ubicación no se borra porque el usuario puede
+   * haberla editado manualmente.
+   */
+  useEffect(() => {
+    if (cargandoBorradorRef.current) {
       return;
     }
 
-    try {
-      const res = await api.get("/transferencias/stock-articulo", {
-        params: {
-          codigo: c,
-          deposito_id: depositoId,
-        },
-      });
+    setItems((itemsActuales) =>
+      itemsActuales.map((item) => ({
+        ...item,
+        stock: "",
+        stockTotal: "",
+      })),
+    );
+  }, [depositoId]);
 
-      actualizarItem(index, {
-        stock: res.data?.stock ?? 0,
-        ubicacion:
-          res.data?.ubicacion ||
-          res.data?.ubicacion_nombre ||
-          res.data?.ubicacion_articulo ||
-          "",
-      });
-    } catch (err) {
-      console.error("Error consultando stock:", err);
-
-      actualizarItem(index, {
-        stock: "Error",
-        ubicacion: "",
-      });
-    }
-  };
-
-  const buscarArticulo = async (codigo, index) => {
-    const c = String(codigo || "")
+  const consultarStock = async (codigo, index) => {
+    const codigoNormalizado = String(codigo || "")
       .trim()
       .toUpperCase();
 
-    if (!c) {
+    if (!codigoNormalizado || !depositoId) {
       actualizarItem(index, {
-        descripcion: "",
-        proveedor: "",
         stock: "",
+        stockTotal: "",
         ubicacion: "",
       });
 
@@ -200,16 +203,75 @@ export default function NuevoAjuste() {
     }
 
     try {
-      const res = await api.get(`/articulos/codigo/${encodeURIComponent(c)}`);
+      const response = await api.get("/transferencias/stock-articulo", {
+        params: {
+          codigo: codigoNormalizado,
+          deposito_id: Number(depositoId),
+        },
+      });
 
-      const descripcion = res.data?.descripcion || "";
+      actualizarItem(index, {
+        codigo: response.data?.codigo || codigoNormalizado,
+
+        stock: response.data?.stock_deposito ?? response.data?.stock ?? 0,
+
+        stockTotal: response.data?.stock_total ?? 0,
+
+        ubicacion: response.data?.ubicacion ?? "",
+      });
+
+      return true;
+    } catch (error) {
+      console.error("Error consultando stock:", error);
+
+      actualizarItem(index, {
+        stock: "Error",
+        stockTotal: "Error",
+        ubicacion: "",
+      });
+
+      return false;
+    }
+  };
+
+  const buscarArticulo = async (codigo, index) => {
+    const codigoNormalizado = String(codigo || "")
+      .trim()
+      .toUpperCase();
+
+    if (!codigoNormalizado) {
+      actualizarItem(index, {
+        codigo: "",
+        descripcion: "",
+        proveedor: "",
+        stock: "",
+        stockTotal: "",
+        ubicacion: "",
+      });
+
+      return false;
+    }
+
+    try {
+      const response = await api.get(
+        `/articulos/codigo/${encodeURIComponent(codigoNormalizado)}`,
+      );
+
+      const articulo = response.data || {};
+
+      const descripcion = String(articulo.descripcion || "").trim();
+
+      const codigoArticulo = String(articulo.codigo || codigoNormalizado)
+        .trim()
+        .toUpperCase();
 
       if (!descripcion) {
         actualizarItem(index, {
-          codigo: c,
+          codigo: codigoArticulo,
           descripcion: "Artículo no encontrado",
           proveedor: "",
           stock: "",
+          stockTotal: "",
           ubicacion: "",
         });
 
@@ -217,22 +279,23 @@ export default function NuevoAjuste() {
       }
 
       actualizarItem(index, {
-        codigo: res.data?.codigo || c,
+        codigo: codigoArticulo,
         descripcion,
-        proveedor: res.data?.proveedor || "",
+        proveedor: articulo.proveedor || "",
       });
 
-      await consultarStock(c, index);
+      await consultarStock(codigoArticulo, index);
 
       return true;
-    } catch (err) {
-      console.error("No se encontró artículo:", err);
+    } catch (error) {
+      console.error("No se encontró el artículo:", error);
 
       actualizarItem(index, {
-        codigo: c,
+        codigo: codigoNormalizado,
         descripcion: "Artículo no encontrado",
         proveedor: "",
         stock: "",
+        stockTotal: "",
         ubicacion: "",
       });
 
@@ -240,26 +303,17 @@ export default function NuevoAjuste() {
     }
   };
 
-  const asegurarFilaSiguiente = (index, focusCol = "codigo") => {
-    setItems((prev) => {
-      const nuevo = [...prev];
-
-      if (index === nuevo.length - 1) {
-        nuevo.push({
-          codigo: "",
-          descripcion: "",
-          proveedor: "",
-          stock: "",
-          ubicacion: "",
-          cantidad: "",
-        });
+  const asegurarFilaSiguiente = (index, columnaFoco = "codigo") => {
+    setItems((itemsActuales) => {
+      if (index !== itemsActuales.length - 1) {
+        return itemsActuales;
       }
 
-      return nuevo;
+      return [...itemsActuales, crearItemVacio()];
     });
 
     setTimeout(() => {
-      if (focusCol === "cantidad") {
+      if (columnaFoco === "cantidad") {
         cantidadRefs.current[index + 1]?.focus();
       } else {
         codigoRefs.current[index + 1]?.focus();
@@ -267,59 +321,50 @@ export default function NuevoAjuste() {
     }, 80);
   };
 
-  const handleCodigoKeyDown = async (e, index) => {
-    if (e.key !== "Enter") return;
+  const handleCodigoKeyDown = async (event, index) => {
+    if (event.key !== "Enter") {
+      return;
+    }
 
-    e.preventDefault();
+    event.preventDefault();
 
-    const c = String(items[index]?.codigo || "")
+    const codigo = String(items[index]?.codigo || "")
       .trim()
       .toUpperCase();
 
-    if (!c) return;
+    if (!codigo) {
+      return;
+    }
 
-    await buscarArticulo(c, index);
+    const encontrado = await buscarArticulo(codigo, index);
+
+    if (encontrado) {
+      cantidadRefs.current[index]?.focus();
+    }
+  };
+
+  const handleCantidadKeyDown = (event, index) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+
     asegurarFilaSiguiente(index, "codigo");
   };
 
-  const handleCantidadKeyDown = (e, index) => {
-    if (e.key !== "Enter") return;
+  const quitarItem = (index) => {
+    setItems((itemsActuales) => {
+      const nuevosItems = itemsActuales.filter(
+        (_, itemIndex) => itemIndex !== index,
+      );
 
-    e.preventDefault();
-    asegurarFilaSiguiente(index, "cantidad");
-  };
-
-  const quitarItem = (idx) => {
-    setItems((prev) => {
-      const nuevo = prev.filter((_, i) => i !== idx);
-
-      return nuevo.length
-        ? nuevo
-        : [
-            {
-              codigo: "",
-              descripcion: "",
-              proveedor: "",
-              stock: "",
-              ubicacion: "",
-              cantidad: "",
-            },
-          ];
+      return nuevosItems.length ? nuevosItems : [crearItemVacio()];
     });
   };
 
   const agregarFila = () => {
-    setItems((prev) => [
-      ...prev,
-      {
-        codigo: "",
-        descripcion: "",
-        proveedor: "",
-        stock: "",
-        ubicacion: "",
-        cantidad: "",
-      },
-    ]);
+    setItems((itemsActuales) => [...itemsActuales, crearItemVacio()]);
 
     setTimeout(() => {
       codigoRefs.current[items.length]?.focus();
@@ -327,53 +372,94 @@ export default function NuevoAjuste() {
   };
 
   const hayDatosParaBorrador = () => {
-  if (motivoId) return true;
-  if (referenteId) return true;
-  if (remitoReferencia.trim()) return true;
-  if (obra.trim()) return true;
-  if (version.trim()) return true;
+    if (motivoId) {
+      return true;
+    }
 
-  return items.some(
-    (it) =>
-      String(it.codigo || "").trim() ||
-      String(it.descripcion || "").trim() ||
-      String(it.cantidad || "").trim()
-  );
-};
+    if (referenteId) {
+      return true;
+    }
+
+    if (remitoReferencia.trim()) {
+      return true;
+    }
+
+    if (obra.trim()) {
+      return true;
+    }
+
+    if (version.trim()) {
+      return true;
+    }
+
+    return items.some(
+      (item) =>
+        String(item.codigo || "").trim() ||
+        String(item.descripcion || "").trim() ||
+        String(item.cantidad || "").trim(),
+    );
+  };
 
   const guardarBorrador = async ({ silencioso = true } = {}) => {
-    if (cargandoBorradorRef.current) return;
-    if (!hayDatosParaBorrador()) return;
+    if (cargandoBorradorRef.current) {
+      return null;
+    }
+
+    if (!hayDatosParaBorrador()) {
+      return null;
+    }
+
+    if (guardandoBorrador) {
+      return idBorrador;
+    }
 
     try {
       setGuardandoBorrador(true);
 
       const body = {
-        id_borrador: idBorrador,
+        id_borrador: idBorrador || null,
+
         deposito_id: depositoId || null,
+
         motivo_id: motivoId || null,
+
         tipo_ajuste: tipoAjuste,
+
         remito_referencia: remitoReferencia.trim() || null,
+
         id_referente: referenteId || null,
+
         fecha_real: fechaReal || null,
-        obra: obra || null,
-        version: version || null,
-        items: items.map((it) => ({
-          codigo: String(it.codigo || "")
+
+        obra: obra.trim() || null,
+
+        version: version.trim() || null,
+
+        items: items.map((item) => ({
+          codigo: String(item.codigo || "")
             .trim()
             .toUpperCase(),
-          descripcion: it.descripcion || "",
-          proveedor: it.proveedor || "",
-          stock: it.stock ?? "",
-          ubicacion: it.ubicacion || "",
-          cantidad: it.cantidad ?? "",
+
+          descripcion: item.descripcion || "",
+
+          proveedor: item.proveedor || "",
+
+          stock: item.stock ?? "",
+
+          stock_total: item.stockTotal ?? "",
+
+          ubicacion: item.ubicacion || "",
+
+          cantidad: item.cantidad ?? "",
         })),
       };
 
-      const res = await api.post("/ajustes/borradores", body);
+      const response = await api.post("/ajustes/borradores", body);
 
-      if (res.data?.id_borrador) {
-        setIdBorrador(res.data.id_borrador);
+      const nuevoId = response.data?.id_borrador || idBorrador;
+
+      if (nuevoId) {
+        setIdBorrador(String(nuevoId));
       }
 
       setUltimoGuardado(new Date());
@@ -381,16 +467,20 @@ export default function NuevoAjuste() {
       if (!silencioso) {
         alert("Borrador guardado correctamente.");
       }
-    } catch (err) {
-      console.error("Error guardando borrador:", err);
+
+      return nuevoId;
+    } catch (error) {
+      console.error("Error guardando borrador:", error);
 
       if (!silencioso) {
         alert(
-          err.response?.data?.error ||
-            err.response?.data?.detalle ||
+          error.response?.data?.error ||
+            error.response?.data?.detalle ||
             "No se pudo guardar el borrador.",
         );
       }
+
+      return null;
     } finally {
       setGuardandoBorrador(false);
     }
@@ -400,51 +490,69 @@ export default function NuevoAjuste() {
     try {
       cargandoBorradorRef.current = true;
 
-      const res = await api.get(`/ajustes/borradores/${id}`);
+      const response = await api.get(`/ajustes/borradores/${id}`);
 
-      const cab = res.data?.cabecera || {};
-      const det = Array.isArray(res.data?.detalle) ? res.data.detalle : [];
+      const cabecera = response.data?.cabecera || {};
 
-      setDepositoId(cab.deposito_id ? String(cab.deposito_id) : "");
-      setMotivoId(cab.motivo_id ? String(cab.motivo_id) : "");
-      setReferenteId(cab.id_referente ? String(cab.id_referente) : "");
-      setRemitoReferencia(cab.remito_referencia || "");
+      const detalle = Array.isArray(response.data?.detalle)
+        ? response.data.detalle
+        : [];
+
+      setIdBorrador(String(id));
+
+      setDepositoId(cabecera.deposito_id ? String(cabecera.deposito_id) : "");
+
+      setMotivoId(cabecera.motivo_id ? String(cabecera.motivo_id) : "");
+
+      setReferenteId(
+        cabecera.id_referente ? String(cabecera.id_referente) : "",
+      );
+
+      setRemitoReferencia(cabecera.remito_referencia || "");
+
       setFechaReal(
-        cab.fecha_real
-          ? String(cab.fecha_real).slice(0, 10)
+        cabecera.fecha_real
+          ? String(cabecera.fecha_real).slice(0, 10)
           : new Date().toISOString().slice(0, 10),
       );
-      setObra(cab.obra || "");
-      setVersion(cab.version || "");
-      setTipoAjuste(cab.tipo_ajuste || "INGRESO");
 
-      setItems(
-        det.length
-          ? det.map((it) => ({
-              codigo: it.codigo || "",
-              descripcion: it.descripcion || "",
-              proveedor: it.proveedor || "",
-              stock: it.stock || "",
-              ubicacion: it.ubicacion || "",
-              cantidad: it.cantidad || "",
-            }))
-          : [
-              {
-                codigo: "",
-                descripcion: "",
-                proveedor: "",
-                stock: "",
-                ubicacion: "",
-                cantidad: "",
-              },
-            ],
+      setObra(cabecera.obra == null ? "" : String(cabecera.obra));
+
+      setVersion(cabecera.version == null ? "" : String(cabecera.version));
+
+      setTipoAjuste(
+        String(cabecera.tipo_ajuste || "INGRESO").toUpperCase() === "EGRESO"
+          ? "EGRESO"
+          : "INGRESO",
       );
-    } catch (err) {
-      console.error("Error cargando borrador:", err);
+
+      if (detalle.length) {
+        setItems(
+          detalle.map((item) => ({
+            codigo: item.codigo || "",
+
+            descripcion: item.descripcion || "",
+
+            proveedor: item.proveedor || "",
+
+            stock: item.stock ?? "",
+
+            stockTotal: item.stock_total ?? "",
+
+            ubicacion: item.ubicacion || "",
+
+            cantidad: item.cantidad ?? "",
+          })),
+        );
+      } else {
+        setItems([crearItemVacio()]);
+      }
+    } catch (error) {
+      console.error("Error cargando borrador:", error);
 
       alert(
-        err.response?.data?.error ||
-          err.response?.data?.detalle ||
+        error.response?.data?.error ||
+          error.response?.data?.detalle ||
           "No se pudo cargar el borrador.",
       );
     } finally {
@@ -458,151 +566,199 @@ export default function NuevoAjuste() {
     if (borradorIdUrl) {
       cargarBorrador(borradorIdUrl);
     }
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [borradorIdUrl]);
 
-  useEffect(() => {
-    const t = setTimeout(() => {
-      guardarBorrador({ silencioso: true });
-    }, 2500);
-
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    depositoId,
-    motivoId,
-    referenteId,
-    remitoReferencia,
-    fechaReal,
-    obra,
-    version,
-    tipoAjuste,
-    items,
-  ]);
-
   const confirmar = async () => {
+    if (confirmando) {
+      return;
+    }
+
     try {
+      setConfirmando(true);
       setErrorMsg("");
 
-      if (!depositoId) return setErrorMsg("Seleccioná un depósito.");
-      if (!motivoId) return setErrorMsg("Seleccioná un motivo.");
+      const depositoNumero = Number(depositoId);
 
-      const itemsValidos = items
-        .map((it) => ({
-          cod_articulo: String(it.codigo || "")
-            .trim()
-            .toUpperCase(),
-          descripcion: String(it.descripcion || "").trim(),
-          cantidad: Number(it.cantidad),
-        }))
-        .filter((it) => it.cod_articulo);
+      const motivoNumero = Number(motivoId);
 
-      if (!itemsValidos.length) {
-        return setErrorMsg("Cargá al menos un código.");
+      if (!Number.isInteger(depositoNumero) || depositoNumero <= 0) {
+        setErrorMsg("Seleccioná un depósito.");
+
+        return;
       }
 
-      const noEncontrados = itemsValidos.filter(
-        (it) =>
-          !it.descripcion ||
-          it.descripcion.toUpperCase().includes("NO ENCONTRADO"),
+      if (!Number.isInteger(motivoNumero) || motivoNumero <= 0) {
+        setErrorMsg("Seleccioná un motivo.");
+
+        return;
+      }
+
+      const itemsConCodigo = items
+        .map((item) => ({
+          cod_articulo: String(item.codigo || "")
+            .trim()
+            .toUpperCase(),
+
+          descripcion: String(item.descripcion || "").trim(),
+
+          ubicacion: String(item.ubicacion || "").trim(),
+
+          cantidad: Number(item.cantidad),
+        }))
+        .filter((item) => item.cod_articulo);
+
+      if (!itemsConCodigo.length) {
+        setErrorMsg("Cargá al menos un código.");
+
+        return;
+      }
+
+      const noEncontrados = itemsConCodigo.filter(
+        (item) =>
+          !item.descripcion ||
+          item.descripcion.toUpperCase().includes("NO ENCONTRADO"),
       );
 
       if (noEncontrados.length) {
-        return setErrorMsg("Hay códigos sin validar o no encontrados.");
+        setErrorMsg("Hay códigos sin validar o no encontrados.");
+
+        return;
       }
 
-      const sinCantidad = itemsValidos.filter(
-        (it) => !it.cantidad || it.cantidad <= 0,
+      const sinCantidad = itemsConCodigo.filter(
+        (item) => !Number.isFinite(item.cantidad) || item.cantidad <= 0,
       );
 
       if (sinCantidad.length) {
-        return setErrorMsg("Todos los códigos deben tener cantidad mayor a 0.");
+        setErrorMsg("Todos los códigos deben tener una cantidad mayor a cero.");
+
+        return;
       }
 
       const body = {
-        deposito_id: Number(depositoId),
+        deposito_id: depositoNumero,
+
         id_ubicacion: null,
-        motivo_id: Number(motivoId),
-        obra: obra === "" ? null : Number(obra),
-        version: version === "" ? null : Number(version),
+
+        motivo_id: motivoNumero,
+
+        obra: obra.trim() || null,
+
+        version: version.trim() || null,
 
         remito_referencia: remitoReferencia.trim() || null,
+
         id_referente: referenteId ? Number(referenteId) : null,
+
         fecha_real: fechaReal || null,
 
-        items: itemsValidos.map((it) => ({
-          cod_articulo: it.cod_articulo,
+        items: itemsConCodigo.map((item) => ({
+          cod_articulo: item.cod_articulo,
+
+          ubicacion: item.ubicacion,
+
           cantidad:
             tipoAjuste === "EGRESO"
-              ? Math.abs(it.cantidad) * -1
-              : Math.abs(it.cantidad),
+              ? -Math.abs(Math.trunc(item.cantidad))
+              : Math.abs(Math.trunc(item.cantidad)),
         })),
       };
 
-      const res = await api.post("/ajustes", body);
+      const response = await api.post("/ajustes", body);
 
-      alert(
-        "Ajuste creado: " +
-          (res.data?.ajuste?.numero_ajuste ||
-            res.data?.ajuste?.id ||
-            res.data?.message ||
-            "OK"),
-      );
+      const numeroAjuste =
+        response.data?.ajuste?.numero_ajuste ||
+        response.data?.ajuste?.id ||
+        response.data?.message ||
+        "OK";
+
+      alert(`Ajuste creado: ${numeroAjuste}`);
 
       if (idBorrador) {
         try {
           await api.delete(`/ajustes/borradores/${idBorrador}`);
-        } catch (e) {
-          console.warn("No se pudo eliminar el borrador confirmado:", e);
+        } catch (errorBorrador) {
+          console.warn(
+            "El ajuste se creó, pero no se pudo eliminar el borrador:",
+            errorBorrador,
+          );
         }
       }
 
       navigate("/ajustes");
-    } catch (err) {
-      const msg =
-        err.response?.data?.error ||
-        err.response?.data?.detalle ||
-        err.message ||
+    } catch (error) {
+      console.error("Error creando ajuste:", error);
+
+      const mensaje =
+        error.response?.data?.error ||
+        error.response?.data?.detalle ||
+        error.message ||
         "Error al crear ajuste";
 
-      setErrorMsg(typeof msg === "string" ? msg : JSON.stringify(msg));
+      if (
+        error.response?.data?.detalle &&
+        typeof error.response.data.detalle === "object"
+      ) {
+        setErrorMsg(
+          `${mensaje}: ${JSON.stringify(error.response.data.detalle)}`,
+        );
+      } else {
+        setErrorMsg(
+          typeof mensaje === "string" ? mensaje : JSON.stringify(mensaje),
+        );
+      }
+    } finally {
+      setConfirmando(false);
     }
   };
 
-  const hayItemsConDatos = items.some((it) => String(it.codigo || "").trim());
+  const volver = () => {
+    navigate("/ajustes");
+  };
 
   const motivoSeleccionado = motivos.find(
-    (m) => String(m.id_motivo) === String(motivoId),
+    (motivo) => String(motivo.id_motivo) === String(motivoId),
   );
 
-  const tipoMovimientoFijo = motivoSeleccionado?.tipo_movimiento || "";
+  const tipoMovimientoFijo = String(
+    motivoSeleccionado?.tipo_movimiento || "",
+  ).toUpperCase();
+
+  const hayItemsConDatos = items.some((item) =>
+    String(item.codigo || "").trim(),
+  );
 
   return (
     <div className="nueva-transferencia-page">
       <div className="nt-header">
         <h2 className="module-title">Nuevo Ajuste</h2>
 
-        <button
-          className="nt-volver"
-          onClick={async () => {
-            await guardarBorrador({ silencioso: true });
-            navigate("/ajustes");
-          }}
-        >
+        <button type="button" className="nt-volver" onClick={volver}>
           ← Volver
         </button>
 
         <button
-          className="btn-light"
           type="button"
-          onClick={() => guardarBorrador({ silencioso: false })}
-          disabled={guardandoBorrador}
+          className="btn-light"
+          onClick={() =>
+            guardarBorrador({
+              silencioso: false,
+            })
+          }
+          disabled={guardandoBorrador || confirmando}
         >
           {guardandoBorrador ? "Guardando..." : "Guardar borrador"}
         </button>
 
         {ultimoGuardado && (
-          <span style={{ fontSize: 12, opacity: 0.7 }}>
+          <span
+            style={{
+              fontSize: 12,
+              opacity: 0.7,
+            }}
+          >
             Guardado: {ultimoGuardado.toLocaleTimeString("es-AR")}
           </span>
         )}
@@ -613,51 +769,54 @@ export default function NuevoAjuste() {
       <div className="nt-card">
         <div className="nt-row">
           <div className="nt-field">
-            <label>Depósito</label>
+            <label htmlFor="ajuste-deposito">Depósito</label>
 
             <select
+              id="ajuste-deposito"
               value={depositoId}
-              onChange={(e) => setDepositoId(e.target.value)}
+              onChange={(event) => setDepositoId(event.target.value)}
             >
               <option value="">-- Seleccioná depósito --</option>
 
-              {depositos.map((d) => (
-                <option key={d.id_deposito} value={d.id_deposito}>
-                  {d.nombre}
+              {depositos.map((deposito) => (
+                <option key={deposito.id_deposito} value={deposito.id_deposito}>
+                  {deposito.nombre}
                 </option>
               ))}
             </select>
           </div>
 
           <div className="nt-field">
-            <label>Motivo</label>
+            <label htmlFor="ajuste-motivo">Motivo</label>
 
             <select
+              id="ajuste-motivo"
               value={motivoId}
-              onChange={(e) => {
-                const id = e.target.value;
-                setMotivoId(id);
+              onChange={(event) => {
+                const nuevoMotivoId = event.target.value;
+
+                setMotivoId(nuevoMotivoId);
 
                 const motivo = motivos.find(
-                  (m) => String(m.id_motivo) === String(id),
+                  (item) => String(item.id_motivo) === String(nuevoMotivoId),
                 );
 
-                if (motivo?.tipo_movimiento === "INGRESO") {
-                  setTipoAjuste("INGRESO");
-                }
+                const tipo = String(
+                  motivo?.tipo_movimiento || "",
+                ).toUpperCase();
 
-                if (motivo?.tipo_movimiento === "EGRESO") {
-                  setTipoAjuste("EGRESO");
+                if (tipo === "INGRESO" || tipo === "EGRESO") {
+                  setTipoAjuste(tipo);
                 }
               }}
             >
               <option value="">-- Seleccioná motivo --</option>
 
-              {motivos.map((m) => (
-                <option key={m.id_motivo} value={m.id_motivo}>
-                  {m.nombre}
-                  {m.tipo_movimiento
-                    ? ` (${m.tipo_movimiento})`
+              {motivos.map((motivo) => (
+                <option key={motivo.id_motivo} value={motivo.id_motivo}>
+                  {motivo.nombre}
+                  {motivo.tipo_movimiento
+                    ? ` (${motivo.tipo_movimiento})`
                     : " (Ingreso / Egreso)"}
                 </option>
               ))}
@@ -667,7 +826,13 @@ export default function NuevoAjuste() {
           <div className="nt-field">
             <label>Tipo de ajuste</label>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
               <button
                 type="button"
                 className={`btn-light ${
@@ -703,22 +868,24 @@ export default function NuevoAjuste() {
           </div>
 
           <div className="nt-field">
-            <label>Remito / Referencia</label>
+            <label htmlFor="ajuste-remito">Remito / Referencia</label>
 
             <input
+              id="ajuste-remito"
               type="text"
               value={remitoReferencia}
-              onChange={(e) => setRemitoReferencia(e.target.value)}
+              onChange={(event) => setRemitoReferencia(event.target.value)}
               placeholder="Remito, comprobante o referencia..."
             />
           </div>
 
           <div className="nt-field">
-            <label>Actuante</label>
+            <label htmlFor="ajuste-referente">Actuante</label>
 
             <select
+              id="ajuste-referente"
               value={referenteId}
-              onChange={(e) => setReferenteId(e.target.value)}
+              onChange={(event) => setReferenteId(event.target.value)}
               disabled={loadingReferentes}
             >
               <option value="">
@@ -727,44 +894,48 @@ export default function NuevoAjuste() {
                   : "-- Seleccioná referente --"}
               </option>
 
-              {referentes.map((r) => (
-                <option key={r.id_referente} value={r.id_referente}>
-                  {r.nombre}
+              {referentes.map((referente) => (
+                <option
+                  key={referente.id_referente}
+                  value={referente.id_referente}
+                >
+                  {referente.nombre}
                 </option>
               ))}
             </select>
           </div>
 
           <div className="nt-field small">
-            <label>Fecha real</label>
+            <label htmlFor="ajuste-fecha">Fecha real</label>
 
             <input
+              id="ajuste-fecha"
               type="date"
               value={fechaReal}
-              onChange={(e) => setFechaReal(e.target.value)}
+              onChange={(event) => setFechaReal(event.target.value)}
             />
           </div>
 
           <div className="nt-field obra-version-field">
             <div className="mini-field">
-              <label>Obra</label>
+              <label htmlFor="ajuste-obra">Obra</label>
 
               <input
-                type="number"
+                id="ajuste-obra"
+                type="text"
                 value={obra}
-                onChange={(e) => setObra(e.target.value.replace(/[^0-9]/g, ""))}
+                onChange={(event) => setObra(event.target.value)}
               />
             </div>
 
             <div className="mini-field">
-              <label>Versión</label>
+              <label htmlFor="ajuste-version">Versión</label>
 
               <input
-                type="number"
+                id="ajuste-version"
+                type="text"
                 value={version}
-                onChange={(e) =>
-                  setVersion(e.target.value.replace(/[^0-9]/g, ""))
-                }
+                onChange={(event) => setVersion(event.target.value)}
               />
             </div>
           </div>
@@ -781,92 +952,188 @@ export default function NuevoAjuste() {
           <table className="tabla-articulos">
             <thead>
               <tr>
-                <th style={{ width: "150px" }}>Código</th>
+                <th
+                  style={{
+                    width: "150px",
+                  }}
+                >
+                  Código
+                </th>
+
                 <th>Descripción</th>
-                <th style={{ width: "170px" }}>Proveedor</th>
 
-                <th style={{ width: "120px", textAlign: "right" }}>Stock</th>
+                <th
+                  style={{
+                    width: "170px",
+                  }}
+                >
+                  Proveedor
+                </th>
 
-                <th style={{ width: "170px" }}>Ubicación</th>
+                <th
+                  style={{
+                    width: "120px",
+                    textAlign: "right",
+                  }}
+                >
+                  Stock depósito
+                </th>
 
-                <th style={{ width: "140px", textAlign: "right" }}>
+                <th
+                  style={{
+                    width: "120px",
+                    textAlign: "right",
+                  }}
+                >
+                  Stock total
+                </th>
+
+                <th
+                  style={{
+                    width: "190px",
+                  }}
+                >
+                  Ubicación
+                </th>
+
+                <th
+                  style={{
+                    width: "140px",
+                    textAlign: "right",
+                  }}
+                >
                   Cantidad{" "}
                   {tipoAjuste === "EGRESO" ? "a egresar" : "a ingresar"}
                 </th>
 
-                <th style={{ width: "110px" }}>Acción</th>
+                <th
+                  style={{
+                    width: "110px",
+                  }}
+                >
+                  Acción
+                </th>
               </tr>
             </thead>
 
             <tbody>
-              {items.map((it, idx) => (
-                <tr key={idx}>
+              {items.map((item, index) => (
+                <tr key={index}>
                   <td>
                     <input
-                      ref={(el) => (codigoRefs.current[idx] = el)}
+                      ref={(elemento) => {
+                        codigoRefs.current[index] = elemento;
+                      }}
                       type="text"
-                      value={it.codigo}
+                      value={item.codigo}
                       placeholder="Código..."
-                      onChange={(e) =>
-                        actualizarItem(idx, {
-                          codigo: e.target.value.toUpperCase(),
+                      onChange={(event) =>
+                        actualizarItem(index, {
+                          codigo: event.target.value.toUpperCase(),
+
                           descripcion: "",
+
                           proveedor: "",
+
                           stock: "",
+
+                          stockTotal: "",
+
                           ubicacion: "",
                         })
                       }
-                      onBlur={() => buscarArticulo(it.codigo, idx)}
-                      onKeyDown={(e) => handleCodigoKeyDown(e, idx)}
-                      style={{ width: "100%" }}
+                      onBlur={() => buscarArticulo(item.codigo, index)}
+                      onKeyDown={(event) => handleCodigoKeyDown(event, index)}
+                      style={{
+                        width: "100%",
+                      }}
                     />
                   </td>
 
                   <td>
                     <input
                       type="text"
-                      value={it.descripcion}
+                      value={item.descripcion}
                       readOnly
                       placeholder="Se completa automáticamente"
-                      style={{ width: "100%" }}
+                      style={{
+                        width: "100%",
+                      }}
                     />
                   </td>
 
                   <td>
                     <input
                       type="text"
-                      value={it.proveedor || ""}
+                      value={item.proveedor || ""}
                       readOnly
                       placeholder="Proveedor"
-                      style={{ width: "100%" }}
+                      style={{
+                        width: "100%",
+                      }}
                     />
                   </td>
 
-                  <td style={{ textAlign: "right" }}>{it.stock ?? ""}</td>
+                  <td
+                    style={{
+                      textAlign: "right",
+                    }}
+                  >
+                    {item.stock ?? ""}
+                  </td>
 
-                  <td>{it.ubicacion ?? ""}</td>
+                  <td
+                    style={{
+                      textAlign: "right",
+                    }}
+                  >
+                    {item.stockTotal ?? ""}
+                  </td>
 
                   <td>
                     <input
-                      ref={(el) => (cantidadRefs.current[idx] = el)}
+                      type="text"
+                      value={item.ubicacion || ""}
+                      placeholder="Ubicación del artículo"
+                      maxLength={100}
+                      onChange={(event) =>
+                        actualizarItem(index, {
+                          ubicacion: event.target.value,
+                        })
+                      }
+                      style={{
+                        width: "100%",
+                      }}
+                    />
+                  </td>
+
+                  <td>
+                    <input
+                      ref={(elemento) => {
+                        cantidadRefs.current[index] = elemento;
+                      }}
                       type="number"
                       min="1"
                       step="1"
-                      value={it.cantidad}
-                      onChange={(e) =>
-                        actualizarItem(idx, {
-                          cantidad: e.target.value.replace(/[^0-9]/g, ""),
+                      value={item.cantidad}
+                      onChange={(event) =>
+                        actualizarItem(index, {
+                          cantidad: event.target.value.replace(/[^0-9]/g, ""),
                         })
                       }
-                      onKeyDown={(e) => handleCantidadKeyDown(e, idx)}
-                      style={{ width: "100%", textAlign: "right" }}
+                      onKeyDown={(event) => handleCantidadKeyDown(event, index)}
+                      style={{
+                        width: "100%",
+                        textAlign: "right",
+                      }}
                     />
                   </td>
 
                   <td>
                     <button
+                      type="button"
                       className="borrar-btn"
-                      onClick={() => quitarItem(idx)}
+                      onClick={() => quitarItem(index)}
                     >
                       Quitar
                     </button>
@@ -877,17 +1144,32 @@ export default function NuevoAjuste() {
           </table>
         </div>
 
-        <div className="nt-actions" style={{ marginTop: 14 }}>
-          <button className="btn-light" onClick={agregarFila}>
+        <div
+          className="nt-actions"
+          style={{
+            marginTop: 14,
+          }}
+        >
+          <button
+            type="button"
+            className="btn-light"
+            onClick={agregarFila}
+            disabled={confirmando}
+          >
             Agregar fila
           </button>
 
           <button
+            type="button"
             className="btn-primary"
             onClick={confirmar}
-            disabled={!depositoId || !motivoId || !hayItemsConDatos}
+            disabled={
+              confirmando || !depositoId || !motivoId || !hayItemsConDatos
+            }
           >
-            Confirmar {tipoAjuste === "EGRESO" ? "egreso" : "ingreso"}
+            {confirmando
+              ? "Confirmando..."
+              : `Confirmar ${tipoAjuste === "EGRESO" ? "egreso" : "ingreso"}`}
           </button>
         </div>
       </div>

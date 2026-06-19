@@ -1,19 +1,67 @@
 // backend/controllers/ajustes.js
 const { sql, poolConnect, getPool } = require("../db");
 const XLSX = require("xlsx");
-const axios = require("axios");
+
 const {
   downloadByPath,
   uploadOverwriteByPath,
 } = require("../services/dropbox");
 
-// ------------------------ helpers ------------------------
-const toDb = (v) =>
-  v == null || String(v).trim() === "" ? null : String(v).trim();
-const up = (v) => toDb(v)?.toUpperCase() ?? null;
+// ========================================================
+// HELPERS
+// ========================================================
 
-const normalizarMotivoSistema = (v) =>
-  String(v ?? "")
+const toDb = (value) =>
+  value == null || String(value).trim() === "" ? null : String(value).trim();
+
+const up = (value) => toDb(value)?.toUpperCase() ?? null;
+
+function asInt(value) {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? Math.trunc(number) : NaN;
+}
+
+function toNumber0(value) {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  const text = String(value).trim();
+
+  if (!text) {
+    return 0;
+  }
+
+  const cleaned = text
+    .replace(/\s/g, "")
+    .replace(/\.(?=\d{3}(\D|$))/g, "")
+    .replace(/,(?=\d{3}(\D|$))/g, "")
+    .replace(",", ".");
+
+  const number = Number(cleaned);
+
+  return Number.isFinite(number) ? number : 0;
+}
+
+function normalizarTipoMovimiento(value) {
+  const text = String(value ?? "")
+    .trim()
+    .toUpperCase();
+
+  if (text === "INGRESO" || text === "EGRESO") {
+    return text;
+  }
+
+  return null;
+}
+
+const normalizarMotivoSistema = (value) =>
+  String(value ?? "")
     .trim()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -27,174 +75,203 @@ const MOTIVOS_SISTEMA = new Set([
 const esMotivoSistema = (nombre) =>
   MOTIVOS_SISTEMA.has(normalizarMotivoSistema(nombre));
 
-function toNumber0(v) {
-  if (v === null || v === undefined) return 0;
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-
-  const s = String(v).trim();
-  if (!s) return 0;
-
-  // normaliza 1.234,56 o 1,234.56 o 1234,56
-  const cleaned = s
-    .replace(/\s/g, "")
-    .replace(/\.(?=\d{3}(\D|$))/g, "") // quita miles con punto
-    .replace(/,(?=\d{3}(\D|$))/g, "") // quita miles con coma
-    .replace(",", "."); // decimal coma -> punto
-
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : 0;
+function getUsuarioReq(req) {
+  return req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
 }
 
-function asInt(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : NaN;
-}
+// ========================================================
+// UBICACIÓN TÉCNICA DE STOCK
+// ========================================================
 
-function normalizarTipoMovimiento(v) {
-  const s = String(v ?? "").trim().toUpperCase();
+async function resolveUbicacionId(transaction, { depositoId, ubicacionId }) {
+  const deposito = asInt(depositoId);
 
-  if (!s) return null;
-
-  if (s === "INGRESO" || s === "EGRESO") {
-    return s;
+  if (!Number.isFinite(deposito) || deposito <= 0) {
+    throw new Error("Depósito inválido");
   }
 
-  return null;
-}
+  const ubicacion = ubicacionId == null ? NaN : asInt(ubicacionId);
 
-// Resuelve/valida id_ubicacion para un depósito.
-// - Si viene ubicacionId: valida que exista y pertenezca al depósito
-// - Si no viene: busca "GENERAL" y si no existe, la primera del depósito
-async function resolveUbicacionId(trans, { depositoId, ubicacionId }) {
-  const dep = asInt(depositoId);
-  if (!Number.isFinite(dep)) throw new Error("Depósito inválido");
-
-  const ub = ubicacionId == null ? NaN : asInt(ubicacionId);
-
-  // 1) si el cliente manda ubicación, validar
-  if (Number.isFinite(ub) && ub > 0) {
-    const r = await new sql.Request(trans)
-      .input("dep", sql.Int, dep)
-      .input("ub", sql.Int, ub).query(`
+  /*
+   * Si el frontend envía una ubicación técnica,
+   * se valida que pertenezca al depósito.
+   */
+  if (Number.isFinite(ubicacion) && ubicacion > 0) {
+    const result = await new sql.Request(transaction)
+      .input("depositoId", sql.Int, deposito)
+      .input("ubicacionId", sql.Int, ubicacion).query(`
         SELECT id_ubicacion
         FROM dbo.ubicaciones
-        WHERE id_deposito = @dep AND id_ubicacion = @ub
+        WHERE id_deposito = @depositoId
+          AND id_ubicacion = @ubicacionId;
       `);
-    if (!r.recordset.length) {
-      throw new Error(`Ubicación inválida (${ub}) para el depósito ${dep}`);
+
+    if (!result.recordset.length) {
+      throw new Error(
+        `Ubicación inválida (${ubicacion}) para el depósito ${deposito}`,
+      );
     }
-    return ub;
+
+    return ubicacion;
   }
 
-  // 2) si no manda ubicación: buscar GENERAL
-  let rGen = await new sql.Request(trans).input("dep", sql.Int, dep).query(`
+  /*
+   * Si no se envía ubicación técnica,
+   * busca primero GENERAL.
+   */
+  const general = await new sql.Request(transaction).input(
+    "depositoId",
+    sql.Int,
+    deposito,
+  ).query(`
       SELECT TOP 1 id_ubicacion
       FROM dbo.ubicaciones
-      WHERE id_deposito = @dep
+      WHERE id_deposito = @depositoId
+        AND activa = 1
         AND UPPER(LTRIM(RTRIM(nombre))) = 'GENERAL'
-      ORDER BY id_ubicacion
+      ORDER BY id_ubicacion;
     `);
 
-  if (rGen.recordset.length) return Number(rGen.recordset[0].id_ubicacion);
+  if (general.recordset.length) {
+    return Number(general.recordset[0].id_ubicacion);
+  }
 
-  // 3) fallback: primera ubicación del depósito
-  let rAny = await new sql.Request(trans).input("dep", sql.Int, dep).query(`
+  /*
+   * Si no existe GENERAL, usa la primera activa.
+   */
+  const primera = await new sql.Request(transaction).input(
+    "depositoId",
+    sql.Int,
+    deposito,
+  ).query(`
       SELECT TOP 1 id_ubicacion
       FROM dbo.ubicaciones
-      WHERE id_deposito = @dep
-      ORDER BY id_ubicacion
+      WHERE id_deposito = @depositoId
+        AND activa = 1
+      ORDER BY id_ubicacion;
     `);
 
-  if (rAny.recordset.length) return Number(rAny.recordset[0].id_ubicacion);
+  if (primera.recordset.length) {
+    return Number(primera.recordset[0].id_ubicacion);
+  }
 
-  // 4) no hay ubicaciones
   throw new Error(
-    `El depósito ${dep} no tiene ubicaciones. Creá una ubicación "GENERAL" para poder ajustar stock.`,
+    `El depósito ${deposito} no tiene ubicaciones activas. Creá una ubicación GENERAL.`,
   );
 }
 
-// Lee stock actual (suma) para validar
-async function getStockActual(trans, { depositoId, articuloId, ubicacionId }) {
-  const rq = new sql.Request(trans);
-  const r = await rq
-    .input("dep", sql.Int, depositoId)
-    .input("art", sql.Int, articuloId)
-    .input("ub", sql.Int, ubicacionId ?? null).query(`
-      SELECT ISNULL(SUM(cantidad),0) AS q
+// ========================================================
+// STOCK
+// ========================================================
+
+async function getStockActual(
+  transaction,
+  { depositoId, articuloId, ubicacionId = null },
+) {
+  const result = await new sql.Request(transaction)
+    .input("depositoId", sql.Int, depositoId)
+    .input("articuloId", sql.Int, articuloId)
+    .input("ubicacionId", sql.Int, ubicacionId).query(`
+      SELECT
+        ISNULL(SUM(cantidad), 0) AS cantidad
       FROM dbo.stock WITH (UPDLOCK, HOLDLOCK)
-      WHERE id_deposito = @dep
-        AND id_articulo = @art
-        AND (@ub IS NULL OR id_ubicacion = @ub)
+      WHERE id_deposito = @depositoId
+        AND id_articulo = @articuloId
+        AND (
+          @ubicacionId IS NULL
+          OR id_ubicacion = @ubicacionId
+        );
     `);
-  return Number(r.recordset?.[0]?.q || 0);
+
+  return Number(result.recordset?.[0]?.cantidad || 0);
+}
+
+async function upsertStockDelta(
+  transaction,
+  { depositoId, articuloId, ubicacionId, delta },
+) {
+  await new sql.Request(transaction)
+    .input("depositoId", sql.Int, depositoId)
+    .input("articuloId", sql.Int, articuloId)
+    .input("ubicacionId", sql.Int, ubicacionId)
+    .input("delta", sql.Int, delta).query(`
+      MERGE dbo.stock WITH (HOLDLOCK) AS destino
+
+      USING (
+        SELECT
+          @depositoId AS id_deposito,
+          @articuloId AS id_articulo,
+          @ubicacionId AS id_ubicacion
+      ) AS origen
+
+      ON (
+        destino.id_deposito = origen.id_deposito
+        AND destino.id_articulo = origen.id_articulo
+        AND destino.id_ubicacion = origen.id_ubicacion
+      )
+
+      WHEN MATCHED THEN
+        UPDATE SET
+          cantidad = destino.cantidad + @delta
+
+      WHEN NOT MATCHED THEN
+        INSERT
+        (
+          id_deposito,
+          id_articulo,
+          id_ubicacion,
+          cantidad
+        )
+        VALUES
+        (
+          origen.id_deposito,
+          origen.id_articulo,
+          origen.id_ubicacion,
+          @delta
+        );
+    `);
 }
 
 async function tryDescontarStock(
-  trans,
+  transaction,
   { depositoId, articuloId, ubicacionId, deltaNegativo },
 ) {
-  // deltaNegativo debe ser NEGATIVO (ej -5)
-  const rq = new sql.Request(trans);
-  const r = await rq
-    .input("dep", sql.Int, depositoId)
-    .input("art", sql.Int, articuloId)
-    .input("ub", sql.Int, ubicacionId)
+  const result = await new sql.Request(transaction)
+    .input("depositoId", sql.Int, depositoId)
+    .input("articuloId", sql.Int, articuloId)
+    .input("ubicacionId", sql.Int, ubicacionId)
     .input("delta", sql.Int, deltaNegativo).query(`
       UPDATE dbo.stock
       SET cantidad = cantidad + @delta
-      WHERE id_deposito = @dep
-        AND id_articulo = @art
-        AND id_ubicacion = @ub
-        AND (cantidad + @delta) >= 0;
+      WHERE id_deposito = @depositoId
+        AND id_articulo = @articuloId
+        AND id_ubicacion = @ubicacionId
+        AND cantidad + @delta >= 0;
 
       SELECT @@ROWCOUNT AS affected;
     `);
 
-  return Number(r.recordset?.[0]?.affected || 0) === 1;
+  return Number(result.recordset?.[0]?.affected || 0) === 1;
 }
 
-// UPSERT atómico (evita UQ_stock_art_dep en concurrencia)
-// Ajusta cantidad = cantidad + @delta
-async function upsertStockDelta(
-  trans,
-  { depositoId, articuloId, ubicacionId, delta },
-) {
-  const rq = new sql.Request(trans);
-  await rq
-    .input("dep", sql.Int, depositoId)
-    .input("art", sql.Int, articuloId)
-    .input("ub", sql.Int, ubicacionId)
-    .input("delta", sql.Int, delta).query(`
-      MERGE dbo.stock WITH (HOLDLOCK) AS t
-      USING (SELECT @dep AS id_deposito, @art AS id_articulo, @ub AS id_ubicacion) AS s
-      ON (
-        t.id_deposito = s.id_deposito
-        AND t.id_articulo = s.id_articulo
-        AND t.id_ubicacion = s.id_ubicacion
-      )
-      WHEN MATCHED THEN
-        UPDATE SET cantidad = t.cantidad + @delta
-      WHEN NOT MATCHED THEN
-        INSERT (id_deposito, id_articulo, id_ubicacion, cantidad)
-        VALUES (s.id_deposito, s.id_articulo, s.id_ubicacion, @delta);
+// ========================================================
+// DETALLES DE AJUSTE
+// ========================================================
+
+async function detallesTieneUsuario(transaction) {
+  const result = await new sql.Request(transaction).query(`
+      SELECT TOP 1 1 AS existe
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = 'dbo'
+        AND TABLE_NAME = 'ajustes_detalles'
+        AND COLUMN_NAME = 'usuario';
     `);
+
+  return result.recordset.length > 0;
 }
 
-// Detecta si existe columna "usuario" en dbo.ajustes_detalles, para no romper tu DB si no la tiene
-async function detallesTieneUsuario(trans) {
-  const r = await new sql.Request(trans).query(`
-    SELECT TOP 1 1 AS ok
-    FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_SCHEMA = 'dbo'
-      AND TABLE_NAME = 'ajustes_detalles'
-      AND COLUMN_NAME = 'usuario'
-  `);
-  return r.recordset.length > 0;
-}
-
-// Inserta detalle con o sin usuario según exista la columna
 async function insertDetalle(
-  trans,
+  transaction,
   {
     ajusteId,
     cod,
@@ -206,133 +283,182 @@ async function insertDetalle(
     observacion = null,
   },
 ) {
-  const conUsuario = await detallesTieneUsuario(trans);
+  const conUsuario = await detallesTieneUsuario(transaction);
 
-  const rq = new sql.Request(trans)
-    .input("nro", sql.Int, ajusteId)
-    .input("cod", sql.VarChar, cod)
-    .input("desc", sql.VarChar, desc || "")
-    .input("cant", sql.Int, cantidad)
-    .input("req", sql.Int, cantidadRequerida)
-    .input("falt", sql.Int, cantidadFaltante)
-    .input("obs", sql.VarChar, observacion);
+  const request = new sql.Request(transaction)
+    .input("ajusteId", sql.Int, ajusteId)
+    .input("codigo", sql.VarChar(100), cod)
+    .input("descripcion", sql.VarChar(500), desc || "")
+    .input("cantidad", sql.Int, cantidad)
+    .input("cantidadRequerida", sql.Int, cantidadRequerida)
+    .input("cantidadFaltante", sql.Int, cantidadFaltante)
+    .input("observacion", sql.VarChar(sql.MAX), observacion);
 
-  if (conUsuario) rq.input("usr", sql.VarChar, usuario ?? null);
+  if (conUsuario) {
+    request.input("usuario", sql.VarChar(255), usuario ?? null);
+  }
 
-  await rq.query(
-    conUsuario
-      ? `
-        INSERT INTO dbo.ajustes_detalles
-        (
-          ajuste_id,
-          cod_articulo,
-          descripcion,
-          cantidad,
-          usuario,
-          cantidad_requerida,
-          cantidad_faltante,
-          observacion
-        )
-        VALUES
-        (
-          @nro,
-          @cod,
-          @desc,
-          @cant,
-          @usr,
-          @req,
-          @falt,
-          @obs
-        )
-      `
-      : `
-        INSERT INTO dbo.ajustes_detalles
-        (
-          ajuste_id,
-          cod_articulo,
-          descripcion,
-          cantidad,
-          cantidad_requerida,
-          cantidad_faltante,
-          observacion
-        )
-        VALUES
-        (
-          @nro,
-          @cod,
-          @desc,
-          @cant,
-          @req,
-          @falt,
-          @obs
-        )
-      `,
-  );
+  if (conUsuario) {
+    await request.query(`
+      INSERT INTO dbo.ajustes_detalles
+      (
+        ajuste_id,
+        cod_articulo,
+        descripcion,
+        cantidad,
+        usuario,
+        cantidad_requerida,
+        cantidad_faltante,
+        observacion
+      )
+      VALUES
+      (
+        @ajusteId,
+        @codigo,
+        @descripcion,
+        @cantidad,
+        @usuario,
+        @cantidadRequerida,
+        @cantidadFaltante,
+        @observacion
+      );
+    `);
+  } else {
+    await request.query(`
+      INSERT INTO dbo.ajustes_detalles
+      (
+        ajuste_id,
+        cod_articulo,
+        descripcion,
+        cantidad,
+        cantidad_requerida,
+        cantidad_faltante,
+        observacion
+      )
+      VALUES
+      (
+        @ajusteId,
+        @codigo,
+        @descripcion,
+        @cantidad,
+        @cantidadRequerida,
+        @cantidadFaltante,
+        @observacion
+      );
+    `);
+  }
 }
 
-// Busca motivo por id (valida activo)
-async function requireMotivoActivo(trans, motivoId) {
-  const r = await new sql.Request(trans).input("id", sql.Int, motivoId).query(`
-      SELECT id_motivo, nombre, activo
-      FROM dbo.ajustes_motivos WITH (UPDLOCK, HOLDLOCK)
-      WHERE id_motivo = @id
+// ========================================================
+// MOTIVOS AUXILIARES
+// ========================================================
+
+async function requireMotivoActivo(transaction, motivoId) {
+  const result = await new sql.Request(transaction).input(
+    "motivoId",
+    sql.Int,
+    motivoId,
+  ).query(`
+      SELECT
+        id_motivo,
+        nombre,
+        activo,
+        tipo_movimiento
+      FROM dbo.ajustes_motivos
+      WITH (UPDLOCK, HOLDLOCK)
+      WHERE id_motivo = @motivoId;
     `);
 
-  if (!r.recordset.length) throw new Error("Motivo inválido");
-  if (!r.recordset[0].activo) throw new Error("Motivo inactivo");
+  if (!result.recordset.length) {
+    throw new Error("Motivo inválido");
+  }
+
+  if (!result.recordset[0].activo) {
+    throw new Error("Motivo inactivo");
+  }
 
   return {
-    id_motivo: Number(r.recordset[0].id_motivo),
-    nombre: String(r.recordset[0].nombre || ""),
+    id_motivo: Number(result.recordset[0].id_motivo),
+    nombre: String(result.recordset[0].nombre || ""),
+    tipo_movimiento: result.recordset[0].tipo_movimiento || null,
   };
 }
 
-// Busca motivo por nombre (para import/dropbox)
-async function getMotivoIdByNombreActivo(trans, nombreExactoUpper) {
-  const r = await new sql.Request(trans).input(
-    "n",
-    sql.VarChar,
-    nombreExactoUpper,
+async function getMotivoIdByNombreActivo(transaction, nombre) {
+  const nombreNormalizado = normalizarMotivoSistema(nombre);
+
+  const result = await new sql.Request(transaction).input(
+    "nombre",
+    sql.VarChar(255),
+    nombreNormalizado,
   ).query(`
       SELECT TOP 1 id_motivo
-      FROM dbo.ajustes_motivos WITH (UPDLOCK, HOLDLOCK)
-      WHERE UPPER(LTRIM(RTRIM(nombre))) = @n
+      FROM dbo.ajustes_motivos
+      WITH (UPDLOCK, HOLDLOCK)
+      WHERE
+        UPPER(
+          REPLACE(
+            REPLACE(
+              REPLACE(
+                REPLACE(
+                  LTRIM(RTRIM(nombre)),
+                  N'Ó',
+                  N'O'
+                ),
+                N'Í',
+                N'I'
+              ),
+              N'Á',
+              N'A'
+            ),
+            N'É',
+            N'E'
+          )
+        ) = @nombre
         AND activo = 1
-      ORDER BY id_motivo
+      ORDER BY id_motivo;
     `);
 
-  if (!r.recordset.length) return null;
-  return Number(r.recordset[0].id_motivo);
+  if (!result.recordset.length) {
+    return null;
+  }
+
+  return Number(result.recordset[0].id_motivo);
 }
 
 // ========================================================
-// MOTIVOS (ABM)
+// MOTIVOS ABM
 // ========================================================
+
 exports.getMotivos = async (_req, res) => {
   try {
     await poolConnect;
     const pool = await getPool();
 
-    const r = await pool.request().query(`
-      SELECT 
-        id_motivo, 
-        nombre, 
+    const result = await pool.request().query(`
+      SELECT
+        id_motivo,
+        nombre,
         activo,
         tipo_movimiento
       FROM dbo.ajustes_motivos
-      WHERE UPPER(LTRIM(RTRIM(nombre))) NOT IN (
+      WHERE UPPER(LTRIM(RTRIM(nombre))) NOT IN
+      (
         N'CONSUMO PRODUCCIÓN (DROPBOX)',
         N'CONSUMO PRODUCCION (DROPBOX)',
         N'IMPORTACIÓN EXCEL',
         N'IMPORTACION EXCEL'
       )
-      ORDER BY activo DESC, nombre ASC
+      ORDER BY
+        activo DESC,
+        nombre ASC;
     `);
 
-    res.json(r.recordset || []);
+    return res.json(result.recordset || []);
   } catch (err) {
     console.error("ajustes.getMotivos:", err);
-    res.status(500).json({
+
+    return res.status(500).json({
       error: "Error al listar motivos",
       detalle: err.message,
     });
@@ -342,10 +468,13 @@ exports.getMotivos = async (_req, res) => {
 exports.createMotivo = async (req, res) => {
   try {
     const nombre = String(req.body?.nombre ?? "").trim();
+
     const tipoMovimiento = normalizarTipoMovimiento(req.body?.tipo_movimiento);
 
     if (!nombre) {
-      return res.status(400).json({ error: "Nombre obligatorio" });
+      return res.status(400).json({
+        error: "Nombre obligatorio",
+      });
     }
 
     if (esMotivoSistema(nombre)) {
@@ -357,22 +486,21 @@ exports.createMotivo = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    const r = await pool
+    const result = await pool
       .request()
-      .input("n", sql.VarChar(150), nombre)
-      .input("tipo", sql.VarChar(10), tipoMovimiento)
-      .query(`
-        INSERT INTO dbo.ajustes_motivos 
+      .input("nombre", sql.VarChar(150), nombre)
+      .input("tipoMovimiento", sql.VarChar(10), tipoMovimiento).query(`
+        INSERT INTO dbo.ajustes_motivos
         (
-          nombre, 
+          nombre,
           activo,
           tipo_movimiento
         )
-        VALUES 
+        VALUES
         (
-          @n, 
+          @nombre,
           1,
-          @tipo
+          @tipoMovimiento
         );
 
         SELECT SCOPE_IDENTITY() AS id_motivo;
@@ -380,7 +508,7 @@ exports.createMotivo = async (req, res) => {
 
     return res.status(201).json({
       ok: true,
-      id_motivo: Number(r.recordset[0].id_motivo),
+      id_motivo: Number(result.recordset[0].id_motivo),
     });
   } catch (err) {
     if (
@@ -404,25 +532,27 @@ exports.createMotivo = async (req, res) => {
 
 exports.updateMotivo = async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = asInt(req.params.id);
 
-    if (!Number.isInteger(id)) {
-      return res.status(400).json({ error: "ID inválido" });
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({
+        error: "ID inválido",
+      });
     }
 
     const vieneNombre = Object.prototype.hasOwnProperty.call(
       req.body || {},
-      "nombre"
+      "nombre",
     );
 
     const vieneActivo = Object.prototype.hasOwnProperty.call(
       req.body || {},
-      "activo"
+      "activo",
     );
 
     const vieneTipoMovimiento = Object.prototype.hasOwnProperty.call(
       req.body || {},
-      "tipo_movimiento"
+      "tipo_movimiento",
     );
 
     if (!vieneNombre && !vieneActivo && !vieneTipoMovimiento) {
@@ -434,7 +564,9 @@ exports.updateMotivo = async (req, res) => {
     const nombre = vieneNombre ? String(req.body.nombre || "").trim() : null;
 
     if (vieneNombre && !nombre) {
-      return res.status(400).json({ error: "Nombre inválido" });
+      return res.status(400).json({
+        error: "Nombre inválido",
+      });
     }
 
     if (vieneNombre && esMotivoSistema(nombre)) {
@@ -452,17 +584,20 @@ exports.updateMotivo = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    const actual = await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
-        SELECT id_motivo, nombre, activo, tipo_movimiento
+    const actual = await pool.request().input("id", sql.Int, id).query(`
+        SELECT
+          id_motivo,
+          nombre,
+          activo,
+          tipo_movimiento
         FROM dbo.ajustes_motivos
-        WHERE id_motivo = @id
+        WHERE id_motivo = @id;
       `);
 
     if (!actual.recordset.length) {
-      return res.status(404).json({ error: "Motivo no encontrado" });
+      return res.status(404).json({
+        error: "Motivo no encontrado",
+      });
     }
 
     if (esMotivoSistema(actual.recordset[0].nombre)) {
@@ -472,30 +607,45 @@ exports.updateMotivo = async (req, res) => {
       });
     }
 
-    const rq = pool
+    const result = await pool
       .request()
       .input("id", sql.Int, id)
-      .input("n", sql.VarChar(150), nombre)
-      .input("a", sql.Bit, activo)
-      .input("tipo", sql.VarChar(10), tipoMovimiento)
-      .input("vieneTipo", sql.Bit, vieneTipoMovimiento ? 1 : 0);
+      .input("nombre", sql.VarChar(150), nombre)
+      .input("activo", sql.Bit, activo)
+      .input("tipoMovimiento", sql.VarChar(10), tipoMovimiento)
+      .input("vieneTipo", sql.Bit, vieneTipoMovimiento ? 1 : 0).query(`
+        UPDATE dbo.ajustes_motivos
+        SET
+          nombre =
+            CASE
+              WHEN @nombre IS NULL
+                THEN nombre
+              ELSE @nombre
+            END,
 
-    const r = await rq.query(`
-      UPDATE dbo.ajustes_motivos
-      SET
-        nombre = CASE WHEN @n IS NULL THEN nombre ELSE @n END,
-        activo = CASE WHEN @a IS NULL THEN activo ELSE @a END,
-        tipo_movimiento = CASE 
-          WHEN @vieneTipo = 0 THEN tipo_movimiento 
-          ELSE @tipo 
-        END
-      WHERE id_motivo = @id;
+          activo =
+            CASE
+              WHEN @activo IS NULL
+                THEN activo
+              ELSE @activo
+            END,
 
-      SELECT @@ROWCOUNT AS affected;
-    `);
+          tipo_movimiento =
+            CASE
+              WHEN @vieneTipo = 0
+                THEN tipo_movimiento
+              ELSE @tipoMovimiento
+            END
 
-    if (Number(r.recordset[0].affected) !== 1) {
-      return res.status(404).json({ error: "Motivo no encontrado" });
+        WHERE id_motivo = @id;
+
+        SELECT @@ROWCOUNT AS affected;
+      `);
+
+    if (Number(result.recordset[0].affected) !== 1) {
+      return res.status(404).json({
+        error: "Motivo no encontrado",
+      });
     }
 
     return res.json({ ok: true });
@@ -521,23 +671,30 @@ exports.updateMotivo = async (req, res) => {
 
 exports.deleteMotivo = async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = asInt(req.params.id);
 
-    if (!Number.isInteger(id)) {
-      return res.status(400).json({ error: "ID inválido" });
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({
+        error: "ID inválido",
+      });
     }
 
     await poolConnect;
     const pool = await getPool();
 
     const actual = await pool.request().input("id", sql.Int, id).query(`
-        SELECT id_motivo, nombre, activo
+        SELECT
+          id_motivo,
+          nombre,
+          activo
         FROM dbo.ajustes_motivos
-        WHERE id_motivo = @id
+        WHERE id_motivo = @id;
       `);
 
     if (!actual.recordset.length) {
-      return res.status(404).json({ error: "Motivo no encontrado" });
+      return res.status(404).json({
+        error: "Motivo no encontrado",
+      });
     }
 
     if (esMotivoSistema(actual.recordset[0].nombre)) {
@@ -547,27 +704,29 @@ exports.deleteMotivo = async (req, res) => {
     }
 
     const used = await pool.request().input("id", sql.Int, id).query(`
-      SELECT TOP 1 1 AS used
-      FROM dbo.ajustes
-      WHERE motivo_id = @id
-    `);
+        SELECT TOP 1 1 AS used
+        FROM dbo.ajustes
+        WHERE motivo_id = @id;
+      `);
 
     if (used.recordset.length) {
       return res.status(400).json({
         error:
-          "No se puede borrar: el motivo ya fue usado en ajustes. Desactiválo (activo=0).",
+          "No se puede borrar porque el motivo ya fue utilizado. Desactivalo.",
       });
     }
 
-    const r = await pool.request().input("id", sql.Int, id).query(`
-      DELETE FROM dbo.ajustes_motivos
-      WHERE id_motivo = @id;
+    const result = await pool.request().input("id", sql.Int, id).query(`
+        DELETE FROM dbo.ajustes_motivos
+        WHERE id_motivo = @id;
 
-      SELECT @@ROWCOUNT AS affected;
-    `);
+        SELECT @@ROWCOUNT AS affected;
+      `);
 
-    if (Number(r.recordset[0].affected) !== 1) {
-      return res.status(404).json({ error: "Motivo no encontrado" });
+    if (Number(result.recordset[0].affected) !== 1) {
+      return res.status(404).json({
+        error: "Motivo no encontrado",
+      });
     }
 
     return res.json({ ok: true });
@@ -582,59 +741,90 @@ exports.deleteMotivo = async (req, res) => {
 };
 
 // ========================================================
-// GET /ajustes - lista cabeceras
+// LISTADO DE AJUSTES Y BORRADORES
 // ========================================================
+
 exports.getAll = async (_req, res) => {
   try {
     await poolConnect;
     const pool = await getPool();
 
-    const r = await pool.request().query(`
-      SELECT 
-        CAST(a.numero_ajuste AS VARCHAR(50)) AS id,
+    const result = await pool.request().query(`
+      SELECT
+        CAST(
+          a.numero_ajuste AS VARCHAR(50)
+        ) AS id,
+
         a.numero_ajuste,
+
         CAST(NULL AS INT) AS id_borrador,
-        CAST('CONFIRMADO' AS VARCHAR(20)) AS estado,
+
+        CAST(
+          'CONFIRMADO' AS VARCHAR(20)
+        ) AS estado,
+
         a.deposito,
         a.obra,
         a.version,
+
         m.nombre AS motivo,
+
         a.fecha,
         a.fecha_real,
         a.remito_referencia,
         a.id_referente,
+
         r.nombre AS referente
+
       FROM dbo.ajustes a
-      LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
-      LEFT JOIN dbo.referentes r ON r.id_referente = a.id_referente
+
+      LEFT JOIN dbo.ajustes_motivos m
+        ON m.id_motivo = a.motivo_id
+
+      LEFT JOIN dbo.referentes r
+        ON r.id_referente = a.id_referente
 
       UNION ALL
 
       SELECT
-        CONCAT('BORRADOR-', b.id_borrador) AS id,
+        CONCAT(
+          'BORRADOR-',
+          b.id_borrador
+        ) AS id,
+
         CAST(NULL AS INT) AS numero_ajuste,
+
         b.id_borrador,
-        CAST('BORRADOR' AS VARCHAR(20)) AS estado,
+
+        CAST(
+          'BORRADOR' AS VARCHAR(20)
+        ) AS estado,
+
         b.deposito,
         b.obra,
         b.version,
         b.motivo,
+
         b.fecha_creacion AS fecha,
         b.fecha_real,
         b.remito_referencia,
         b.id_referente,
+
         r.nombre AS referente
+
       FROM dbo.ajustes_borradores b
-      LEFT JOIN dbo.referentes r ON r.id_referente = b.id_referente
+
+      LEFT JOIN dbo.referentes r
+        ON r.id_referente = b.id_referente
 
       ORDER BY fecha DESC;
     `);
 
-    res.json(r.recordset || []);
+    return res.json(result.recordset || []);
   } catch (err) {
     console.error("ajustes.getAll:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Error al listar ajustes",
       detalle: err.message,
     });
@@ -642,88 +832,105 @@ exports.getAll = async (_req, res) => {
 };
 
 // ========================================================
-// GET /ajustes/:id - cabecera + detalle
+// OBTENER AJUSTE CONFIRMADO
 // ========================================================
+
 exports.getById = async (req, res) => {
   try {
-    const nro = Number(req.params.id);
-    if (!Number.isInteger(nro))
-      return res.status(400).json({ error: "Número inválido" });
+    const numero = asInt(req.params.id);
+
+    if (!Number.isFinite(numero) || numero <= 0) {
+      return res.status(400).json({
+        error: "Número inválido",
+      });
+    }
 
     await poolConnect;
     const pool = await getPool();
 
-    const cab = await pool.request().input("n", sql.Int, nro).query(`
-      SELECT 
-      a.numero_ajuste AS id,
-      a.numero_ajuste,
-      a.deposito,
-      a.obra,
-      a.version,
-      a.motivo_id,
-      m.nombre AS motivo,
-      a.fecha,
-      a.fecha_real,
-      a.remito_referencia,
-      a.id_referente,
-      r.nombre AS referente,
-      a.usuario
-    FROM dbo.ajustes a
-    LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
-    LEFT JOIN dbo.referentes r ON r.id_referente = a.id_referente
-    WHERE a.numero_ajuste = @n
-    `);
-    if (!cab.recordset.length)
-      return res.status(404).json({ error: "Ajuste no encontrado" });
+    const cabecera = await pool.request().input("numero", sql.Int, numero)
+      .query(`
+        SELECT
+          a.numero_ajuste AS id,
+          a.numero_ajuste,
+          a.deposito,
+          a.obra,
+          a.version,
+          a.motivo_id,
+          m.nombre AS motivo,
+          a.fecha,
+          a.fecha_real,
+          a.remito_referencia,
+          a.id_referente,
+          r.nombre AS referente,
+          a.usuario
 
-    const det = await pool.request().input("n", sql.Int, nro).query(`
-      SELECT 
-        ajuste_id,
-        cod_articulo,
-        descripcion,
-        cantidad,
-        cantidad_requerida,
-        cantidad_faltante,
-        observacion
-      FROM dbo.ajustes_detalles
-      WHERE ajuste_id = @n
-      ORDER BY cod_articulo
-    `);
+        FROM dbo.ajustes a
 
-    res.json({ cabecera: cab.recordset[0], detalle: det.recordset || [] });
+        LEFT JOIN dbo.ajustes_motivos m
+          ON m.id_motivo = a.motivo_id
+
+        LEFT JOIN dbo.referentes r
+          ON r.id_referente = a.id_referente
+
+        WHERE a.numero_ajuste = @numero;
+      `);
+
+    if (!cabecera.recordset.length) {
+      return res.status(404).json({
+        error: "Ajuste no encontrado",
+      });
+    }
+
+    const detalle = await pool.request().input("numero", sql.Int, numero)
+      .query(`
+        SELECT
+          ajuste_id,
+          cod_articulo,
+          descripcion,
+          cantidad,
+          cantidad_requerida,
+          cantidad_faltante,
+          observacion
+
+        FROM dbo.ajustes_detalles
+
+        WHERE ajuste_id = @numero
+
+        ORDER BY cod_articulo;
+      `);
+
+    return res.json({
+      cabecera: cabecera.recordset[0],
+      detalle: detalle.recordset || [],
+    });
   } catch (err) {
     console.error("ajustes.getById:", err);
-    res
-      .status(500)
-      .json({ error: "Error al obtener detalle", detalle: err.message });
+
+    return res.status(500).json({
+      error: "Error al obtener detalle del ajuste",
+      detalle: err.message,
+    });
   }
 };
 
-/**
- * POST /ajustes
- * body: {
- *   deposito_id: number,
- *   id_ubicacion?: number|null,
- *   motivo_id: number,
- *   items: [{ cod_articulo: string, cantidad: number }]
- * }
- */
+// ========================================================
+// CREAR AJUSTE
+// ========================================================
+
 exports.create = async (req, res) => {
-  const usuario =
-    req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
+  const usuario = getUsuarioReq(req);
 
   const depositoId = asInt(req.body?.deposito_id);
+
   const ubicacionIdBody = req.body?.id_ubicacion ?? null;
 
-  const remitoReferenciaRaw = req.body?.remito_referencia;
-  const remitoReferencia =
-    remitoReferenciaRaw === null ||
-    remitoReferenciaRaw === undefined ||
-    String(remitoReferenciaRaw).trim() === ""
-      ? null
-      : String(remitoReferenciaRaw).trim();
+  const motivoId = asInt(req.body?.motivo_id);
+
+  const remitoReferencia = toDb(req.body?.remito_referencia);
 
   const referenteRaw = req.body?.id_referente;
+
   const referenteId =
     referenteRaw === null ||
     referenteRaw === undefined ||
@@ -731,251 +938,387 @@ exports.create = async (req, res) => {
       ? null
       : asInt(referenteRaw);
 
-  const fechaRealRaw = req.body?.fecha_real;
-  const fechaReal =
-    fechaRealRaw === null ||
-    fechaRealRaw === undefined ||
-    String(fechaRealRaw).trim() === ""
-      ? null
-      : String(fechaRealRaw).trim();
+  const fechaReal = toDb(req.body?.fecha_real);
 
-  const motivoId = asInt(req.body?.motivo_id);
+  const obra = toDb(req.body?.obra);
+
+  const version = toDb(req.body?.version);
+
+  const itemsRaw = Array.isArray(req.body?.items) ? req.body.items : [];
+
+  if (!Number.isFinite(depositoId) || depositoId <= 0) {
+    return res.status(400).json({
+      error: "Depósito obligatorio",
+    });
+  }
+
   if (!Number.isFinite(motivoId) || motivoId <= 0) {
-    return res.status(400).json({ error: "Motivo obligatorio" });
+    return res.status(400).json({
+      error: "Motivo obligatorio",
+    });
   }
 
-  const obraRaw = req.body?.obra;
-  const versionRaw = req.body?.version;
-
-  const obra =
-    obraRaw === null || obraRaw === undefined || String(obraRaw).trim() === ""
-      ? null
-      : String(obraRaw).trim();
-
-  const version =
-    versionRaw === null ||
-    versionRaw === undefined ||
-    String(versionRaw).trim() === ""
-      ? null
-      : String(versionRaw).trim();
-
-  if (referenteId !== null && !Number.isFinite(referenteId)) {
-    return res.status(400).json({ error: "Referente inválido" });
+  if (
+    referenteId !== null &&
+    (!Number.isFinite(referenteId) || referenteId <= 0)
+  ) {
+    return res.status(400).json({
+      error: "Referente inválido",
+    });
   }
 
-  const items = Array.isArray(req.body?.items) ? req.body.items : [];
-  if (!Number.isFinite(depositoId) || !items.length) {
-    return res
-      .status(400)
-      .json({ error: "Datos incompletos: depósito e items son obligatorios" });
+  if (!itemsRaw.length) {
+    return res.status(400).json({
+      error: "Debe incluir al menos un artículo",
+    });
   }
 
-  // Consolidar items por código
-  const agg = new Map();
-  for (const it of items) {
-    const cod = up(it?.cod_articulo);
-    const cant = Number(it?.cantidad);
-    if (!cod || !Number.isFinite(cant) || cant === 0) continue;
-    agg.set(cod, (agg.get(cod) || 0) + cant);
-  }
-  const normItems = Array.from(agg.entries()).map(([cod, cant]) => ({
-    cod,
-    cant,
-  }));
-  if (!normItems.length)
-    return res.status(400).json({ error: "Items inválidos" });
+  /*
+   * Consolida los artículos por código.
+   *
+   * También conserva la ubicación descriptiva
+   * que se guarda en dbo.articulos.ubicacion.
+   */
+  const agrupados = new Map();
 
-  let trans;
+  for (const item of itemsRaw) {
+    const codigo = up(item?.cod_articulo ?? item?.codigo);
+
+    const cantidad = Number(item?.cantidad);
+
+    if (!codigo || !Number.isFinite(cantidad) || cantidad === 0) {
+      continue;
+    }
+
+    const actual = agrupados.get(codigo) || {
+      codigo,
+      cantidad: 0,
+      ubicacion: null,
+      actualizarUbicacion: false,
+    };
+
+    actual.cantidad += cantidad;
+
+    if (Object.prototype.hasOwnProperty.call(item || {}, "ubicacion")) {
+      actual.ubicacion = toDb(item.ubicacion);
+
+      actual.actualizarUbicacion = true;
+    }
+
+    agrupados.set(codigo, actual);
+  }
+
+  const items = Array.from(agrupados.values());
+
+  if (!items.length) {
+    return res.status(400).json({
+      error: "Ítems inválidos",
+    });
+  }
+
+  let transaction;
+
   try {
     await poolConnect;
     const pool = await getPool();
-    trans = new sql.Transaction(pool);
-    await trans.begin();
 
-    // 1) Validar depósito
-    const dep = await new sql.Request(trans).input("d", sql.Int, depositoId)
-      .query(`
-        SELECT id_deposito, nombre
-        FROM dbo.depositos WITH (UPDLOCK, HOLDLOCK)
-        WHERE id_deposito = @d
-      `);
+    transaction = new sql.Transaction(pool);
 
-    if (!dep.recordset.length) {
-      await trans.rollback();
-      return res
-        .status(400)
-        .json({ error: `Depósito inexistente: ${depositoId}` });
-    }
-    const nombreDeposito = String(dep.recordset[0].nombre || "");
+    await transaction.begin();
 
-    // 1.b) Validar motivo
-    let motivoNombre = "";
-    try {
-      const mot = await requireMotivoActivo(trans, motivoId);
-      motivoNombre = mot.nombre;
-    } catch (e) {
-      await trans.rollback();
-      return res.status(400).json({ error: e.message || "Motivo inválido" });
-    }
+    // ----------------------------------------------------
+    // DEPÓSITO
+    // ----------------------------------------------------
 
-    // 1.c) Validar referente si viene informado
-    if (referenteId !== null) {
-      const ref = await new sql.Request(trans).input("id", sql.Int, referenteId)
-        .query(`
-          SELECT id_referente, nombre, activo
-          FROM dbo.referentes WITH (UPDLOCK, HOLDLOCK)
-          WHERE id_referente = @id
+    const depositoResult = await new sql.Request(transaction).input(
+      "depositoId",
+      sql.Int,
+      depositoId,
+    ).query(`
+          SELECT
+            id_deposito,
+            nombre
+
+          FROM dbo.depositos
+          WITH (UPDLOCK, HOLDLOCK)
+
+          WHERE id_deposito = @depositoId;
         `);
 
-      if (!ref.recordset.length) {
-        await trans.rollback();
-        return res.status(400).json({ error: "Referente inexistente" });
+    if (!depositoResult.recordset.length) {
+      await transaction.rollback();
+
+      return res.status(400).json({
+        error: `Depósito inexistente: ${depositoId}`,
+      });
+    }
+
+    const nombreDeposito = String(depositoResult.recordset[0].nombre || "");
+
+    // ----------------------------------------------------
+    // MOTIVO
+    // ----------------------------------------------------
+
+    let motivo;
+
+    try {
+      motivo = await requireMotivoActivo(transaction, motivoId);
+    } catch (err) {
+      await transaction.rollback();
+
+      return res.status(400).json({
+        error: err.message || "Motivo inválido",
+      });
+    }
+
+    // ----------------------------------------------------
+    // REFERENTE
+    // ----------------------------------------------------
+
+    if (referenteId !== null) {
+      const referente = await new sql.Request(transaction).input(
+        "referenteId",
+        sql.Int,
+        referenteId,
+      ).query(`
+            SELECT
+              id_referente,
+              nombre,
+              activo
+
+            FROM dbo.referentes
+            WITH (UPDLOCK, HOLDLOCK)
+
+            WHERE id_referente = @referenteId;
+          `);
+
+      if (!referente.recordset.length) {
+        await transaction.rollback();
+
+        return res.status(400).json({
+          error: "Referente inexistente",
+        });
       }
 
-      if (!ref.recordset[0].activo) {
-        await trans.rollback();
-        return res.status(400).json({ error: "Referente inactivo" });
+      if (!referente.recordset[0].activo) {
+        await transaction.rollback();
+
+        return res.status(400).json({
+          error: "Referente inactivo",
+        });
       }
     }
 
-    // 2) Resolver ubicación
-    const ubicacionId = await resolveUbicacionId(trans, {
+    // ----------------------------------------------------
+    // UBICACIÓN TÉCNICA DE STOCK
+    // ----------------------------------------------------
+
+    const ubicacionId = await resolveUbicacionId(transaction, {
       depositoId,
       ubicacionId: ubicacionIdBody,
     });
 
-    // 3) Resolver artículos por código
-    const cods = normItems.map((i) => i.cod);
-    const placeholders = cods.map((_, i) => `@c${i}`).join(",");
-    const rqArts = new sql.Request(trans);
-    cods.forEach((c, i) => rqArts.input(`c${i}`, sql.VarChar, c));
+    // ----------------------------------------------------
+    // ARTÍCULOS
+    // ----------------------------------------------------
 
-    const arts = await rqArts.query(`
-      SELECT 
-        id_articulo,
-        UPPER(LTRIM(RTRIM(codigo))) AS cod,
-        descripcion
-      FROM dbo.articulos
-      WHERE UPPER(LTRIM(RTRIM(codigo))) IN (${placeholders})
-    `);
+    const codigos = items.map((item) => item.codigo);
 
-    const byCode = new Map(
-      arts.recordset.map((r) => [
-        r.cod,
+    const parametros = codigos.map((_, index) => `@codigo${index}`).join(",");
+
+    const requestArticulos = new sql.Request(transaction);
+
+    codigos.forEach((codigo, index) => {
+      requestArticulos.input(`codigo${index}`, sql.VarChar(100), codigo);
+    });
+
+    const articulos = await requestArticulos.query(`
+        SELECT
+          id_articulo,
+
+          UPPER(
+            LTRIM(
+              RTRIM(codigo)
+            )
+          ) AS codigo,
+
+          descripcion
+
+        FROM dbo.articulos
+        WITH (UPDLOCK, HOLDLOCK)
+
+        WHERE UPPER(
+          LTRIM(
+            RTRIM(codigo)
+          )
+        ) IN (${parametros});
+      `);
+
+    const articulosPorCodigo = new Map(
+      articulos.recordset.map((articulo) => [
+        String(articulo.codigo),
         {
-          id_articulo: Number(r.id_articulo),
-          descripcion: String(r.descripcion || ""),
+          id_articulo: Number(articulo.id_articulo),
+
+          descripcion: String(articulo.descripcion || ""),
         },
       ]),
     );
 
-    const faltantes = normItems
-      .filter((i) => !byCode.has(i.cod))
-      .map((i) => i.cod);
-    if (faltantes.length) {
-      await trans.rollback();
-      return res
-        .status(400)
-        .json({ error: "Códigos inexistentes", detalle: faltantes });
+    const codigosInexistentes = items
+      .filter((item) => !articulosPorCodigo.has(item.codigo))
+      .map((item) => item.codigo);
+
+    if (codigosInexistentes.length) {
+      await transaction.rollback();
+
+      return res.status(400).json({
+        error: "Códigos inexistentes",
+        detalle: codigosInexistentes,
+      });
     }
 
-    // 4) Validar stock proyectado
-    for (const it of normItems) {
-      const { id_articulo } = byCode.get(it.cod);
-      const disponible = await getStockActual(trans, {
+    // ----------------------------------------------------
+    // VALIDAR STOCK PROYECTADO
+    // ----------------------------------------------------
+
+    for (const item of items) {
+      const articulo = articulosPorCodigo.get(item.codigo);
+
+      const disponible = await getStockActual(transaction, {
         depositoId,
-        articuloId: id_articulo,
+        articuloId: articulo.id_articulo,
       });
-      const proyectado = disponible + it.cant;
+
+      const proyectado = disponible + item.cantidad;
+
       if (proyectado < 0) {
-        await trans.rollback();
+        await transaction.rollback();
+
         return res.status(400).json({
           error: "Stock insuficiente para ajustar",
+
           detalle: {
-            cod_articulo: it.cod,
+            cod_articulo: item.codigo,
+
             disponible,
-            intento_ajuste: it.cant,
-            quedaría: proyectado,
+
+            intento_ajuste: item.cantidad,
+
+            quedaria: proyectado,
           },
         });
       }
     }
 
-    // 5) Próximo nro
-    const nroRes = await new sql.Request(trans).query(`
-      SELECT ISNULL(MAX(numero_ajuste), 0) + 1 AS nextNro
-      FROM dbo.ajustes WITH (UPDLOCK, HOLDLOCK)
-    `);
-    const nextNro = Number(nroRes.recordset[0].nextNro);
+    // ----------------------------------------------------
+    // PRÓXIMO NÚMERO
+    // ----------------------------------------------------
 
-    // 6) Cabecera
-    await new sql.Request(trans)
-      .input("nro", sql.Int, nextNro)
-      .input("depNom", sql.VarChar, nombreDeposito)
-      .input("motId", sql.Int, motivoId)
-      .input("motNom", sql.VarChar, motivoNombre)
-      .input("usr", sql.VarChar, usuario)
+    const numeroResult = await new sql.Request(transaction).query(`
+          SELECT
+            ISNULL(
+              MAX(numero_ajuste),
+              0
+            ) + 1 AS numero
+
+          FROM dbo.ajustes
+          WITH (UPDLOCK, HOLDLOCK);
+        `);
+
+    const numeroAjuste = Number(numeroResult.recordset[0].numero);
+
+    // ----------------------------------------------------
+    // CABECERA
+    // ----------------------------------------------------
+
+    await new sql.Request(transaction)
+      .input("numeroAjuste", sql.Int, numeroAjuste)
+      .input("deposito", sql.VarChar(255), nombreDeposito)
+      .input("motivoId", sql.Int, motivoId)
+      .input("motivo", sql.VarChar(255), motivo.nombre)
       .input("obra", sql.NVarChar(sql.MAX), obra)
       .input("version", sql.NVarChar(sql.MAX), version)
-      .input("remitoReferencia", sql.VarChar, remitoReferencia)
+      .input("remitoReferencia", sql.VarChar(255), remitoReferencia)
       .input("referenteId", sql.Int, referenteId)
-      .input("fechaReal", sql.Date, fechaReal).query(`
-    INSERT INTO dbo.ajustes
-    (
-      numero_ajuste,
-      deposito,
-      motivo_id,
-      motivo,
-      obra,
-      version,
-      fecha,
-      fecha_real,
-      remito_referencia,
-      id_referente,
-      usuario
-    )
-    VALUES
-    (
-      @nro,
-      @depNom,
-      @motId,
-      @motNom,
-      @obra,
-      @version,
-      GETDATE(),
-      COALESCE(@fechaReal, CONVERT(date, GETDATE())),
-      @remitoReferencia,
-      @referenteId,
-      @usr
-    )
-  `);
+      .input("fechaReal", sql.Date, fechaReal)
+      .input("usuario", sql.VarChar(255), usuario).query(`
+        INSERT INTO dbo.ajustes
+        (
+          numero_ajuste,
+          deposito,
+          motivo_id,
+          motivo,
+          obra,
+          version,
+          fecha,
+          fecha_real,
+          remito_referencia,
+          id_referente,
+          usuario
+        )
+        VALUES
+        (
+          @numeroAjuste,
+          @deposito,
+          @motivoId,
+          @motivo,
+          @obra,
+          @version,
+          GETDATE(),
+          COALESCE(
+            @fechaReal,
+            CONVERT(date, GETDATE())
+          ),
+          @remitoReferencia,
+          @referenteId,
+          @usuario
+        );
+      `);
 
-    // 7) Detalles + stock
-    for (const it of normItems) {
-      const { id_articulo, descripcion } = byCode.get(it.cod);
+    // ----------------------------------------------------
+    // DETALLES, UBICACIÓN Y STOCK
+    // ----------------------------------------------------
 
-      await insertDetalle(trans, {
-        ajusteId: nextNro,
-        cod: it.cod,
-        desc: descripcion || "",
-        cantidad: it.cant,
+    for (const item of items) {
+      const articulo = articulosPorCodigo.get(item.codigo);
+
+      /*
+       * Esta ubicación es descriptiva y pertenece
+       * al artículo, no a una fila de stock.
+       */
+      if (item.actualizarUbicacion) {
+        await new sql.Request(transaction)
+          .input("articuloId", sql.Int, articulo.id_articulo)
+          .input("ubicacion", sql.VarChar(100), item.ubicacion).query(`
+            UPDATE dbo.articulos
+            SET ubicacion = @ubicacion
+            WHERE id_articulo = @articuloId;
+          `);
+      }
+
+      await insertDetalle(transaction, {
+        ajusteId: numeroAjuste,
+        cod: item.codigo,
+        desc: articulo.descripcion,
+        cantidad: item.cantidad,
         usuario,
       });
 
-      await upsertStockDelta(trans, {
+      await upsertStockDelta(transaction, {
         depositoId,
-        articuloId: id_articulo,
+        articuloId: articulo.id_articulo,
         ubicacionId,
-        delta: it.cant,
+        delta: item.cantidad,
       });
     }
 
-    await trans.commit();
+    await transaction.commit();
 
-    const creado = await (await getPool())
+    const creado = await pool
       .request()
-      .input("n", sql.Int, nextNro).query(`
-        SELECT 
+      .input("numeroAjuste", sql.Int, numeroAjuste).query(`
+        SELECT
           a.numero_ajuste AS id,
           a.numero_ajuste,
           a.deposito,
@@ -987,260 +1330,439 @@ exports.create = async (req, res) => {
           a.remito_referencia,
           a.id_referente,
           r.nombre AS referente
+
         FROM dbo.ajustes a
-        LEFT JOIN dbo.ajustes_motivos m ON m.id_motivo = a.motivo_id
-        LEFT JOIN dbo.referentes r ON r.id_referente = a.id_referente
-        WHERE a.numero_ajuste = @n
+
+        LEFT JOIN dbo.ajustes_motivos m
+          ON m.id_motivo = a.motivo_id
+
+        LEFT JOIN dbo.referentes r
+          ON r.id_referente = a.id_referente
+
+        WHERE a.numero_ajuste = @numeroAjuste;
       `);
 
-    return res
-      .status(201)
-      .json({ message: "Ajuste creado", ajuste: creado.recordset[0] });
+    return res.status(201).json({
+      message: "Ajuste creado",
+      ajuste: creado.recordset[0],
+    });
   } catch (err) {
     console.error("ajustes.create:", err);
+
     try {
-      if (trans) await trans.rollback();
+      if (transaction) {
+        await transaction.rollback();
+      }
     } catch {}
-    return res
-      .status(500)
-      .json({ error: "Error al crear ajuste", detalle: err.message });
+
+    return res.status(500).json({
+      error: "Error al crear ajuste",
+      detalle: err.message,
+    });
   }
 };
 
-// ==========================
+// ========================================================
 // DESCARGAR PLANTILLA
-// ==========================
+// ========================================================
+
 exports.downloadTemplate = (_req, res) => {
   try {
     const data = [
       ["Código", "Tipo de movimiento", "Depósito", "Ubicación", "Cantidad"],
     ];
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Ajustes");
-    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const worksheet = XLSX.utils.aoa_to_sheet(data);
+
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Ajustes");
+
+    const buffer = XLSX.write(workbook, {
+      type: "buffer",
+      bookType: "xlsx",
+    });
 
     res.setHeader(
       "Content-Disposition",
       'attachment; filename="Plantilla_Ajustes.xlsx"',
     );
+
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
+
     return res.status(200).send(buffer);
   } catch (err) {
-    return res.status(500).json({ error: "Error al generar plantilla" });
+    console.error("ajustes.downloadTemplate:", err);
+
+    return res.status(500).json({
+      error: "Error al generar plantilla",
+      detalle: err.message,
+    });
   }
 };
 
-// ==========================
-// IMPORTAR DESDE EXCEL  (requiere Depósito y Ubicación)
-// ==========================
+// ========================================================
+// IMPORTAR AJUSTES DESDE EXCEL
+// ========================================================
+
 exports.importarDesdeExcel = async (req, res) => {
-  if (!req.file)
-    return res.status(400).json({ error: "No se recibió archivo" });
+  if (!req.file) {
+    return res.status(400).json({
+      error: "No se recibió archivo",
+    });
+  }
 
   let rows;
+
   try {
-    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-  } catch {
-    return res.status(400).json({ error: "Archivo inválido" });
+    const workbook = XLSX.read(req.file.buffer, {
+      type: "buffer",
+    });
+
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+    rows = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: "",
+    });
+  } catch (err) {
+    return res.status(400).json({
+      error: "Archivo inválido",
+      detalle: err.message,
+    });
   }
 
   if (!rows || rows.length < 2) {
-    return res.status(400).json({ error: "El Excel no tiene datos" });
+    return res.status(400).json({
+      error: "El Excel no tiene datos",
+    });
   }
 
-  rows.shift(); // header
+  rows.shift();
 
   const errores = [];
   const movimientos = [];
 
-  rows.forEach((r, i) => {
-    const fila = i + 2;
+  rows.forEach((row, index) => {
+    const fila = index + 2;
 
-    // Plantilla: Código | Tipo de movimiento | Depósito | Ubicación | Cantidad
-    const [codRaw, tipoRaw, depRaw, ubRaw, cantRaw] = r;
+    const [codigoRaw, tipoRaw, depositoRaw, ubicacionRaw, cantidadRaw] = row;
 
-    const cod = up(codRaw);
-    const dep = toDb(depRaw);
-    const ub = toDb(ubRaw);
+    const codigo = up(codigoRaw);
+    const deposito = toDb(depositoRaw);
+    const ubicacion = toDb(ubicacionRaw);
+
     const tipo = String(tipoRaw || "")
       .trim()
       .toUpperCase();
-    const cant = toNumber0(cantRaw);
 
-    if (!cod) return errores.push({ fila, error: "Código vacío" });
-    if (!dep)
-      return errores.push({ fila, error: "Depósito vacío (obligatorio)" });
-    if (!ub)
-      return errores.push({ fila, error: "Ubicación vacía (obligatoria)" });
-    if (!Number.isFinite(cant) || cant <= 0)
-      return errores.push({ fila, error: "Cantidad inválida" });
+    const cantidad = toNumber0(cantidadRaw);
 
-    if (!["ENTRADA", "SALIDA"].includes(tipo)) {
-      return errores.push({
+    if (!codigo) {
+      errores.push({
         fila,
-        error: "Tipo inválido (use ENTRADA o SALIDA)",
+        error: "Código vacío",
       });
+
+      return;
     }
 
-    movimientos.push({ fila, cod, dep, ub, tipo, cant });
+    if (!deposito) {
+      errores.push({
+        fila,
+        error: "Depósito vacío",
+      });
+
+      return;
+    }
+
+    if (!ubicacion) {
+      errores.push({
+        fila,
+        error: "Ubicación vacía",
+      });
+
+      return;
+    }
+
+    if (!Number.isFinite(cantidad) || cantidad <= 0) {
+      errores.push({
+        fila,
+        error: "Cantidad inválida",
+      });
+
+      return;
+    }
+
+    if (!["ENTRADA", "SALIDA"].includes(tipo)) {
+      errores.push({
+        fila,
+        error: "Tipo inválido. Use ENTRADA o SALIDA",
+      });
+
+      return;
+    }
+
+    movimientos.push({
+      fila,
+      codigo,
+      deposito,
+      ubicacion,
+      tipo,
+      cantidad: Math.trunc(cantidad),
+    });
   });
 
-  if (errores.length) return res.status(400).json({ errores });
+  if (errores.length) {
+    return res.status(400).json({
+      errores,
+    });
+  }
 
-  // Agrupar por depósito + ubicación
-  const porKey = {};
-  movimientos.forEach((m) => {
-    const key = `${m.dep}||${m.ub}`;
-    porKey[key] ??= [];
-    porKey[key].push(m);
-  });
+  const grupos = new Map();
 
-  let trans;
+  for (const movimiento of movimientos) {
+    const key = `${movimiento.deposito}||${movimiento.ubicacion}`;
+
+    if (!grupos.has(key)) {
+      grupos.set(key, []);
+    }
+
+    grupos.get(key).push(movimiento);
+  }
+
+  let transaction;
+
   try {
     await poolConnect;
     const pool = await getPool();
-    trans = new sql.Transaction(pool);
-    await trans.begin();
 
-    const motivoIdExcel = await getMotivoIdByNombreActivo(
-      trans,
-      "IMPORTACIÓN EXCEL",
+    transaction = new sql.Transaction(pool);
+
+    await transaction.begin();
+
+    const motivoId = await getMotivoIdByNombreActivo(
+      transaction,
+      "IMPORTACION EXCEL",
     );
-    if (!motivoIdExcel) {
-      throw new Error(
-        'Falta motivo "IMPORTACIÓN EXCEL" en dbo.ajustes_motivos (o está inactivo)',
-      );
+
+    if (!motivoId) {
+      throw new Error('Falta el motivo "IMPORTACIÓN EXCEL" o está inactivo');
     }
 
     const ajustes = [];
 
-    for (const key of Object.keys(porKey)) {
-      const [depNom, ubNom] = key.split("||");
+    for (const [key, movimientosGrupo] of grupos.entries()) {
+      const [depositoNombre, ubicacionNombre] = key.split("||");
 
-      // 1) depósito por nombre
-      const d = await new sql.Request(trans).input("n", sql.VarChar, depNom)
-        .query(`
-          SELECT id_deposito, nombre
-          FROM dbo.depositos WITH (UPDLOCK, HOLDLOCK)
-          WHERE nombre = @n
-        `);
+      const depositoResult = await new sql.Request(transaction).input(
+        "nombre",
+        sql.VarChar(255),
+        depositoNombre,
+      ).query(`
+            SELECT
+              id_deposito,
+              nombre
 
-      if (!d.recordset.length)
-        throw new Error(`Depósito inexistente: ${depNom}`);
-      const depId = Number(d.recordset[0].id_deposito);
+            FROM dbo.depositos
+            WITH (UPDLOCK, HOLDLOCK)
 
-      // 2) ubicación por nombre (obligatoria)
-      const ubRes = await new sql.Request(trans)
-        .input("dep", sql.Int, depId)
-        .input("ubNom", sql.VarChar, ubNom).query(`
-          SELECT TOP 1 id_ubicacion
-          FROM dbo.ubicaciones WITH (UPDLOCK, HOLDLOCK)
-          WHERE id_deposito = @dep
-            AND UPPER(LTRIM(RTRIM(nombre))) = UPPER(LTRIM(RTRIM(@ubNom)))
-        `);
-
-      if (!ubRes.recordset.length) {
-        throw new Error(
-          `Ubicación inexistente: "${ubNom}" para depósito "${depNom}"`,
-        );
-      }
-      const ubId = Number(ubRes.recordset[0].id_ubicacion);
-
-      // 3) nro ajuste
-      const rN = await new sql.Request(trans).query(`
-        SELECT ISNULL(MAX(numero_ajuste),0)+1 AS n
-        FROM dbo.ajustes WITH (UPDLOCK, HOLDLOCK)
-      `);
-      const nro = Number(rN.recordset[0].n);
-
-      await new sql.Request(trans)
-        .input("n", sql.Int, nro)
-        .input("d", sql.VarChar, depNom)
-        .input("mid", sql.Int, motivoIdExcel)
-        .input("m", sql.VarChar, `IMPORTACIÓN EXCEL (${ubNom})`).query(`
-          INSERT INTO dbo.ajustes (numero_ajuste, deposito, motivo_id, motivo, fecha, usuario)
-          VALUES(@n,@d,@mid,@m,GETDATE(),'sistema')
-        `);
-
-      // 4) consolidar por código
-      const agg = new Map();
-      for (const it of porKey[key]) {
-        const sign = it.tipo === "SALIDA" ? -it.cant : it.cant;
-        agg.set(it.cod, (agg.get(it.cod) || 0) + sign);
-      }
-
-      const merged = Array.from(agg.entries())
-        .map(([cod, delta]) => ({ cod, delta: Math.trunc(delta) }))
-        .filter((x) => x.delta !== 0);
-
-      for (const it of merged) {
-        const art = await new sql.Request(trans).input("c", sql.VarChar, it.cod)
-          .query(`
-            SELECT id_articulo, descripcion
-            FROM dbo.articulos
-            WHERE UPPER(LTRIM(RTRIM(codigo))) = @c
+            WHERE nombre = @nombre;
           `);
 
-        if (!art.recordset.length)
-          throw new Error(`Código inexistente: ${it.cod}`);
-        const idArt = Number(art.recordset[0].id_articulo);
-        const desc = String(art.recordset[0].descripcion || "");
+      if (!depositoResult.recordset.length) {
+        throw new Error(`Depósito inexistente: ${depositoNombre}`);
+      }
 
-        // validar stock para salidas
-        if (it.delta < 0) {
-          const disponible = await getStockActual(trans, {
-            depositoId: depId,
-            articuloId: idArt,
-            ubicacionId: ubId,
+      const depositoId = Number(depositoResult.recordset[0].id_deposito);
+
+      const ubicacionResult = await new sql.Request(transaction)
+        .input("depositoId", sql.Int, depositoId)
+        .input("nombre", sql.VarChar(255), ubicacionNombre).query(`
+            SELECT TOP 1 id_ubicacion
+
+            FROM dbo.ubicaciones
+            WITH (UPDLOCK, HOLDLOCK)
+
+            WHERE id_deposito = @depositoId
+              AND UPPER(
+                LTRIM(
+                  RTRIM(nombre)
+                )
+              ) = UPPER(
+                LTRIM(
+                  RTRIM(@nombre)
+                )
+              );
+          `);
+
+      if (!ubicacionResult.recordset.length) {
+        throw new Error(
+          `Ubicación inexistente: "${ubicacionNombre}" para depósito "${depositoNombre}"`,
+        );
+      }
+
+      const ubicacionId = Number(ubicacionResult.recordset[0].id_ubicacion);
+
+      const numeroResult = await new sql.Request(transaction).query(`
+            SELECT
+              ISNULL(
+                MAX(numero_ajuste),
+                0
+              ) + 1 AS numero
+
+            FROM dbo.ajustes
+            WITH (UPDLOCK, HOLDLOCK);
+          `);
+
+      const numeroAjuste = Number(numeroResult.recordset[0].numero);
+
+      await new sql.Request(transaction)
+        .input("numeroAjuste", sql.Int, numeroAjuste)
+        .input("deposito", sql.VarChar(255), depositoNombre)
+        .input("motivoId", sql.Int, motivoId)
+        .input(
+          "motivo",
+          sql.VarChar(255),
+          `IMPORTACIÓN EXCEL (${ubicacionNombre})`,
+        ).query(`
+          INSERT INTO dbo.ajustes
+          (
+            numero_ajuste,
+            deposito,
+            motivo_id,
+            motivo,
+            fecha,
+            usuario
+          )
+          VALUES
+          (
+            @numeroAjuste,
+            @deposito,
+            @motivoId,
+            @motivo,
+            GETDATE(),
+            'sistema'
+          );
+        `);
+
+      const agrupados = new Map();
+
+      for (const movimiento of movimientosGrupo) {
+        const delta =
+          movimiento.tipo === "SALIDA"
+            ? -movimiento.cantidad
+            : movimiento.cantidad;
+
+        agrupados.set(
+          movimiento.codigo,
+          (agrupados.get(movimiento.codigo) || 0) + delta,
+        );
+      }
+
+      for (const [codigo, deltaRaw] of agrupados.entries()) {
+        const delta = Math.trunc(deltaRaw);
+
+        if (delta === 0) {
+          continue;
+        }
+
+        const articuloResult = await new sql.Request(transaction).input(
+          "codigo",
+          sql.VarChar(100),
+          codigo,
+        ).query(`
+              SELECT
+                id_articulo,
+                descripcion
+
+              FROM dbo.articulos
+              WITH (UPDLOCK, HOLDLOCK)
+
+              WHERE UPPER(
+                LTRIM(
+                  RTRIM(codigo)
+                )
+              ) = @codigo;
+            `);
+
+        if (!articuloResult.recordset.length) {
+          throw new Error(`Código inexistente: ${codigo}`);
+        }
+
+        const articuloId = Number(articuloResult.recordset[0].id_articulo);
+
+        const descripcion = String(
+          articuloResult.recordset[0].descripcion || "",
+        );
+
+        if (delta < 0) {
+          const disponible = await getStockActual(transaction, {
+            depositoId,
+            articuloId,
+            ubicacionId,
           });
-          if (disponible + it.delta < 0) {
+
+          if (disponible + delta < 0) {
             throw new Error(
-              `Stock insuficiente para ${it.cod} en ${depNom}/${ubNom}`,
+              `Stock insuficiente para ${codigo} en ${depositoNombre}/${ubicacionNombre}`,
             );
           }
         }
 
-        await insertDetalle(trans, {
-          ajusteId: nro,
-          cod: it.cod,
-          desc,
-          cantidad: it.delta,
+        await insertDetalle(transaction, {
+          ajusteId: numeroAjuste,
+          cod: codigo,
+          desc: descripcion,
+          cantidad: delta,
           usuario: "sistema",
         });
 
-        await upsertStockDelta(trans, {
-          depositoId: depId,
-          articuloId: idArt,
-          ubicacionId: ubId,
-          delta: it.delta,
+        await upsertStockDelta(transaction, {
+          depositoId,
+          articuloId,
+          ubicacionId,
+          delta,
         });
       }
 
-      ajustes.push({ deposito: depNom, ubicacion: ubNom, numero_ajuste: nro });
+      ajustes.push({
+        deposito: depositoNombre,
+
+        ubicacion: ubicacionNombre,
+
+        numero_ajuste: numeroAjuste,
+      });
     }
 
-    await trans.commit();
-    res.json({ ok: true, ajustes });
-  } catch (e) {
+    await transaction.commit();
+
+    return res.json({
+      ok: true,
+      ajustes,
+    });
+  } catch (err) {
     try {
-      if (trans) await trans.rollback();
+      if (transaction) {
+        await transaction.rollback();
+      }
     } catch {}
-    res.status(400).json({ error: String(e?.message || e) });
+
+    return res.status(400).json({
+      error: String(err?.message || err),
+    });
   }
 };
 
-// ==========================
-// CONSUMIR PRODUCCIÓN (DROPBOX)
-// ==========================
+// ========================================================
+// ALERTAS DE CONSUMO
+// ========================================================
 
 async function insertAlertaConsumoProduccion(
-  trans,
+  transaction,
   {
     numeroMovimiento,
     obra,
@@ -1253,8 +1775,8 @@ async function insertAlertaConsumoProduccion(
     motivo,
   },
 ) {
-  await new sql.Request(trans)
-    .input("numero", sql.Int, numeroMovimiento ?? null)
+  await new sql.Request(transaction)
+    .input("numeroMovimiento", sql.Int, numeroMovimiento ?? null)
     .input(
       "obra",
       sql.NVarChar(sql.MAX),
@@ -1275,9 +1797,9 @@ async function insertAlertaConsumoProduccion(
       sql.VarChar(500),
       descripcion == null ? null : String(descripcion).trim(),
     )
-    .input("req", sql.Int, cantidadRequerida ?? null)
-    .input("ajust", sql.Int, cantidadAjustada ?? null)
-    .input("falt", sql.Int, cantidadFaltante ?? null)
+    .input("cantidadRequerida", sql.Int, cantidadRequerida ?? null)
+    .input("cantidadAjustada", sql.Int, cantidadAjustada ?? null)
+    .input("cantidadFaltante", sql.Int, cantidadFaltante ?? null)
     .input(
       "motivo",
       sql.NVarChar(sql.MAX),
@@ -1298,53 +1820,75 @@ async function insertAlertaConsumoProduccion(
       )
       VALUES
       (
-        @numero,
+        @numeroMovimiento,
         @obra,
         @version,
         @codigo,
         @descripcion,
-        @req,
-        @ajust,
-        @falt,
+        @cantidadRequerida,
+        @cantidadAjustada,
+        @cantidadFaltante,
         @motivo,
         0
-      )
+      );
     `);
 }
 
+// ========================================================
+// CONSUMIR PRODUCCIÓN DESDE DROPBOX
+// ========================================================
+
 async function runConsumoProduccion() {
-  let trans = null;
+  let transaction = null;
 
   await poolConnect;
   const pool = await getPool();
 
   try {
-    // 0) leer fileRef (id:) desde DB
-    const idRes = await pool
+    const setting = await pool
       .request()
-      .input("k", sql.VarChar, "DROPBOX_PRODUCCION_FILE_ID")
-      .query(`SELECT valor FROM dbo.app_settings WHERE clave = @k`);
+      .input("clave", sql.VarChar(255), "DROPBOX_PRODUCCION_FILE_ID").query(`
+        SELECT valor
+        FROM dbo.app_settings
+        WHERE clave = @clave;
+      `);
 
-    if (!idRes.recordset.length) {
+    if (!setting.recordset.length) {
       return {
         ok: false,
         error: "No existe configuración DROPBOX_PRODUCCION_FILE_ID",
       };
     }
 
-    const fileRef = String(idRes.recordset[0].valor || "").trim();
+    const fileRef = String(setting.recordset[0].valor || "").trim();
+
     if (!fileRef) {
-      return { ok: false, error: "DROPBOX_PRODUCCION_FILE_ID vacío" };
+      return {
+        ok: false,
+        error: "DROPBOX_PRODUCCION_FILE_ID está vacío",
+      };
     }
 
-    // 1) descargar excel
     const buffer = await downloadByPath(fileRef);
-    const workbook = XLSX.read(buffer, { type: "buffer" });
 
-    const ws = workbook.Sheets["materiales"];
-    if (!ws) return { ok: false, error: 'No existe hoja "materiales"' };
+    const workbook = XLSX.read(buffer, {
+      type: "buffer",
+    });
 
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+    const worksheet = workbook.Sheets.materiales;
+
+    if (!worksheet) {
+      return {
+        ok: false,
+        error: 'No existe la hoja "materiales"',
+      };
+    }
+
+    const rows = XLSX.utils.sheet_to_json(worksheet, {
+      header: 1,
+      defval: "",
+    });
+
     if (!rows.length) {
       return {
         ok: true,
@@ -1357,85 +1901,87 @@ async function runConsumoProduccion() {
     const header = rows[0];
     const dataRows = rows.slice(1);
 
-    // 2) transacción
-    trans = new sql.Transaction(pool);
-    await trans.begin();
+    transaction = new sql.Transaction(pool);
 
-    const motivoIdDropbox = await getMotivoIdByNombreActivo(
-      trans,
-      "CONSUMO PRODUCCIÓN (DROPBOX)",
+    await transaction.begin();
+
+    const motivoId = await getMotivoIdByNombreActivo(
+      transaction,
+      "CONSUMO PRODUCCION (DROPBOX)",
     );
 
-    if (!motivoIdDropbox) {
-      await trans.rollback();
-      trans = null;
-      return {
-        ok: false,
-        error:
-          'Falta motivo "CONSUMO PRODUCCIÓN (DROPBOX)" en dbo.ajustes_motivos (o está inactivo)',
-      };
-    }
-
-    // 2.1) depósito Producción
-    const depRes = await new sql.Request(trans)
-      .input("n", sql.VarChar, "Producción")
-      .query(
-        `SELECT id_deposito, nombre FROM dbo.depositos WITH (UPDLOCK, HOLDLOCK) WHERE nombre = @n`,
+    if (!motivoId) {
+      throw new Error(
+        'Falta el motivo "CONSUMO PRODUCCIÓN (DROPBOX)" o está inactivo',
       );
-
-    if (!depRes.recordset.length) {
-      await trans.rollback();
-      trans = null;
-      return {
-        ok: false,
-        error: 'No existe depósito "Producción". Crealo para continuar.',
-      };
     }
 
-    const depositoId = Number(depRes.recordset[0].id_deposito);
-    const depositoNombre = String(depRes.recordset[0].nombre || "Producción");
+    const depositoResult = await new sql.Request(transaction).input(
+      "nombre",
+      sql.VarChar(255),
+      "Producción",
+    ).query(`
+          SELECT
+            id_deposito,
+            nombre
 
-    // 2.2) ubicación GENERAL dentro de Producción
-    const ubRes = await new sql.Request(trans).input("dep", sql.Int, depositoId)
-      .query(`
-        SELECT TOP 1 id_ubicacion
-        FROM dbo.ubicaciones WITH (UPDLOCK, HOLDLOCK)
-        WHERE id_deposito = @dep
-          AND UPPER(LTRIM(RTRIM(nombre))) = 'GENERAL'
-        ORDER BY id_ubicacion
-      `);
+          FROM dbo.depositos
+          WITH (UPDLOCK, HOLDLOCK)
 
-    if (!ubRes.recordset.length) {
-      await trans.rollback();
-      trans = null;
-      return {
-        ok: false,
-        error:
-          'Ubicación "GENERAL" no existe para depósito "Producción". Creala para continuar.',
-      };
+          WHERE nombre = @nombre;
+        `);
+
+    if (!depositoResult.recordset.length) {
+      throw new Error('No existe el depósito "Producción"');
     }
 
-    const ubicacionId = Number(ubRes.recordset[0].id_ubicacion);
+    const depositoId = Number(depositoResult.recordset[0].id_deposito);
 
-    // 3) Procesar filas y agrupar por obra + version.
-    // Columnas del Excel:
-    // A = obra      => r[0]
-    // B = código    => r[1]
-    // E = version   => r[4]
-    // F = requerido => r[5]
-    // G = ajustado  => r[6]
-    const okItems = [];
-    const failItems = [];
-    const grupos = new Map(); // key obra||version -> { obra, version, agg, fallidos }
+    const depositoNombre = String(
+      depositoResult.recordset[0].nombre || "Producción",
+    );
 
-    const getGrupo = (obra, version) => {
+    const ubicacionResult = await new sql.Request(transaction).input(
+      "depositoId",
+      sql.Int,
+      depositoId,
+    ).query(`
+          SELECT TOP 1 id_ubicacion
+
+          FROM dbo.ubicaciones
+          WITH (UPDLOCK, HOLDLOCK)
+
+          WHERE id_deposito = @depositoId
+            AND activa = 1
+            AND UPPER(
+              LTRIM(
+                RTRIM(nombre)
+              )
+            ) = 'GENERAL'
+
+          ORDER BY id_ubicacion;
+        `);
+
+    if (!ubicacionResult.recordset.length) {
+      throw new Error(
+        "No existe la ubicación GENERAL para el depósito Producción",
+      );
+    }
+
+    const ubicacionId = Number(ubicacionResult.recordset[0].id_ubicacion);
+
+    const grupos = new Map();
+    const itemsCorrectos = [];
+    const itemsFallidos = [];
+
+    const obtenerGrupo = (obra, version) => {
       const key = `${obra ?? "NULL"}||${version ?? "NULL"}`;
 
       if (!grupos.has(key)) {
         grupos.set(key, {
           obra,
           version,
-          agg: new Map(), // codigo -> { desc, delta, requerido, faltante, observacion }
+          articulos: new Map(),
           fallidos: [],
         });
       }
@@ -1444,211 +1990,209 @@ async function runConsumoProduccion() {
     };
 
     const registrarFallo = (grupo, item) => {
-      failItems.push(item);
-      if (grupo) grupo.fallidos.push(item);
+      itemsFallidos.push(item);
+
+      if (grupo) {
+        grupo.fallidos.push(item);
+      }
     };
 
-    for (let i = 0; i < dataRows.length; i++) {
-      const excelRowIndex = i + 2;
-      const r = dataRows[i];
+    for (let index = 0; index < dataRows.length; index += 1) {
+      const row = dataRows[index];
+      const excelRow = index + 2;
 
-      const colA = String(r[0] ?? "").trim();
-      if (!colA) break;
+      const obraCelda = String(row[0] ?? "").trim();
 
-      const obraRaw = r[0];
-      const versionRaw = r[4];
+      if (!obraCelda) {
+        break;
+      }
 
-      const obra =
-        obraRaw === null ||
-        obraRaw === undefined ||
-        String(obraRaw).trim() === ""
-          ? null
-          : String(obraRaw).trim();
+      const obra = toDb(row[0]);
 
-      const version =
-        versionRaw === null ||
-        versionRaw === undefined ||
-        String(versionRaw).trim() === ""
-          ? null
-          : String(versionRaw).trim();
+      const version = toDb(row[4]);
 
-      const grupo = getGrupo(obra, version);
+      const grupo = obtenerGrupo(obra, version);
 
-      const f = toNumber0(r[5]);
-      const g = toNumber0(r[6]);
+      const requerido = toNumber0(row[5]);
 
-      if (g >= f) continue;
+      const yaAjustado = toNumber0(row[6]);
 
-      const delta = Math.trunc(f - g);
-      if (delta <= 0) continue;
+      if (yaAjustado >= requerido) {
+        continue;
+      }
 
-      const codigo = up(r[1]);
+      const diferencia = Math.trunc(requerido - yaAjustado);
+
+      if (diferencia <= 0) {
+        continue;
+      }
+
+      const codigo = up(row[1]);
 
       if (!codigo) {
         registrarFallo(grupo, {
-          row: excelRowIndex,
+          row: excelRow,
           codigo: "SIN_CODIGO",
-          desc: "",
-          requerido: delta,
+          descripcion: "",
+          requerido: diferencia,
           ajustado: 0,
-          faltante: delta,
+          faltante: diferencia,
           obra,
           version,
-          reason: "Código vacío",
+          motivo: "Código vacío",
         });
+
         continue;
       }
 
-      const artRes = await new sql.Request(trans).input(
-        "c",
-        sql.VarChar,
+      const articuloResult = await new sql.Request(transaction).input(
+        "codigo",
+        sql.VarChar(100),
         codigo,
       ).query(`
-          SELECT TOP 1 id_articulo, descripcion
-          FROM dbo.articulos WITH (UPDLOCK, HOLDLOCK)
-          WHERE UPPER(LTRIM(RTRIM(codigo))) = @c
-        `);
+            SELECT TOP 1
+              id_articulo,
+              descripcion
 
-      if (!artRes.recordset.length) {
+            FROM dbo.articulos
+            WITH (UPDLOCK, HOLDLOCK)
+
+            WHERE UPPER(
+              LTRIM(
+                RTRIM(codigo)
+              )
+            ) = @codigo;
+          `);
+
+      if (!articuloResult.recordset.length) {
         registrarFallo(grupo, {
-          row: excelRowIndex,
+          row: excelRow,
           codigo,
-          desc: "",
-          requerido: delta,
+          descripcion: "",
+          requerido: diferencia,
           ajustado: 0,
-          faltante: delta,
+          faltante: diferencia,
           obra,
           version,
-          reason: "Código no existe en dbo.articulos",
-        });
-        continue;
-      }
-
-      const idArt = Number(artRes.recordset[0].id_articulo);
-      const desc = String(artRes.recordset[0].descripcion || "");
-
-      const existsStock = await new sql.Request(trans)
-        .input("dep", sql.Int, depositoId)
-        .input("art", sql.Int, idArt)
-        .input("ub", sql.Int, ubicacionId).query(`
-          SELECT TOP 1 cantidad
-          FROM dbo.stock WITH (UPDLOCK, HOLDLOCK)
-          WHERE id_deposito = @dep
-            AND id_articulo = @art
-            AND id_ubicacion = @ub
-        `);
-
-      if (!existsStock.recordset.length) {
-        registrarFallo(grupo, {
-          row: excelRowIndex,
-          codigo,
-          desc,
-          requerido: delta,
-          ajustado: 0,
-          faltante: delta,
-          obra,
-          version,
-          reason: "No existe registro en dbo.stock para Producción/GENERAL",
-        });
-        continue;
-      }
-
-      const disponible = Number(existsStock.recordset[0].cantidad || 0);
-      const cantidadAjustable = Math.min(disponible, delta);
-      const cantidadFaltante = delta - cantidadAjustable;
-
-      if (cantidadAjustable <= 0) {
-        registrarFallo(grupo, {
-          row: excelRowIndex,
-          codigo,
-          desc,
-          requerido: delta,
-          ajustado: 0,
-          faltante: delta,
-          obra,
-          version,
-          reason: "Sin stock disponible para ajustar",
-        });
-
-        const prev = grupo.agg.get(codigo);
-        grupo.agg.set(codigo, {
-          desc,
-          delta: prev?.delta || 0,
-          requerido: (prev?.requerido || 0) + delta,
-          faltante: (prev?.faltante || 0) + delta,
-          observacion: "Sin stock disponible para ajustar",
+          motivo: "Código inexistente",
         });
 
         continue;
       }
 
-      const ok = await tryDescontarStock(trans, {
+      const articuloId = Number(articuloResult.recordset[0].id_articulo);
+
+      const descripcion = String(articuloResult.recordset[0].descripcion || "");
+
+      const disponible = await getStockActual(transaction, {
         depositoId,
-        articuloId: idArt,
+        articuloId,
         ubicacionId,
-        deltaNegativo: -cantidadAjustable,
       });
 
-      if (!ok) {
+      const ajustable = Math.min(disponible, diferencia);
+
+      const faltante = diferencia - ajustable;
+
+      if (ajustable <= 0) {
         registrarFallo(grupo, {
-          row: excelRowIndex,
+          row: excelRow,
           codigo,
-          desc,
-          requerido: delta,
+          descripcion,
+          requerido: diferencia,
           ajustado: 0,
-          faltante: delta,
+          faltante: diferencia,
           obra,
           version,
-          reason: "No se pudo descontar stock",
+          motivo: "Sin stock disponible",
         });
+
+        const anterior = grupo.articulos.get(codigo);
+
+        grupo.articulos.set(codigo, {
+          descripcion,
+          delta: anterior?.delta || 0,
+          requerido: (anterior?.requerido || 0) + diferencia,
+          faltante: (anterior?.faltante || 0) + diferencia,
+          observacion: "Sin stock disponible",
+        });
+
         continue;
       }
 
-      // Marcar Excel sólo hasta lo que efectivamente se pudo ajustar.
-      r[6] = g + cantidadAjustable;
+      const descontado = await tryDescontarStock(transaction, {
+        depositoId,
+        articuloId,
+        ubicacionId,
+        deltaNegativo: -ajustable,
+      });
 
-      okItems.push({
-        row: excelRowIndex,
+      if (!descontado) {
+        registrarFallo(grupo, {
+          row: excelRow,
+          codigo,
+          descripcion,
+          requerido: diferencia,
+          ajustado: 0,
+          faltante: diferencia,
+          obra,
+          version,
+          motivo: "No se pudo descontar stock",
+        });
+
+        continue;
+      }
+
+      row[6] = yaAjustado + ajustable;
+
+      itemsCorrectos.push({
+        row: excelRow,
         codigo,
-        idArt,
-        desc,
-        requerido: delta,
-        ajustado: cantidadAjustable,
-        faltante: cantidadFaltante,
+        articuloId,
+        descripcion,
+        requerido: diferencia,
+        ajustado: ajustable,
+        faltante,
         obra,
         version,
       });
 
-      if (cantidadFaltante > 0) {
+      if (faltante > 0) {
         registrarFallo(grupo, {
-          row: excelRowIndex,
+          row: excelRow,
           codigo,
-          desc,
-          requerido: delta,
-          ajustado: cantidadAjustable,
-          faltante: cantidadFaltante,
+          descripcion,
+          requerido: diferencia,
+          ajustado: ajustable,
+          faltante,
           obra,
           version,
-          reason: "Stock parcial: se ajustó hasta cero",
+          motivo: "Stock parcial: se ajustó hasta cero",
         });
       }
 
-      const prev = grupo.agg.get(codigo);
-      grupo.agg.set(codigo, {
-        desc,
-        delta: (prev?.delta || 0) - cantidadAjustable,
-        requerido: (prev?.requerido || 0) + delta,
-        faltante: (prev?.faltante || 0) + cantidadFaltante,
+      const anterior = grupo.articulos.get(codigo);
+
+      grupo.articulos.set(codigo, {
+        descripcion,
+
+        delta: (anterior?.delta || 0) - ajustable,
+
+        requerido: (anterior?.requerido || 0) + diferencia,
+
+        faltante: (anterior?.faltante || 0) + faltante,
+
         observacion:
-          cantidadFaltante > 0
+          faltante > 0
             ? "Stock parcial: se ajustó hasta cero"
-            : prev?.observacion || null,
+            : anterior?.observacion || null,
       });
     }
 
-    if (okItems.length === 0 && failItems.length === 0) {
-      await trans.rollback();
-      trans = null;
+    if (!itemsCorrectos.length && !itemsFallidos.length) {
+      await transaction.rollback();
+      transaction = null;
+
       return {
         ok: true,
         message: "No hay diferencias para ajustar",
@@ -1658,41 +2202,40 @@ async function runConsumoProduccion() {
       };
     }
 
-    // 4) Crear un ajuste por cada combinación obra + version.
     const ajustesCreados = [];
 
     for (const grupo of grupos.values()) {
       const tieneDetalle =
         grupo.fallidos.length > 0 ||
-        Array.from(grupo.agg.values()).some(
-          (v) => (v.delta || 0) !== 0 || (v.faltante || 0) !== 0,
+        Array.from(grupo.articulos.values()).some(
+          (item) => item.delta !== 0 || item.faltante !== 0,
         );
 
-      if (!tieneDetalle) continue;
+      if (!tieneDetalle) {
+        continue;
+      }
 
-      const nroRes = await new sql.Request(trans).query(`
-        SELECT ISNULL(MAX(numero_ajuste), 0) + 1 AS nextNro
-        FROM dbo.ajustes WITH (UPDLOCK, HOLDLOCK)
-      `);
+      const numeroResult = await new sql.Request(transaction).query(`
+            SELECT
+              ISNULL(
+                MAX(numero_ajuste),
+                0
+              ) + 1 AS numero
 
-      const nextNro = Number(nroRes.recordset[0].nextNro);
+            FROM dbo.ajustes
+            WITH (UPDLOCK, HOLDLOCK);
+          `);
 
-      await new sql.Request(trans)
-        .input("nro", sql.Int, nextNro)
-        .input("depNom", sql.VarChar(100), String(depositoNombre ?? "").trim())
-        .input("motId", sql.Int, motivoIdDropbox)
-        .input("mot", sql.VarChar(150), "CONSUMO PRODUCCIÓN (DROPBOX)")
-        .input(
-          "obra",
-          sql.NVarChar(sql.MAX),
-          grupo.obra == null ? null : String(grupo.obra).trim(),
-        )
-        .input(
-          "version",
-          sql.NVarChar(sql.MAX),
-          grupo.version == null ? null : String(grupo.version).trim(),
-        )
-        .input("usr", sql.VarChar(100), "sistema").query(`
+      const numeroAjuste = Number(numeroResult.recordset[0].numero);
+
+      await new sql.Request(transaction)
+        .input("numeroAjuste", sql.Int, numeroAjuste)
+        .input("deposito", sql.VarChar(255), depositoNombre)
+        .input("motivoId", sql.Int, motivoId)
+        .input("motivo", sql.VarChar(255), "CONSUMO PRODUCCIÓN (DROPBOX)")
+        .input("obra", sql.NVarChar(sql.MAX), grupo.obra)
+        .input("version", sql.NVarChar(sql.MAX), grupo.version)
+        .input("usuario", sql.VarChar(255), "sistema").query(`
           INSERT INTO dbo.ajustes
           (
             numero_ajuste,
@@ -1706,162 +2249,166 @@ async function runConsumoProduccion() {
           )
           VALUES
           (
-            @nro,
-            @depNom,
-            @motId,
-            @mot,
+            @numeroAjuste,
+            @deposito,
+            @motivoId,
+            @motivo,
             @obra,
             @version,
             GETDATE(),
-            @usr
-          )
+            @usuario
+          );
         `);
 
-      // 5) Detalles consolidados del grupo.
-      for (const [codigo, v] of grupo.agg.entries()) {
-        if ((v.delta || 0) === 0 && (v.faltante || 0) === 0) continue;
+      for (const [codigo, item] of grupo.articulos.entries()) {
+        if (item.delta === 0 && item.faltante === 0) {
+          continue;
+        }
 
-        await insertDetalle(trans, {
-          ajusteId: nextNro,
+        await insertDetalle(transaction, {
+          ajusteId: numeroAjuste,
           cod: codigo,
-          desc: v.desc || "",
-          cantidad: v.delta || 0,
+          desc: item.descripcion,
+          cantidad: item.delta || 0,
           usuario: "sistema",
-          cantidadRequerida: v.requerido || null,
-          cantidadFaltante: v.faltante || null,
-          observacion: v.observacion || null,
+          cantidadRequerida: item.requerido || null,
+          cantidadFaltante: item.faltante || null,
+          observacion: item.observacion || null,
         });
 
-        if ((v.faltante || 0) > 0) {
-          await insertAlertaConsumoProduccion(trans, {
-            numeroMovimiento: nextNro,
+        if (item.faltante > 0) {
+          await insertAlertaConsumoProduccion(transaction, {
+            numeroMovimiento: numeroAjuste,
             obra: grupo.obra,
             version: grupo.version,
             codigo,
-            descripcion: v.desc || "",
-            cantidadRequerida: v.requerido || null,
-            cantidadAjustada: Math.abs(v.delta || 0),
-            cantidadFaltante: v.faltante || null,
-            motivo: v.observacion || "Consumo parcial: quedó cantidad faltante",
+            descripcion: item.descripcion,
+            cantidadRequerida: item.requerido,
+            cantidadAjustada: Math.abs(item.delta || 0),
+            cantidadFaltante: item.faltante,
+            motivo: item.observacion || "Consumo parcial",
           });
         }
       }
 
-      // 5.b) Detalles no ajustados por error dentro de su obra/version.
-      for (const f of grupo.fallidos) {
-        await insertDetalle(trans, {
-          ajusteId: nextNro,
-          cod: f.codigo || "SIN_CODIGO",
-          desc: f.desc || "",
+      for (const fallo of grupo.fallidos) {
+        await insertDetalle(transaction, {
+          ajusteId: numeroAjuste,
+          cod: fallo.codigo || "SIN_CODIGO",
+          desc: fallo.descripcion || "",
           cantidad: 0,
           usuario: "sistema",
-          cantidadRequerida: f.requerido || null,
-          cantidadFaltante: f.faltante || null,
-          observacion: `Fila ${f.row}: ${f.reason}`,
+          cantidadRequerida: fallo.requerido || null,
+          cantidadFaltante: fallo.faltante || null,
+          observacion: `Fila ${fallo.row}: ${fallo.motivo}`,
         });
 
-        await insertAlertaConsumoProduccion(trans, {
-          numeroMovimiento: nextNro,
+        await insertAlertaConsumoProduccion(transaction, {
+          numeroMovimiento: numeroAjuste,
           obra: grupo.obra,
           version: grupo.version,
-          codigo: f.codigo || "SIN_CODIGO",
-          descripcion: f.desc || "",
-          cantidadRequerida: f.requerido || null,
-          cantidadAjustada: f.ajustado || 0,
-          cantidadFaltante: f.faltante || null,
-          motivo: `Fila ${f.row}: ${f.reason}`,
+          codigo: fallo.codigo || "SIN_CODIGO",
+          descripcion: fallo.descripcion || "",
+          cantidadRequerida: fallo.requerido || null,
+          cantidadAjustada: fallo.ajustado || 0,
+          cantidadFaltante: fallo.faltante || null,
+          motivo: `Fila ${fallo.row}: ${fallo.motivo}`,
         });
       }
 
       ajustesCreados.push({
-        numero_ajuste: nextNro,
+        numero_ajuste: numeroAjuste,
         obra: grupo.obra,
         version: grupo.version,
       });
     }
 
-    // 6) Re-escribir Excel.
-    const outRows = [header, ...dataRows];
-    workbook.Sheets["materiales"] = XLSX.utils.aoa_to_sheet(outRows);
+    const outputRows = [header, ...dataRows];
 
-    const outBuffer = XLSX.write(workbook, {
+    workbook.Sheets.materiales = XLSX.utils.aoa_to_sheet(outputRows);
+
+    const outputBuffer = XLSX.write(workbook, {
       type: "buffer",
       bookType: "xlsx",
     });
 
-    // 7) Subir overwrite.
-    await uploadOverwriteByPath(fileRef, outBuffer);
+    await uploadOverwriteByPath(fileRef, outputBuffer);
 
-    // 8) Commit.
-    await trans.commit();
-    trans = null;
+    await transaction.commit();
+    transaction = null;
 
     return {
       ok: true,
       ajustes: ajustesCreados,
       cantidad_ajustes: ajustesCreados.length,
-      ajustados: okItems.length,
-      fallidos: failItems.length,
-      resumen_fallidos: failItems,
+      ajustados: itemsCorrectos.length,
+      fallidos: itemsFallidos.length,
+      resumen_fallidos: itemsFallidos,
     };
   } catch (err) {
-    if (trans) {
+    if (transaction) {
       try {
-        await trans.rollback();
+        await transaction.rollback();
       } catch {}
     }
+
     throw err;
   }
 }
 
-// Endpoint (botón)
 exports.consumirProduccionDropbox = async (_req, res) => {
   try {
     const result = await runConsumoProduccion();
+
     return res.json(result);
   } catch (err) {
-    const status = err?.response?.status;
-    const dropboxBody = err?.response?.data;
-    console.error("consumirProduccionDropbox ERROR:", {
-      message: err.message,
-      status,
-      dropboxBody,
-    });
+    console.error("ajustes.consumirProduccionDropbox:", err);
+
     return res.status(500).json({
       error: "Error al consumir producción",
       detalle: err.message,
-      status,
-      dropbox: dropboxBody || null,
+      status: err?.response?.status || null,
+      dropbox: err?.response?.data || null,
     });
   }
 };
+
+// ========================================================
+// ALERTAS
+// ========================================================
 
 exports.getAlertasConsumoPendientes = async (_req, res) => {
   try {
     await poolConnect;
     const pool = await getPool();
 
-    const r = await pool.request().query(`
-      SELECT TOP 200
-        id_alerta,
-        fecha,
-        numero_movimiento,
-        obra,
-        version,
-        codigo,
-        descripcion,
-        cantidad_requerida,
-        cantidad_ajustada,
-        cantidad_faltante,
-        motivo
-      FROM dbo.consumo_produccion_alertas
-      WHERE leida = 0
-      ORDER BY fecha ASC, id_alerta ASC
-    `);
+    const result = await pool.request().query(`
+          SELECT TOP 200
+            id_alerta,
+            fecha,
+            numero_movimiento,
+            obra,
+            version,
+            codigo,
+            descripcion,
+            cantidad_requerida,
+            cantidad_ajustada,
+            cantidad_faltante,
+            motivo
 
-    return res.json(r.recordset || []);
+          FROM dbo.consumo_produccion_alertas
+
+          WHERE leida = 0
+
+          ORDER BY
+            fecha ASC,
+            id_alerta ASC;
+        `);
+
+    return res.json(result.recordset || []);
   } catch (err) {
-    console.error("getAlertasConsumoPendientes:", err);
+    console.error("ajustes.getAlertasConsumoPendientes:", err);
+
     return res.status(500).json({
       error: "Error al obtener alertas de consumo",
       detalle: err.message,
@@ -1872,37 +2419,51 @@ exports.getAlertasConsumoPendientes = async (_req, res) => {
 exports.marcarAlertasConsumoLeidas = async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids)
-      ? req.body.ids.map((x) => Number(x)).filter(Number.isFinite)
+      ? req.body.ids
+          .map((id) => asInt(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
       : [];
 
     if (!ids.length) {
-      return res.json({ ok: true, afectados: 0 });
+      return res.json({
+        ok: true,
+        afectados: 0,
+      });
     }
 
     await poolConnect;
     const pool = await getPool();
 
-    const rq = pool.request();
-    const params = ids.map((id, i) => {
-      const p = `id${i}`;
-      rq.input(p, sql.Int, id);
-      return `@${p}`;
+    const request = pool.request();
+
+    const parametros = ids.map((id, index) => {
+      const nombre = `id${index}`;
+
+      request.input(nombre, sql.Int, id);
+
+      return `@${nombre}`;
     });
 
-    const r = await rq.query(`
-      UPDATE dbo.consumo_produccion_alertas
-      SET leida = 1
-      WHERE id_alerta IN (${params.join(",")});
+    const result = await request.query(`
+          UPDATE dbo.consumo_produccion_alertas
 
-      SELECT @@ROWCOUNT AS afectados;
-    `);
+          SET leida = 1
+
+          WHERE id_alerta IN (
+            ${parametros.join(",")}
+          );
+
+          SELECT
+            @@ROWCOUNT AS afectados;
+        `);
 
     return res.json({
       ok: true,
-      afectados: Number(r.recordset?.[0]?.afectados || 0),
+      afectados: Number(result.recordset?.[0]?.afectados || 0),
     });
   } catch (err) {
-    console.error("marcarAlertasConsumoLeidas:", err);
+    console.error("ajustes.marcarAlertasConsumoLeidas:", err);
+
     return res.status(500).json({
       error: "Error al marcar alertas como leídas",
       detalle: err.message,
@@ -1911,49 +2472,43 @@ exports.marcarAlertasConsumoLeidas = async (req, res) => {
 };
 
 // ========================================================
-// BORRADORES DE AJUSTES
+// BORRADORES
 // ========================================================
 
-function getUsuarioReq(req) {
-  return req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
-}
-
 async function getNombreDeposito(pool, depositoId) {
-  const id = Number(depositoId);
+  const id = asInt(depositoId);
 
-  if (!Number.isFinite(id) || id <= 0) return null;
+  if (!Number.isFinite(id) || id <= 0) {
+    return null;
+  }
 
-  const r = await pool
-    .request()
-    .input("id", sql.Int, id)
-    .query(`
+  const result = await pool.request().input("id", sql.Int, id).query(`
       SELECT TOP 1 nombre
       FROM dbo.depositos
-      WHERE id_deposito = @id
+      WHERE id_deposito = @id;
     `);
 
-  return r.recordset[0]?.nombre || null;
+  return result.recordset[0]?.nombre || null;
 }
 
 async function getNombreMotivo(pool, motivoId) {
-  const id = Number(motivoId);
+  const id = asInt(motivoId);
 
-  if (!Number.isFinite(id) || id <= 0) return null;
+  if (!Number.isFinite(id) || id <= 0) {
+    return null;
+  }
 
-  const r = await pool
-    .request()
-    .input("id", sql.Int, id)
-    .query(`
+  const result = await pool.request().input("id", sql.Int, id).query(`
       SELECT TOP 1 nombre
       FROM dbo.ajustes_motivos
-      WHERE id_motivo = @id
+      WHERE id_motivo = @id;
     `);
 
-  return r.recordset[0]?.nombre || null;
+  return result.recordset[0]?.nombre || null;
 }
 
 exports.saveDraft = async (req, res) => {
-  let trans;
+  let transaction;
 
   try {
     await poolConnect;
@@ -1962,71 +2517,77 @@ exports.saveDraft = async (req, res) => {
     const usuario = getUsuarioReq(req);
 
     const idBorradorRaw = req.body?.id_borrador;
+
     const idBorrador =
       idBorradorRaw === null ||
       idBorradorRaw === undefined ||
       String(idBorradorRaw).trim() === ""
         ? null
-        : Number(idBorradorRaw);
+        : asInt(idBorradorRaw);
+
+    const depositoIdRaw = req.body?.deposito_id;
 
     const depositoId =
-      req.body?.deposito_id === "" || req.body?.deposito_id == null
+      depositoIdRaw === null ||
+      depositoIdRaw === undefined ||
+      String(depositoIdRaw).trim() === ""
         ? null
-        : Number(req.body.deposito_id);
+        : asInt(depositoIdRaw);
+
+    const motivoIdRaw = req.body?.motivo_id;
 
     const motivoId =
-      req.body?.motivo_id === "" || req.body?.motivo_id == null
+      motivoIdRaw === null ||
+      motivoIdRaw === undefined ||
+      String(motivoIdRaw).trim() === ""
         ? null
-        : Number(req.body.motivo_id);
+        : asInt(motivoIdRaw);
+
+    const referenteIdRaw = req.body?.id_referente;
 
     const referenteId =
-      req.body?.id_referente === "" || req.body?.id_referente == null
+      referenteIdRaw === null ||
+      referenteIdRaw === undefined ||
+      String(referenteIdRaw).trim() === ""
         ? null
-        : Number(req.body.id_referente);
+        : asInt(referenteIdRaw);
 
     const depositoNombre = await getNombreDeposito(pool, depositoId);
+
     const motivoNombre = await getNombreMotivo(pool, motivoId);
 
     const tipoAjuste = String(req.body?.tipo_ajuste || "INGRESO")
       .trim()
       .toUpperCase();
 
-    const remitoReferencia =
-      req.body?.remito_referencia == null ||
-      String(req.body.remito_referencia).trim() === ""
-        ? null
-        : String(req.body.remito_referencia).trim();
+    const remitoReferencia = toDb(req.body?.remito_referencia);
 
-    const fechaReal =
-      req.body?.fecha_real == null || String(req.body.fecha_real).trim() === ""
-        ? null
-        : String(req.body.fecha_real).trim();
+    const fechaReal = toDb(req.body?.fecha_real);
 
-    const obra =
-      req.body?.obra == null || String(req.body.obra).trim() === ""
-        ? null
-        : String(req.body.obra).trim();
+    const obra = toDb(req.body?.obra);
 
-    const version =
-      req.body?.version == null || String(req.body.version).trim() === ""
-        ? null
-        : String(req.body.version).trim();
+    const version = toDb(req.body?.version);
 
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
 
-    trans = new sql.Transaction(pool);
-    await trans.begin();
+    transaction = new sql.Transaction(pool);
+
+    await transaction.begin();
 
     let draftId = idBorrador;
 
     if (draftId) {
-      const existe = await new sql.Request(trans)
-        .input("id", sql.Int, draftId)
-        .query(`
-          SELECT TOP 1 id_borrador
-          FROM dbo.ajustes_borradores
-          WHERE id_borrador = @id
-        `);
+      const existe = await new sql.Request(transaction).input(
+        "id",
+        sql.Int,
+        draftId,
+      ).query(`
+            SELECT TOP 1 id_borrador
+
+            FROM dbo.ajustes_borradores
+
+            WHERE id_borrador = @id;
+          `);
 
       if (!existe.recordset.length) {
         draftId = null;
@@ -2034,118 +2595,129 @@ exports.saveDraft = async (req, res) => {
     }
 
     if (!draftId) {
-      const creado = await new sql.Request(trans)
+      const creado = await new sql.Request(transaction)
         .input("depositoId", sql.Int, depositoId)
         .input("deposito", sql.NVarChar(255), depositoNombre)
         .input("motivoId", sql.Int, motivoId)
         .input("motivo", sql.NVarChar(255), motivoNombre)
-        .input("tipo", sql.VarChar(20), tipoAjuste)
-        .input("remito", sql.NVarChar(255), remitoReferencia)
+        .input("tipoAjuste", sql.VarChar(20), tipoAjuste)
+        .input("remitoReferencia", sql.NVarChar(255), remitoReferencia)
         .input("referenteId", sql.Int, referenteId)
         .input("fechaReal", sql.Date, fechaReal)
         .input("obra", sql.NVarChar(sql.MAX), obra)
         .input("version", sql.NVarChar(sql.MAX), version)
-        .input("usuario", sql.NVarChar(255), usuario)
-        .query(`
-          INSERT INTO dbo.ajustes_borradores
-          (
-            deposito_id,
-            deposito,
-            motivo_id,
-            motivo,
-            tipo_ajuste,
-            remito_referencia,
-            id_referente,
-            fecha_real,
-            obra,
-            version,
-            usuario,
-            fecha_creacion,
-            fecha_actualizacion
-          )
-          VALUES
-          (
-            @depositoId,
-            @deposito,
-            @motivoId,
-            @motivo,
-            @tipo,
-            @remito,
-            @referenteId,
-            @fechaReal,
-            @obra,
-            @version,
-            @usuario,
-            GETDATE(),
-            GETDATE()
-          );
+        .input("usuario", sql.NVarChar(255), usuario).query(`
+            INSERT INTO dbo.ajustes_borradores
+            (
+              deposito_id,
+              deposito,
+              motivo_id,
+              motivo,
+              tipo_ajuste,
+              remito_referencia,
+              id_referente,
+              fecha_real,
+              obra,
+              version,
+              usuario,
+              fecha_creacion,
+              fecha_actualizacion
+            )
+            VALUES
+            (
+              @depositoId,
+              @deposito,
+              @motivoId,
+              @motivo,
+              @tipoAjuste,
+              @remitoReferencia,
+              @referenteId,
+              @fechaReal,
+              @obra,
+              @version,
+              @usuario,
+              GETDATE(),
+              GETDATE()
+            );
 
-          SELECT SCOPE_IDENTITY() AS id_borrador;
-        `);
+            SELECT
+              SCOPE_IDENTITY()
+              AS id_borrador;
+          `);
 
       draftId = Number(creado.recordset[0].id_borrador);
     } else {
-      await new sql.Request(trans)
+      await new sql.Request(transaction)
         .input("id", sql.Int, draftId)
         .input("depositoId", sql.Int, depositoId)
         .input("deposito", sql.NVarChar(255), depositoNombre)
         .input("motivoId", sql.Int, motivoId)
         .input("motivo", sql.NVarChar(255), motivoNombre)
-        .input("tipo", sql.VarChar(20), tipoAjuste)
-        .input("remito", sql.NVarChar(255), remitoReferencia)
+        .input("tipoAjuste", sql.VarChar(20), tipoAjuste)
+        .input("remitoReferencia", sql.NVarChar(255), remitoReferencia)
         .input("referenteId", sql.Int, referenteId)
         .input("fechaReal", sql.Date, fechaReal)
         .input("obra", sql.NVarChar(sql.MAX), obra)
         .input("version", sql.NVarChar(sql.MAX), version)
-        .input("usuario", sql.NVarChar(255), usuario)
-        .query(`
+        .input("usuario", sql.NVarChar(255), usuario).query(`
           UPDATE dbo.ajustes_borradores
           SET
             deposito_id = @depositoId,
             deposito = @deposito,
             motivo_id = @motivoId,
             motivo = @motivo,
-            tipo_ajuste = @tipo,
-            remito_referencia = @remito,
+            tipo_ajuste = @tipoAjuste,
+            remito_referencia = @remitoReferencia,
             id_referente = @referenteId,
             fecha_real = @fechaReal,
             obra = @obra,
             version = @version,
             usuario = @usuario,
             fecha_actualizacion = GETDATE()
+
           WHERE id_borrador = @id;
         `);
 
-      await new sql.Request(trans)
-        .input("id", sql.Int, draftId)
-        .query(`
-          DELETE FROM dbo.ajustes_borradores_detalles
+      await new sql.Request(transaction).input("id", sql.Int, draftId).query(`
+          DELETE
+          FROM dbo.ajustes_borradores_detalles
           WHERE id_borrador = @id;
         `);
     }
 
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i] || {};
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index] || {};
 
-      const codigo = String(it.codigo || "").trim().toUpperCase();
-      const descripcion = String(it.descripcion || "").trim();
-      const proveedor = String(it.proveedor || "").trim();
-      const stock = String(it.stock ?? "").trim();
-      const ubicacion = String(it.ubicacion || "").trim();
-      const cantidad = String(it.cantidad ?? "").trim();
+      const codigo = up(item.codigo) || "";
 
-      if (!codigo && !descripcion && !cantidad) continue;
+      const descripcion = String(item.descripcion || "").trim();
 
-      await new sql.Request(trans)
-        .input("id", sql.Int, draftId)
+      const proveedor = String(item.proveedor || "").trim();
+
+      const stock = String(item.stock ?? "").trim();
+
+      const stockTotal = String(
+        item.stock_total ?? item.stockTotal ?? "",
+      ).trim();
+
+      const ubicacion = String(item.ubicacion || "").trim();
+
+      const cantidad = String(item.cantidad ?? "").trim();
+
+      if (!codigo && !descripcion && !cantidad) {
+        continue;
+      }
+
+      await new sql.Request(transaction)
+        .input("idBorrador", sql.Int, draftId)
         .input("codigo", sql.NVarChar(100), codigo || null)
         .input("descripcion", sql.NVarChar(500), descripcion || null)
         .input("proveedor", sql.NVarChar(255), proveedor || null)
         .input("stock", sql.NVarChar(50), stock || null)
-        .input("ubicacion", sql.NVarChar(255), ubicacion || null)
+        .input("stockTotal", sql.NVarChar(50), stockTotal || null)
+        .input("ubicacion", sql.NVarChar(100), ubicacion || null)
         .input("cantidad", sql.NVarChar(50), cantidad || null)
-        .input("orden", sql.Int, i)
-        .query(`
+        .input("orden", sql.Int, index).query(`
           INSERT INTO dbo.ajustes_borradores_detalles
           (
             id_borrador,
@@ -2153,17 +2725,19 @@ exports.saveDraft = async (req, res) => {
             descripcion,
             proveedor,
             stock,
+            stock_total,
             ubicacion,
             cantidad,
             orden
           )
           VALUES
           (
-            @id,
+            @idBorrador,
             @codigo,
             @descripcion,
             @proveedor,
             @stock,
+            @stockTotal,
             @ubicacion,
             @cantidad,
             @orden
@@ -2171,7 +2745,7 @@ exports.saveDraft = async (req, res) => {
         `);
     }
 
-    await trans.commit();
+    await transaction.commit();
 
     return res.json({
       ok: true,
@@ -2182,7 +2756,9 @@ exports.saveDraft = async (req, res) => {
     console.error("ajustes.saveDraft:", err);
 
     try {
-      if (trans) await trans.rollback();
+      if (transaction) {
+        await transaction.rollback();
+      }
     } catch {}
 
     return res.status(500).json({
@@ -2194,50 +2770,58 @@ exports.saveDraft = async (req, res) => {
 
 exports.getDraftById = async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = asInt(req.params.id);
 
-    if (!Number.isInteger(id) || id <= 0) {
-      return res.status(400).json({ error: "Borrador inválido" });
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({
+        error: "Borrador inválido",
+      });
     }
 
     await poolConnect;
     const pool = await getPool();
 
-    const cab = await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
-        SELECT 
-          b.*,
-          r.nombre AS referente
-        FROM dbo.ajustes_borradores b
-        LEFT JOIN dbo.referentes r ON r.id_referente = b.id_referente
-        WHERE b.id_borrador = @id
-      `);
+    const cabecera = await pool.request().input("id", sql.Int, id).query(`
+          SELECT
+            b.*,
+            r.nombre AS referente
 
-    if (!cab.recordset.length) {
-      return res.status(404).json({ error: "Borrador no encontrado" });
+          FROM dbo.ajustes_borradores b
+
+          LEFT JOIN dbo.referentes r
+            ON r.id_referente = b.id_referente
+
+          WHERE b.id_borrador = @id;
+        `);
+
+    if (!cabecera.recordset.length) {
+      return res.status(404).json({
+        error: "Borrador no encontrado",
+      });
     }
 
-    const det = await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
-        SELECT
-          codigo,
-          descripcion,
-          proveedor,
-          stock,
-          ubicacion,
-          cantidad
-        FROM dbo.ajustes_borradores_detalles
-        WHERE id_borrador = @id
-        ORDER BY orden ASC, id_detalle ASC
-      `);
+    const detalle = await pool.request().input("id", sql.Int, id).query(`
+          SELECT
+            codigo,
+            descripcion,
+            proveedor,
+            stock,
+            stock_total,
+            ubicacion,
+            cantidad
+
+          FROM dbo.ajustes_borradores_detalles
+
+          WHERE id_borrador = @id
+
+          ORDER BY
+            orden ASC,
+            id_detalle ASC;
+        `);
 
     return res.json({
-      cabecera: cab.recordset[0],
-      detalle: det.recordset || [],
+      cabecera: cabecera.recordset[0],
+      detalle: detalle.recordset || [],
     });
   } catch (err) {
     console.error("ajustes.getDraftById:", err);
@@ -2251,24 +2835,26 @@ exports.getDraftById = async (req, res) => {
 
 exports.deleteDraft = async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = asInt(req.params.id);
 
-    if (!Number.isInteger(id) || id <= 0) {
-      return res.status(400).json({ error: "Borrador inválido" });
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({
+        error: "Borrador inválido",
+      });
     }
 
     await poolConnect;
     const pool = await getPool();
 
-    await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
-        DELETE FROM dbo.ajustes_borradores
+    await pool.request().input("id", sql.Int, id).query(`
+        DELETE
+        FROM dbo.ajustes_borradores
         WHERE id_borrador = @id;
       `);
 
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+    });
   } catch (err) {
     console.error("ajustes.deleteDraft:", err);
 
@@ -2281,52 +2867,63 @@ exports.deleteDraft = async (req, res) => {
 
 exports.confirmDraft = async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = asInt(req.params.id);
 
-    if (!Number.isInteger(id) || id <= 0) {
-      return res.status(400).json({ error: "Borrador inválido" });
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({
+        error: "Borrador inválido",
+      });
     }
 
     await poolConnect;
     const pool = await getPool();
 
-    const borrador = await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
-        SELECT *
-        FROM dbo.ajustes_borradores
-        WHERE id_borrador = @id
-      `);
+    const cabecera = await pool.request().input("id", sql.Int, id).query(`
+          SELECT *
+          FROM dbo.ajustes_borradores
+          WHERE id_borrador = @id;
+        `);
 
-    if (!borrador.recordset.length) {
-      return res.status(404).json({ error: "Borrador no encontrado" });
+    if (!cabecera.recordset.length) {
+      return res.status(404).json({
+        error: "Borrador no encontrado",
+      });
     }
 
-    const b = borrador.recordset[0];
+    const borrador = cabecera.recordset[0];
 
-    const detalle = await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
-        SELECT codigo, descripcion, cantidad
-        FROM dbo.ajustes_borradores_detalles
-        WHERE id_borrador = @id
-        ORDER BY orden ASC, id_detalle ASC
-      `);
+    const detalle = await pool.request().input("id", sql.Int, id).query(`
+          SELECT
+            codigo,
+            descripcion,
+            ubicacion,
+            cantidad
+
+          FROM dbo.ajustes_borradores_detalles
+
+          WHERE id_borrador = @id
+
+          ORDER BY
+            orden ASC,
+            id_detalle ASC;
+        `);
 
     const items = (detalle.recordset || [])
-      .map((it) => {
-        const cantidad = Number(it.cantidad);
-        if (!it.codigo || !Number.isFinite(cantidad) || cantidad <= 0) {
+      .map((item) => {
+        const cantidad = Number(item.cantidad);
+
+        if (!item.codigo || !Number.isFinite(cantidad) || cantidad <= 0) {
           return null;
         }
 
         return {
-          cod_articulo: String(it.codigo).trim().toUpperCase(),
+          cod_articulo: String(item.codigo).trim().toUpperCase(),
+
+          ubicacion: String(item.ubicacion || "").trim(),
+
           cantidad:
-            String(b.tipo_ajuste || "").toUpperCase() === "EGRESO"
-              ? Math.abs(cantidad) * -1
+            String(borrador.tipo_ajuste || "").toUpperCase() === "EGRESO"
+              ? -Math.abs(cantidad)
               : Math.abs(cantidad),
         };
       })
@@ -2339,51 +2936,63 @@ exports.confirmDraft = async (req, res) => {
     }
 
     req.body = {
-      deposito_id: b.deposito_id,
+      deposito_id: borrador.deposito_id,
+
       id_ubicacion: null,
-      motivo_id: b.motivo_id,
-      obra: b.obra,
-      version: b.version,
-      remito_referencia: b.remito_referencia,
-      id_referente: b.id_referente,
-      fecha_real: b.fecha_real,
+
+      motivo_id: borrador.motivo_id,
+
+      obra: borrador.obra,
+
+      version: borrador.version,
+
+      remito_referencia: borrador.remito_referencia,
+
+      id_referente: borrador.id_referente,
+
+      fecha_real: borrador.fecha_real,
+
       items,
     };
 
-    const originalJson = res.json.bind(res);
-    const originalStatus = res.status.bind(res);
+    /*
+     * Intercepta la respuesta de create
+     * para borrar el borrador únicamente
+     * cuando el ajuste fue creado.
+     */
+    const jsonOriginal = res.json.bind(res);
+
+    const statusOriginal = res.status.bind(res);
 
     let statusCode = 200;
-    let responsePayload = null;
+    let payload = null;
 
     res.status = (code) => {
       statusCode = code;
       return res;
     };
 
-    res.json = (payload) => {
-      responsePayload = payload;
+    res.json = (body) => {
+      payload = body;
       return res;
     };
 
     await exports.create(req, res);
 
-    res.status = originalStatus;
-    res.json = originalJson;
+    res.status = statusOriginal;
+    res.json = jsonOriginal;
 
     if (statusCode >= 400) {
-      return res.status(statusCode).json(responsePayload);
+      return res.status(statusCode).json(payload);
     }
 
-    await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
-        DELETE FROM dbo.ajustes_borradores
+    await pool.request().input("id", sql.Int, id).query(`
+        DELETE
+        FROM dbo.ajustes_borradores
         WHERE id_borrador = @id;
       `);
 
-    return res.status(statusCode).json(responsePayload);
+    return res.status(statusCode).json(payload);
   } catch (err) {
     console.error("ajustes.confirmDraft:", err);
 
@@ -2394,5 +3003,1070 @@ exports.confirmDraft = async (req, res) => {
   }
 };
 
-// Export interno para cron
+// ========================================================
+// REVERSIÓN DE MOVIMIENTOS POR REFERENCIA
+// ========================================================
+
+function getUsuarioReq(req) {
+  return req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
+}
+
+async function getExistingTableName(executor, names) {
+  const request =
+    executor instanceof sql.Transaction
+      ? new sql.Request(executor)
+      : executor.request();
+
+  names.forEach((name, index) => {
+    request.input(`tabla${index}`, sql.NVarChar(128), name);
+  });
+
+  const parametros = names.map((_, index) => `@tabla${index}`).join(",");
+
+  const orden = names
+    .map((_, index) => `WHEN @tabla${index} THEN ${index}`)
+    .join("\n");
+
+  const result = await request.query(`
+    SELECT TOP 1 name
+    FROM sys.objects
+    WHERE type = 'U'
+      AND name IN (${parametros})
+    ORDER BY
+      CASE name
+        ${orden}
+        ELSE 999
+      END;
+  `);
+
+  return result.recordset[0]?.name || null;
+}
+
+function createDbRequest(executor) {
+  return executor instanceof sql.Transaction
+    ? new sql.Request(executor)
+    : executor.request();
+}
+
+async function getEfectosPorReferencia(executor, referencia) {
+  const efectos = [];
+
+  const transferenciaDetalle = await getExistingTableName(executor, [
+    "transferencias_detalle",
+    "transferencia_detalles",
+    "transferencias_detalles",
+  ]);
+
+  const ajusteDetalle = await getExistingTableName(executor, [
+    "ajustes_detalles",
+    "ajuste_detalles",
+  ]);
+
+  const ajustesTable = await getExistingTableName(executor, ["ajustes"]);
+
+  const remitosTable = await getExistingTableName(executor, ["remitos"]);
+
+  const remitosDetalle = await getExistingTableName(executor, [
+    "remitos_detalles",
+  ]);
+
+  // ------------------------------------------------------
+  // AJUSTES
+  // ------------------------------------------------------
+
+  if (ajustesTable && ajusteDetalle) {
+    const request = createDbRequest(executor).input(
+      "referencia",
+      sql.NVarChar(255),
+      referencia,
+    );
+
+    const result = await request.query(`
+      SELECT
+        CAST(
+          'AJUSTE' AS VARCHAR(50)
+        ) AS tipo_original,
+
+        CAST(
+          a.numero_ajuste AS VARCHAR(50)
+        ) AS numero_original,
+
+        CONVERT(
+          date,
+          ISNULL(a.fecha_real, a.fecha)
+        ) AS fecha_real,
+
+        CAST(
+          a.deposito AS VARCHAR(255)
+        ) AS deposito,
+
+        CAST(
+          ad.cod_articulo AS VARCHAR(100)
+        ) AS codigo,
+
+        CAST(
+          ad.descripcion AS VARCHAR(500)
+        ) AS descripcion,
+
+        CAST(
+          ad.cantidad AS INT
+        ) AS cantidad_original,
+
+        CAST(
+          -ad.cantidad AS INT
+        ) AS cantidad_reversion,
+
+        CAST(
+          a.remito_referencia AS VARCHAR(255)
+        ) AS referencia,
+
+        CAST(
+          ref.nombre AS VARCHAR(255)
+        ) AS referente,
+
+        a.id_referente
+
+      FROM dbo.${ajustesTable} a
+
+      JOIN dbo.${ajusteDetalle} ad
+        ON ad.ajuste_id = a.numero_ajuste
+
+      LEFT JOIN dbo.referentes ref
+        ON ref.id_referente = a.id_referente
+
+      WHERE
+        UPPER(
+          LTRIM(
+            RTRIM(
+              ISNULL(a.remito_referencia, '')
+            )
+          )
+        ) =
+        UPPER(
+          LTRIM(
+            RTRIM(@referencia)
+          )
+        )
+
+        AND UPPER(
+          LTRIM(
+            RTRIM(
+              ISNULL(a.motivo, '')
+            )
+          )
+        ) NOT IN
+        (
+          'REVERSIÓN DE REFERENCIA',
+          'REVERSION DE REFERENCIA'
+        );
+    `);
+
+    efectos.push(...(result.recordset || []));
+  }
+
+  // ------------------------------------------------------
+  // TRANSFERENCIAS
+  // Una transferencia genera dos efectos:
+  // origen negativo y destino positivo.
+  // ------------------------------------------------------
+
+  if (transferenciaDetalle) {
+    const request = createDbRequest(executor).input(
+      "referencia",
+      sql.NVarChar(255),
+      referencia,
+    );
+
+    const result = await request.query(`
+      SELECT
+        CAST(
+          'TRANSFERENCIA' AS VARCHAR(50)
+        ) AS tipo_original,
+
+        CAST(
+          t.numero_transferencia AS VARCHAR(50)
+        ) AS numero_original,
+
+        CONVERT(
+          date,
+          ISNULL(t.fecha_real, t.fecha)
+        ) AS fecha_real,
+
+        CAST(
+          t.origen AS VARCHAR(255)
+        ) AS deposito,
+
+        CAST(
+          a.codigo AS VARCHAR(100)
+        ) AS codigo,
+
+        CAST(
+          a.descripcion AS VARCHAR(500)
+        ) AS descripcion,
+
+        CAST(
+          -ABS(td.cantidad) AS INT
+        ) AS cantidad_original,
+
+        CAST(
+          ABS(td.cantidad) AS INT
+        ) AS cantidad_reversion,
+
+        CAST(
+          t.remito_referencia AS VARCHAR(255)
+        ) AS referencia,
+
+        CAST(
+          ref.nombre AS VARCHAR(255)
+        ) AS referente,
+
+        t.id_referente
+
+      FROM dbo.transferencias t
+
+      JOIN dbo.${transferenciaDetalle} td
+        ON td.transferencia_id = t.id
+
+      JOIN dbo.articulos a
+        ON a.id_articulo = td.articulo_id
+
+      LEFT JOIN dbo.referentes ref
+        ON ref.id_referente = t.id_referente
+
+      WHERE
+        UPPER(
+          LTRIM(
+            RTRIM(
+              ISNULL(t.remito_referencia, '')
+            )
+          )
+        ) =
+        UPPER(
+          LTRIM(
+            RTRIM(@referencia)
+          )
+        )
+
+      UNION ALL
+
+      SELECT
+        CAST(
+          'TRANSFERENCIA' AS VARCHAR(50)
+        ) AS tipo_original,
+
+        CAST(
+          t.numero_transferencia AS VARCHAR(50)
+        ) AS numero_original,
+
+        CONVERT(
+          date,
+          ISNULL(t.fecha_real, t.fecha)
+        ) AS fecha_real,
+
+        CAST(
+          t.destino AS VARCHAR(255)
+        ) AS deposito,
+
+        CAST(
+          a.codigo AS VARCHAR(100)
+        ) AS codigo,
+
+        CAST(
+          a.descripcion AS VARCHAR(500)
+        ) AS descripcion,
+
+        CAST(
+          ABS(td.cantidad) AS INT
+        ) AS cantidad_original,
+
+        CAST(
+          -ABS(td.cantidad) AS INT
+        ) AS cantidad_reversion,
+
+        CAST(
+          t.remito_referencia AS VARCHAR(255)
+        ) AS referencia,
+
+        CAST(
+          ref.nombre AS VARCHAR(255)
+        ) AS referente,
+
+        t.id_referente
+
+      FROM dbo.transferencias t
+
+      JOIN dbo.${transferenciaDetalle} td
+        ON td.transferencia_id = t.id
+
+      JOIN dbo.articulos a
+        ON a.id_articulo = td.articulo_id
+
+      LEFT JOIN dbo.referentes ref
+        ON ref.id_referente = t.id_referente
+
+      WHERE
+        UPPER(
+          LTRIM(
+            RTRIM(
+              ISNULL(t.remito_referencia, '')
+            )
+          )
+        ) =
+        UPPER(
+          LTRIM(
+            RTRIM(@referencia)
+          )
+        );
+    `);
+
+    efectos.push(...(result.recordset || []));
+  }
+
+  // ------------------------------------------------------
+  // REMITOS
+  // ------------------------------------------------------
+
+  if (remitosTable && remitosDetalle) {
+    const request = createDbRequest(executor).input(
+      "referencia",
+      sql.NVarChar(255),
+      referencia,
+    );
+
+    const result = await request.query(`
+      SELECT
+        CAST(
+          'REMITO' AS VARCHAR(50)
+        ) AS tipo_original,
+
+        CAST(
+          r.numero_transaccion AS VARCHAR(50)
+        ) AS numero_original,
+
+        CONVERT(
+          date,
+          r.fecha
+        ) AS fecha_real,
+
+        CAST(
+          r.deposito_nombre AS VARCHAR(255)
+        ) AS deposito,
+
+        CAST(
+          rd.cod_articulo AS VARCHAR(100)
+        ) AS codigo,
+
+        CAST(
+          rd.descripcion AS VARCHAR(500)
+        ) AS descripcion,
+
+        CAST(
+          CASE
+            WHEN UPPER(
+              LTRIM(
+                RTRIM(
+                  ISNULL(r.tipo, '')
+                )
+              )
+            ) = 'SALIDA'
+              THEN -ABS(rd.cantidad)
+            ELSE ABS(rd.cantidad)
+          END AS INT
+        ) AS cantidad_original,
+
+        CAST(
+          CASE
+            WHEN UPPER(
+              LTRIM(
+                RTRIM(
+                  ISNULL(r.tipo, '')
+                )
+              )
+            ) = 'SALIDA'
+              THEN ABS(rd.cantidad)
+            ELSE -ABS(rd.cantidad)
+          END AS INT
+        ) AS cantidad_reversion,
+
+        CAST(
+          r.numero_remito AS VARCHAR(255)
+        ) AS referencia,
+
+        CAST(
+          NULL AS VARCHAR(255)
+        ) AS referente,
+
+        CAST(
+          NULL AS INT
+        ) AS id_referente
+
+      FROM dbo.${remitosTable} r
+
+      JOIN dbo.${remitosDetalle} rd
+        ON rd.remito_id = r.numero_remito
+
+      WHERE
+        UPPER(
+          LTRIM(
+            RTRIM(
+              CAST(
+                r.numero_remito AS VARCHAR(255)
+              )
+            )
+          )
+        ) =
+        UPPER(
+          LTRIM(
+            RTRIM(@referencia)
+          )
+        );
+    `);
+
+    efectos.push(...(result.recordset || []));
+  }
+
+  return efectos
+    .map((row) => ({
+      ...row,
+
+      cantidad_original: Number(row.cantidad_original || 0),
+
+      cantidad_reversion: Number(row.cantidad_reversion || 0),
+
+      id_referente: row.id_referente == null ? null : Number(row.id_referente),
+    }))
+    .filter(
+      (row) => row.codigo && row.deposito && row.cantidad_reversion !== 0,
+    );
+}
+
+async function consumirStockReversion(
+  transaction,
+  { depositoId, articuloId, cantidad },
+) {
+  let restante = Number(cantidad);
+
+  const result = await new sql.Request(transaction)
+    .input("depositoId", sql.Int, depositoId)
+    .input("articuloId", sql.Int, articuloId).query(`
+        SELECT
+          s.id_stock,
+          s.cantidad,
+          s.id_ubicacion,
+          u.nombre AS ubicacion
+
+        FROM dbo.stock s
+        WITH (UPDLOCK, HOLDLOCK)
+
+        LEFT JOIN dbo.ubicaciones u
+          ON u.id_ubicacion = s.id_ubicacion
+
+        WHERE
+          s.id_deposito = @depositoId
+          AND s.id_articulo = @articuloId
+          AND s.cantidad > 0
+
+        ORDER BY
+          CASE
+            WHEN UPPER(
+              LTRIM(
+                RTRIM(
+                  ISNULL(u.nombre, '')
+                )
+              )
+            ) = 'GENERAL'
+              THEN 0
+            ELSE 1
+          END,
+
+          s.id_ubicacion,
+          s.id_stock;
+      `);
+
+  for (const row of result.recordset || []) {
+    if (restante <= 0) {
+      break;
+    }
+
+    const disponible = Number(row.cantidad || 0);
+
+    const tomar = Math.min(disponible, restante);
+
+    if (tomar <= 0) {
+      continue;
+    }
+
+    const update = await new sql.Request(transaction)
+      .input("idStock", sql.Int, Number(row.id_stock))
+      .input("cantidad", sql.Int, tomar).query(`
+          UPDATE dbo.stock
+          SET cantidad = cantidad - @cantidad
+          WHERE id_stock = @idStock
+            AND cantidad >= @cantidad;
+
+          SELECT @@ROWCOUNT AS affected;
+        `);
+
+    if (Number(update.recordset?.[0]?.affected || 0) !== 1) {
+      throw new Error(
+        "El stock cambió durante la reversión. Volvé a intentar.",
+      );
+    }
+
+    restante -= tomar;
+  }
+
+  if (restante > 0) {
+    throw new Error(`Stock insuficiente. Faltan ${restante} unidades.`);
+  }
+}
+
+// ========================================================
+// PREVISUALIZAR REVERSIÓN
+// ========================================================
+
+exports.previewReversionReferencia = async (req, res) => {
+  try {
+    const referencia = String(req.params.referencia || "").trim();
+
+    if (!referencia) {
+      return res.status(400).json({
+        error: "Debe indicar una referencia",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const previa = await pool
+      .request()
+      .input("referencia", sql.NVarChar(255), referencia).query(`
+            SELECT TOP 1
+              id_reversion,
+              referencia_original,
+              fecha_reversion,
+              usuario,
+              motivo,
+              estado
+
+            FROM dbo.ajustes_reversiones
+
+            WHERE
+              UPPER(
+                LTRIM(
+                  RTRIM(
+                    referencia_original
+                  )
+                )
+              ) =
+              UPPER(
+                LTRIM(
+                  RTRIM(
+                    @referencia
+                  )
+                )
+              )
+
+              AND estado = 'CONFIRMADA';
+          `);
+
+    if (previa.recordset.length) {
+      return res.status(409).json({
+        error: "La referencia ya fue revertida",
+
+        reversion: previa.recordset[0],
+      });
+    }
+
+    const movimientos = await getEfectosPorReferencia(pool, referencia);
+
+    if (!movimientos.length) {
+      return res.status(404).json({
+        error: "No se encontraron movimientos para esa referencia",
+      });
+    }
+
+    return res.json({
+      referencia,
+
+      cantidad_movimientos: movimientos.length,
+
+      movimientos,
+    });
+  } catch (err) {
+    console.error("ajustes.previewReversionReferencia:", err);
+
+    return res.status(500).json({
+      error: "Error al consultar la referencia",
+
+      detalle: err.message,
+    });
+  }
+};
+
+// ========================================================
+// CONFIRMAR REVERSIÓN
+// ========================================================
+
+exports.revertirReferencia = async (req, res) => {
+  const referencia = String(req.params.referencia || "").trim();
+
+  const confirmar = req.body?.confirmar === true;
+
+  const motivoUsuario = toDb(req.body?.motivo);
+
+  const usuario = getUsuarioReq(req);
+
+  if (!referencia) {
+    return res.status(400).json({
+      error: "Debe indicar una referencia",
+    });
+  }
+
+  if (!confirmar) {
+    return res.status(400).json({
+      error: "La reversión requiere confirmar: true",
+    });
+  }
+
+  let transaction;
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    transaction = new sql.Transaction(pool);
+
+    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    const existente = await new sql.Request(transaction).input(
+      "referencia",
+      sql.NVarChar(255),
+      referencia,
+    ).query(`
+            SELECT TOP 1
+              id_reversion,
+              fecha_reversion
+
+            FROM dbo.ajustes_reversiones
+            WITH (UPDLOCK, HOLDLOCK)
+
+            WHERE
+              UPPER(
+                LTRIM(
+                  RTRIM(
+                    referencia_original
+                  )
+                )
+              ) =
+              UPPER(
+                LTRIM(
+                  RTRIM(
+                    @referencia
+                  )
+                )
+              )
+
+              AND estado = 'CONFIRMADA';
+          `);
+
+    if (existente.recordset.length) {
+      await transaction.rollback();
+
+      return res.status(409).json({
+        error: "La referencia ya fue revertida",
+
+        reversion: existente.recordset[0],
+      });
+    }
+
+    const movimientos = await getEfectosPorReferencia(transaction, referencia);
+
+    if (!movimientos.length) {
+      await transaction.rollback();
+
+      return res.status(404).json({
+        error: "No se encontraron movimientos para esa referencia",
+      });
+    }
+
+    const motivoId = await getMotivoIdByNombreActivo(
+      transaction,
+      "REVERSIÓN DE REFERENCIA",
+    );
+
+    if (!motivoId) {
+      throw new Error(
+        'Falta el motivo interno "REVERSIÓN DE REFERENCIA". Ejecutá el SQL.',
+      );
+    }
+
+    const depositosResult = await new sql.Request(transaction).query(`
+            SELECT
+              id_deposito,
+              nombre
+
+            FROM dbo.depositos
+            WITH (UPDLOCK, HOLDLOCK);
+          `);
+
+    const depositoPorNombre = new Map(
+      (depositosResult.recordset || []).map((row) => [
+        normalizarMotivoSistema(row.nombre),
+
+        {
+          id: Number(row.id_deposito),
+
+          nombre: String(row.nombre || ""),
+        },
+      ]),
+    );
+
+    const codigos = [
+      ...new Set(movimientos.map((row) => up(row.codigo)).filter(Boolean)),
+    ];
+
+    const requestArticulos = new sql.Request(transaction);
+
+    const parametros = codigos.map((_, index) => `@codigo${index}`).join(",");
+
+    codigos.forEach((codigo, index) => {
+      requestArticulos.input(`codigo${index}`, sql.VarChar(100), codigo);
+    });
+
+    const articulosResult = await requestArticulos.query(`
+          SELECT
+            id_articulo,
+
+            UPPER(
+              LTRIM(
+                RTRIM(codigo)
+              )
+            ) AS codigo,
+
+            descripcion
+
+          FROM dbo.articulos
+          WITH (UPDLOCK, HOLDLOCK)
+
+          WHERE
+            UPPER(
+              LTRIM(
+                RTRIM(codigo)
+              )
+            ) IN (${parametros});
+        `);
+
+    const articuloPorCodigo = new Map(
+      (articulosResult.recordset || []).map((row) => [
+        String(row.codigo),
+
+        {
+          id: Number(row.id_articulo),
+
+          descripcion: String(row.descripcion || ""),
+        },
+      ]),
+    );
+
+    const faltanCodigos = codigos.filter(
+      (codigo) => !articuloPorCodigo.has(codigo),
+    );
+
+    if (faltanCodigos.length) {
+      throw new Error(`Códigos inexistentes: ${faltanCodigos.join(", ")}`);
+    }
+
+    const agrupados = new Map();
+
+    for (const movimiento of movimientos) {
+      const deposito = depositoPorNombre.get(
+        normalizarMotivoSistema(movimiento.deposito),
+      );
+
+      if (!deposito) {
+        throw new Error(`Depósito inexistente: ${movimiento.deposito}`);
+      }
+
+      const codigo = up(movimiento.codigo);
+
+      const clave = `${deposito.id}|${codigo}`;
+
+      const actual = agrupados.get(clave) || {
+        deposito,
+        codigo,
+
+        descripcion: movimiento.descripcion || "",
+
+        delta: 0,
+        fuentes: [],
+      };
+
+      actual.delta += Number(movimiento.cantidad_reversion || 0);
+
+      actual.fuentes.push(movimiento);
+
+      agrupados.set(clave, actual);
+    }
+
+    const gruposAplicables = [...agrupados.values()].filter(
+      (grupo) => grupo.delta !== 0,
+    );
+
+    const faltantes = [];
+
+    for (const grupo of gruposAplicables) {
+      if (grupo.delta >= 0) {
+        continue;
+      }
+
+      const articulo = articuloPorCodigo.get(grupo.codigo);
+
+      const disponible = await getStockActual(transaction, {
+        depositoId: grupo.deposito.id,
+
+        articuloId: articulo.id,
+
+        ubicacionId: null,
+      });
+
+      const requerido = Math.abs(grupo.delta);
+
+      if (disponible < requerido) {
+        faltantes.push({
+          deposito: grupo.deposito.nombre,
+
+          codigo: grupo.codigo,
+
+          requerido,
+          disponible,
+        });
+      }
+    }
+
+    if (faltantes.length) {
+      await transaction.rollback();
+
+      return res.status(400).json({
+        error: "No se puede revertir porque falta stock",
+
+        faltantes,
+      });
+    }
+
+    const insertReversion = await new sql.Request(transaction)
+      .input("referencia", sql.NVarChar(255), referencia)
+      .input("usuario", sql.NVarChar(255), usuario)
+      .input("motivo", sql.NVarChar(500), motivoUsuario).query(`
+            INSERT INTO dbo.ajustes_reversiones
+            (
+              referencia_original,
+              fecha_reversion,
+              usuario,
+              motivo,
+              estado
+            )
+            OUTPUT
+              INSERTED.id_reversion
+            VALUES
+            (
+              @referencia,
+              GETDATE(),
+              @usuario,
+              @motivo,
+              'CONFIRMADA'
+            );
+          `);
+
+    const idReversion = Number(insertReversion.recordset[0].id_reversion);
+
+    const porDeposito = new Map();
+
+    for (const grupo of gruposAplicables) {
+      if (!porDeposito.has(grupo.deposito.id)) {
+        porDeposito.set(grupo.deposito.id, {
+          deposito: grupo.deposito,
+
+          items: [],
+        });
+      }
+
+      porDeposito.get(grupo.deposito.id).items.push(grupo);
+    }
+
+    const ajustesGenerados = [];
+
+    for (const bloque of porDeposito.values()) {
+      const numeroResult = await new sql.Request(transaction).query(`
+              SELECT
+                ISNULL(
+                  MAX(numero_ajuste),
+                  0
+                ) + 1 AS numero
+
+              FROM dbo.ajustes
+              WITH (UPDLOCK, HOLDLOCK);
+            `);
+
+      const numeroAjuste = Number(numeroResult.recordset[0].numero);
+
+      const primerFuente = bloque.items[0]?.fuentes?.[0] || {};
+
+      await new sql.Request(transaction)
+        .input("numero", sql.Int, numeroAjuste)
+        .input("deposito", sql.VarChar(255), bloque.deposito.nombre)
+        .input("motivoId", sql.Int, motivoId)
+        .input("motivo", sql.VarChar(255), "REVERSIÓN DE REFERENCIA")
+        .input("referencia", sql.VarChar(255), `REVERSIÓN: ${referencia}`)
+        .input("referenteId", sql.Int, primerFuente.id_referente || null)
+        .input("usuario", sql.VarChar(255), usuario).query(`
+            INSERT INTO dbo.ajustes
+            (
+              numero_ajuste,
+              deposito,
+              motivo_id,
+              motivo,
+              fecha,
+              fecha_real,
+              remito_referencia,
+              id_referente,
+              usuario
+            )
+            VALUES
+            (
+              @numero,
+              @deposito,
+              @motivoId,
+              @motivo,
+              GETDATE(),
+              CONVERT(date, GETDATE()),
+              @referencia,
+              @referenteId,
+              @usuario
+            );
+          `);
+
+      const ubicacionDestino = await resolveUbicacionId(transaction, {
+        depositoId: bloque.deposito.id,
+
+        ubicacionId: null,
+      });
+
+      for (const grupo of bloque.items) {
+        const articulo = articuloPorCodigo.get(grupo.codigo);
+
+        await insertDetalle(transaction, {
+          ajusteId: numeroAjuste,
+
+          cod: grupo.codigo,
+
+          desc: articulo.descripcion || grupo.descripcion,
+
+          cantidad: grupo.delta,
+
+          usuario,
+
+          observacion: `Reversión automática de referencia ${referencia}`,
+        });
+
+        if (grupo.delta < 0) {
+          await consumirStockReversion(transaction, {
+            depositoId: bloque.deposito.id,
+
+            articuloId: articulo.id,
+
+            cantidad: Math.abs(grupo.delta),
+          });
+        } else {
+          await upsertStockDelta(transaction, {
+            depositoId: bloque.deposito.id,
+
+            articuloId: articulo.id,
+
+            ubicacionId: ubicacionDestino,
+
+            delta: grupo.delta,
+          });
+        }
+
+        for (const fuente of grupo.fuentes) {
+          await new sql.Request(transaction)
+            .input("idReversion", sql.Int, idReversion)
+            .input("numeroAjuste", sql.Int, numeroAjuste)
+            .input("tipoOriginal", sql.NVarChar(50), fuente.tipo_original)
+            .input("numeroOriginal", sql.NVarChar(50), fuente.numero_original)
+            .input("deposito", sql.NVarChar(255), fuente.deposito)
+            .input("codigo", sql.NVarChar(100), fuente.codigo)
+            .input("cantidadOriginal", sql.Int, fuente.cantidad_original)
+            .input("cantidadReversion", sql.Int, fuente.cantidad_reversion)
+            .query(`
+                INSERT INTO dbo.ajustes_reversiones_detalles
+                (
+                  id_reversion,
+                  numero_ajuste_generado,
+                  tipo_original,
+                  numero_transaccion_original,
+                  deposito,
+                  codigo,
+                  cantidad_original,
+                  cantidad_reversion
+                )
+                VALUES
+                (
+                  @idReversion,
+                  @numeroAjuste,
+                  @tipoOriginal,
+                  @numeroOriginal,
+                  @deposito,
+                  @codigo,
+                  @cantidadOriginal,
+                  @cantidadReversion
+                );
+              `);
+        }
+      }
+
+      ajustesGenerados.push({
+        numero_ajuste: numeroAjuste,
+
+        deposito: bloque.deposito.nombre,
+      });
+    }
+
+    await transaction.commit();
+
+    return res.status(201).json({
+      ok: true,
+
+      message: "Referencia revertida correctamente",
+
+      id_reversion: idReversion,
+
+      referencia,
+
+      ajustes_generados: ajustesGenerados,
+    });
+  } catch (err) {
+    console.error("ajustes.revertirReferencia:", err);
+
+    try {
+      if (transaction) {
+        await transaction.rollback();
+      }
+    } catch {}
+
+    if (Number(err?.number) === 2601 || Number(err?.number) === 2627) {
+      return res.status(409).json({
+        error: "La referencia ya fue revertida",
+      });
+    }
+
+    return res.status(500).json({
+      error: "Error al revertir la referencia",
+
+      detalle: err.message,
+    });
+  }
+};
+
 exports._runConsumoProduccion = runConsumoProduccion;

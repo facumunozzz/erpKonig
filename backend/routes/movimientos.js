@@ -5,6 +5,8 @@ const controller = require("../controllers/movimientos");
 router.get("/", controller.getAll);
 router.get("/export", controller.exportAll);
 router.get("/distinct", controller.getDistinctValues);
+
+router.get("/referencia/:referencia", controller.getByReferencia);
 router.get("/transaccion/:numero", controller.getByTransaccion);
 
 router.put("/", controller.update);
