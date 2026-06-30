@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
 
@@ -27,40 +27,53 @@ const normalizarFecha = (valor) => {
 
 export default function NuevaTransferencia() {
   const navigate = useNavigate();
-
+  const [searchParams] = useSearchParams();
+  const desdeAlerta =
+    searchParams.get("desdeAlerta") === "1";
+  const alertaIdUrl =
+    searchParams.get("alertaId") || "";
+  const codigoAlerta =
+    searchParams.get("codigo") || "";
+  const descripcionAlerta =
+    searchParams.get("descripcion") || "";
+  const cantidadAlerta =
+    searchParams.get("cantidad") || "";
+  const fechaAlerta =
+    searchParams.get("fecha") || "";
+  const remitoAlerta =
+    searchParams.get("remitoReferencia") || "";
   const [depositos, setDepositos] = useState([]);
   const [referentes, setReferentes] = useState([]);
-
   const [origenId, setOrigenId] = useState("");
   const [destinoId, setDestinoId] = useState("");
-
   const [remitoReferencia, setRemitoReferencia] = useState("");
   const [referenteId, setReferenteId] = useState("");
-
   const [fechaReal, setFechaReal] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
 
   const [items, setItems] = useState([crearItemVacio()]);
-
   const [errorMsg, setErrorMsg] = useState("");
   const [errorDepositos, setErrorDepositos] = useState("");
   const [loadingReferentes, setLoadingReferentes] = useState(false);
   const [confirmando, setConfirmando] = useState(false);
 
-  /*
-   * Estados para cargar una referencia desde Movimientos.
-   */
+  // Modal de carga
   const [mostrarReferencia, setMostrarReferencia] = useState(false);
-  const [numeroReferencia, setNumeroReferencia] = useState("");
-  const [buscandoReferencia, setBuscandoReferencia] = useState(false);
-  const [opcionesReferencia, setOpcionesReferencia] = useState([]);
-  const [referenciaSeleccionada, setReferenciaSeleccionada] = useState("");
 
-  /*
-   * Evita que el efecto que responde al cambio de origen
-   * borre los stocks mientras se está cargando una referencia.
-   */
+  const [modoBusqueda, setModoBusqueda] = useState("referencia");
+
+  const [numeroReferencia, setNumeroReferencia] = useState("");
+  const [obraBusqueda, setObraBusqueda] = useState("");
+  const [versionBusqueda, setVersionBusqueda] = useState("");
+
+  const [buscandoReferencia, setBuscandoReferencia] = useState(false);
+
+  const [opcionesReferencia, setOpcionesReferencia] = useState([]);
+
+  // Ahora es un array para permitir selección múltiple
+  const [referenciasSeleccionadas, setReferenciasSeleccionadas] = useState([]);
+
   const cargandoReferenciaRef = useRef(false);
 
   const codigoRefs = useRef([]);
@@ -136,10 +149,6 @@ export default function NuevaTransferencia() {
     cargarDatosIniciales();
   }, []);
 
-  /*
-   * Cuando el usuario cambia manualmente el depósito origen,
-   * se vuelven a consultar los stocks de todos los artículos.
-   */
   useEffect(() => {
     if (cargandoReferenciaRef.current) {
       return;
@@ -212,6 +221,120 @@ export default function NuevaTransferencia() {
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [origenId]);
+
+  useEffect(() => {
+  if (!desdeAlerta) {
+    return;
+  }
+
+  const cargarDesdeAlerta = async () => {
+    const codigo = normalizarTexto(
+      codigoAlerta,
+    );
+
+    const cantidad = Math.abs(
+      Number(cantidadAlerta || 0),
+    );
+
+    setRemitoReferencia(remitoAlerta);
+
+    if (fechaAlerta) {
+      setFechaReal(
+        String(fechaAlerta).slice(0, 10),
+      );
+    }
+
+    /*
+     * El depósito origen debe quedar vacío.
+     */
+    setOrigenId("");
+
+    if (!codigo) {
+      return;
+    }
+
+    setItems([
+      {
+        ...crearItemVacio(),
+
+        codigo,
+
+        descripcion:
+          descripcionAlerta || "",
+
+        cantidad:
+          Number.isFinite(cantidad) &&
+          cantidad > 0
+            ? String(cantidad)
+            : "",
+      },
+    ]);
+
+    try {
+      const response = await api.get(
+        "/transferencias/articulo",
+        {
+          params: {
+            codigo,
+          },
+        },
+      );
+
+      const articulo = response.data || {};
+
+      setItems([
+        {
+          ...crearItemVacio(),
+
+          codigo: normalizarTexto(
+            articulo.codigo || codigo,
+          ),
+
+          descripcion:
+            articulo.descripcion ||
+            descripcionAlerta ||
+            "",
+
+          ubicacion:
+            articulo.ubicacion || "",
+
+          cantidad:
+            Number.isFinite(cantidad) &&
+            cantidad > 0
+              ? String(cantidad)
+              : "",
+        },
+      ]);
+    } catch (error) {
+      console.error(
+        "No se pudo validar el artículo de la alerta:",
+        error,
+      );
+
+      setItems([
+        {
+          ...crearItemVacio(),
+
+          codigo,
+
+          descripcion:
+            descripcionAlerta ||
+            "Artículo no encontrado",
+
+          cantidad:
+            Number.isFinite(cantidad) &&
+            cantidad > 0
+              ? String(cantidad)
+              : "",
+        },
+      ]);
+    }
+  };
+
+  cargarDesdeAlerta();
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [desdeAlerta]);
 
   const actualizarItem = (index, cambios) => {
     setItems((itemsActuales) =>
@@ -414,13 +537,20 @@ export default function NuevaTransferencia() {
   };
 
   // ======================================================
-  // CARGAR REFERENCIA DESDE MOVIMIENTOS
+  // CARGA DESDE MOVIMIENTOS
   // ======================================================
 
-  const abrirCargarReferencia = () => {
+  const limpiarBusquedaMovimientos = () => {
     setNumeroReferencia("");
+    setObraBusqueda("");
+    setVersionBusqueda("");
     setOpcionesReferencia([]);
-    setReferenciaSeleccionada("");
+    setReferenciasSeleccionadas([]);
+  };
+
+  const abrirCargarReferencia = () => {
+    setModoBusqueda("referencia");
+    limpiarBusquedaMovimientos();
     setErrorMsg("");
     setMostrarReferencia(true);
 
@@ -435,25 +565,25 @@ export default function NuevaTransferencia() {
     }
 
     setMostrarReferencia(false);
-    setNumeroReferencia("");
-    setOpcionesReferencia([]);
-    setReferenciaSeleccionada("");
+    limpiarBusquedaMovimientos();
   };
 
-  /*
-   * Determina el depósito en el que se encuentra o desde el
-   * que salió el material correspondiente al movimiento.
-   */
+  const cambiarModoBusqueda = (nuevoModo) => {
+    setModoBusqueda(nuevoModo);
+    limpiarBusquedaMovimientos();
+    setErrorMsg("");
+
+    setTimeout(() => {
+      referenciaInputRef.current?.focus();
+    }, 100);
+  };
+
   const obtenerDepositoReferencia = (movimiento) => {
     const tipo = normalizarTexto(movimiento.tipo_transaccion);
 
     const ingresoEgreso = normalizarTexto(movimiento.ingreso_egreso);
 
     if (tipo === "TRANSFERENCIA") {
-      /*
-       * En una transferencia anterior, el material quedó
-       * en el depósito destino.
-       */
       return movimiento.deposito_destino || movimiento.deposito_origen || "";
     }
 
@@ -469,11 +599,18 @@ export default function NuevaTransferencia() {
   };
 
   const buscarReferencia = async () => {
-    const numero = String(numeroReferencia || "").trim();
+    const referencia = String(numeroReferencia || "").trim();
+    const obra = String(obraBusqueda || "").trim();
+    const version = String(versionBusqueda || "").trim();
 
-    if (!numero) {
-      setErrorMsg("Ingresá un número de transacción.");
+    if (modoBusqueda === "referencia" && !referencia) {
+      setErrorMsg("Ingresá una referencia.");
+      referenciaInputRef.current?.focus();
+      return;
+    }
 
+    if (modoBusqueda === "obra_version" && (!obra || !version)) {
+      setErrorMsg("Ingresá obra y versión.");
       referenciaInputRef.current?.focus();
       return;
     }
@@ -482,31 +619,34 @@ export default function NuevaTransferencia() {
       setBuscandoReferencia(true);
       setErrorMsg("");
       setOpcionesReferencia([]);
-      setReferenciaSeleccionada("");
+      setReferenciasSeleccionadas([]);
 
-      const response = await api.get(
-        `/movimientos/referencia/${encodeURIComponent(numero)}`,
-      );
+      const response = await api.get("/movimientos/carga-transferencia", {
+        params:
+          modoBusqueda === "referencia"
+            ? {
+                modo: "referencia",
+                referencia,
+              }
+            : {
+                modo: "obra_version",
+                obra,
+                version,
+              },
+      });
 
       const movimientos = Array.isArray(response.data) ? response.data : [];
 
       if (!movimientos.length) {
         setErrorMsg(
-          `No se encontraron movimientos para la transacción ${numero}.`,
+          modoBusqueda === "referencia"
+            ? `No se encontraron movimientos para la referencia ${referencia}.`
+            : `No se encontraron movimientos para la obra ${obra}, versión ${version}.`,
         );
 
         return;
       }
 
-      /*
-       * Un mismo número puede existir en diferentes módulos:
-       * AJUSTE 15, TRANSFERENCIA 15, REMITO 15, etc.
-       *
-       * También una orden de producción puede tener un egreso
-       * de materiales y un ingreso de producto terminado.
-       *
-       * Se agrupa por tipo, número, depósito efectivo y sentido.
-       */
       const grupos = new Map();
 
       movimientos.forEach((movimiento) => {
@@ -514,18 +654,27 @@ export default function NuevaTransferencia() {
           normalizarTexto(movimiento.tipo_transaccion) || "MOVIMIENTO";
 
         const numeroTransaccion = String(
-          movimiento.numero_transaccion ?? numero,
+          movimiento.numero_transaccion ?? "",
         ).trim();
 
         const deposito = obtenerDepositoReferencia(movimiento);
 
         const sentido = normalizarTexto(movimiento.ingreso_egreso) || "";
 
+        const remito = String(movimiento.remito_referencia || "").trim();
+
+        const obraMovimiento = String(movimiento.obra || "").trim();
+
+        const versionMovimiento = String(movimiento.version || "").trim();
+
         const clave = [
           tipo,
           numeroTransaccion,
           normalizarTexto(deposito),
           sentido,
+          normalizarTexto(remito),
+          normalizarTexto(obraMovimiento),
+          normalizarTexto(versionMovimiento),
         ].join("|");
 
         if (!grupos.has(clave)) {
@@ -535,6 +684,9 @@ export default function NuevaTransferencia() {
             numeroTransaccion,
             deposito,
             sentido,
+            remitoReferencia: remito,
+            obra: obraMovimiento,
+            version: versionMovimiento,
             movimientos: [],
           });
         }
@@ -550,8 +702,6 @@ export default function NuevaTransferencia() {
 
           fechaReal: primero.fecha_real || primero.fecha || "",
 
-          remitoReferencia: primero.remito_referencia || "",
-
           referente: primero.referente || "",
 
           referenteId: primero.id_referente || "",
@@ -565,37 +715,72 @@ export default function NuevaTransferencia() {
       setOpcionesReferencia(opciones);
 
       if (opciones.length === 1) {
-        setReferenciaSeleccionada(opciones[0].id);
+        setReferenciasSeleccionadas([opciones[0].id]);
       }
     } catch (error) {
-      console.error("Error buscando referencia:", error);
+      console.error("Error buscando movimientos:", error);
 
       setErrorMsg(
         error.response?.data?.error ||
           error.response?.data?.detalle ||
-          "No se pudo buscar la referencia.",
+          "No se pudieron buscar los movimientos.",
       );
     } finally {
       setBuscandoReferencia(false);
     }
   };
 
-  const cargarReferenciaSeleccionada = async () => {
-    const opcion = opcionesReferencia.find(
-      (item) => item.id === referenciaSeleccionada,
+  const alternarOpcionSeleccionada = (id) => {
+    setReferenciasSeleccionadas((seleccionadas) =>
+      seleccionadas.includes(id)
+        ? seleccionadas.filter((seleccionada) => seleccionada !== id)
+        : [...seleccionadas, id],
+    );
+  };
+
+  const seleccionarTodas = () => {
+    setReferenciasSeleccionadas(opcionesReferencia.map((opcion) => opcion.id));
+  };
+
+  const quitarTodas = () => {
+    setReferenciasSeleccionadas([]);
+  };
+
+  const cargarReferenciasSeleccionadas = async () => {
+    const seleccionadas = opcionesReferencia.filter((opcion) =>
+      referenciasSeleccionadas.includes(opcion.id),
     );
 
-    if (!opcion) {
-      setErrorMsg("Seleccioná una referencia para cargar.");
+    if (!seleccionadas.length) {
+      setErrorMsg("Seleccioná al menos un movimiento para cargar.");
 
       return;
     }
 
-    const depositoEncontrado = buscarDepositoPorNombre(opcion.deposito);
+    const depositosSeleccionados = [
+      ...new Set(
+        seleccionadas
+          .map((opcion) => normalizarTexto(opcion.deposito))
+          .filter(Boolean),
+      ),
+    ];
+
+    if (depositosSeleccionados.length !== 1) {
+      setErrorMsg(
+        "Las opciones seleccionadas pertenecen a depósitos diferentes. " +
+          "Una transferencia solo puede tener un depósito de origen.",
+      );
+
+      return;
+    }
+
+    const depositoEncontrado = buscarDepositoPorNombre(
+      seleccionadas[0].deposito,
+    );
 
     if (!depositoEncontrado) {
       setErrorMsg(
-        `El depósito "${opcion.deposito}" no existe en la lista de depósitos.`,
+        `El depósito "${seleccionadas[0].deposito}" no existe en la lista de depósitos.`,
       );
 
       return;
@@ -609,48 +794,44 @@ export default function NuevaTransferencia() {
 
       cargandoReferenciaRef.current = true;
 
-      /*
-       * Consolida códigos repetidos dentro de la misma
-       * transacción.
-       */
       const articulosAgrupados = new Map();
 
-      opcion.movimientos.forEach((movimiento) => {
-        const codigo = normalizarTexto(movimiento.codigo);
+      seleccionadas.forEach((opcion) => {
+        opcion.movimientos.forEach((movimiento) => {
+          const codigo = normalizarTexto(movimiento.codigo);
 
-        const cantidad = Math.abs(Number(movimiento.cantidad) || 0);
+          const cantidad = Math.abs(Number(movimiento.cantidad) || 0);
 
-        if (!codigo || cantidad <= 0) {
-          return;
-        }
+          if (!codigo || cantidad <= 0) {
+            return;
+          }
 
-        const actual = articulosAgrupados.get(codigo) || {
-          codigo,
-          descripcion: movimiento.descripcion || "",
-          cantidad: 0,
-        };
+          const actual = articulosAgrupados.get(codigo) || {
+            codigo,
+            descripcion: movimiento.descripcion || "",
+            cantidad: 0,
+          };
 
-        actual.cantidad += cantidad;
+          actual.cantidad += cantidad;
 
-        if (!actual.descripcion && movimiento.descripcion) {
-          actual.descripcion = movimiento.descripcion;
-        }
+          if (!actual.descripcion && movimiento.descripcion) {
+            actual.descripcion = movimiento.descripcion;
+          }
 
-        articulosAgrupados.set(codigo, actual);
+          articulosAgrupados.set(codigo, actual);
+        });
       });
 
       const articulos = Array.from(articulosAgrupados.values());
 
       if (!articulos.length) {
-        setErrorMsg("La referencia no contiene artículos válidos.");
+        setErrorMsg(
+          "Los movimientos seleccionados no contienen artículos válidos.",
+        );
 
         return;
       }
 
-      /*
-       * Consulta el stock actual de todos los artículos
-       * usando explícitamente el depósito de la referencia.
-       */
       const nuevosItems = await Promise.all(
         articulos.map(async (articulo) => {
           const datosStock = await consultarStockPorDeposito(
@@ -674,51 +855,42 @@ export default function NuevaTransferencia() {
         }),
       );
 
-      /*
-       * Completa la cabecera de la transferencia.
-       */
-      setOrigenId(nuevoOrigenId);
+      const primeraOpcion = seleccionadas[0];
 
-      /*
-       * El destino queda vacío para que el usuario
-       * seleccione adónde transferir.
-       */
+      setOrigenId(nuevoOrigenId);
       setDestinoId("");
 
-      setReferenteId(opcion.referenteId ? String(opcion.referenteId) : "");
-
-      setFechaReal(normalizarFecha(opcion.fechaReal));
-
-      /*
-       * Se conserva la referencia original.
-       * Cuando no hay remito, se registra el origen
-       * de la carga.
-       */
-      setRemitoReferencia(
-        opcion.remitoReferencia
-          ? String(opcion.remitoReferencia)
-          : `${opcion.tipo} ${opcion.numeroTransaccion}`,
+      setReferenteId(
+        primeraOpcion.referenteId ? String(primeraOpcion.referenteId) : "",
       );
+
+      setFechaReal(normalizarFecha(primeraOpcion.fechaReal));
+
+      if (modoBusqueda === "referencia") {
+        setRemitoReferencia(numeroReferencia.trim());
+      } else {
+        setRemitoReferencia(
+          `OBRA ${obraBusqueda.trim()} - VERSIÓN ${versionBusqueda.trim()}`,
+        );
+      }
 
       setItems(nuevosItems);
 
       setMostrarReferencia(false);
-      setNumeroReferencia("");
-      setOpcionesReferencia([]);
-      setReferenciaSeleccionada("");
+      limpiarBusquedaMovimientos();
 
       setTimeout(() => {
         cargandoReferenciaRef.current = false;
       }, 200);
     } catch (error) {
-      console.error("Error cargando referencia:", error);
+      console.error("Error cargando movimientos:", error);
 
       cargandoReferenciaRef.current = false;
 
       setErrorMsg(
         error.response?.data?.error ||
           error.response?.data?.detalle ||
-          "No se pudo cargar la referencia.",
+          "No se pudieron cargar los movimientos.",
       );
     } finally {
       setBuscandoReferencia(false);
@@ -726,7 +898,7 @@ export default function NuevaTransferencia() {
   };
 
   // ======================================================
-  // CONFIRMAR TRANSFERENCIA
+  // CONFIRMAR
   // ======================================================
 
   const confirmar = async () => {
@@ -739,18 +911,15 @@ export default function NuevaTransferencia() {
       setErrorMsg("");
 
       const depositoOrigenId = Number(origenId);
-
       const depositoDestinoId = Number(destinoId);
 
       if (!Number.isInteger(depositoOrigenId) || depositoOrigenId <= 0) {
         setErrorMsg("Seleccioná el depósito origen.");
-
         return;
       }
 
       if (!Number.isInteger(depositoDestinoId) || depositoDestinoId <= 0) {
         setErrorMsg("Seleccioná el depósito destino.");
-
         return;
       }
 
@@ -774,7 +943,6 @@ export default function NuevaTransferencia() {
 
       if (!itemsConCodigo.length) {
         setErrorMsg("Cargá al menos un código.");
-
         return;
       }
 
@@ -806,7 +974,6 @@ export default function NuevaTransferencia() {
 
       const body = {
         origen_id: depositoOrigenId,
-
         destino_id: depositoDestinoId,
 
         remito_referencia: remitoReferencia.trim() || null,
@@ -817,14 +984,36 @@ export default function NuevaTransferencia() {
 
         items: itemsConCodigo.map((item) => ({
           codigo: item.codigo,
-
           ubicacion: item.ubicacion,
-
           cantidad: Math.trunc(item.cantidad),
         })),
       };
 
       const response = await api.post("/transferencias", body);
+      const alertaIdNumero = Number(alertaIdUrl);
+      if (
+        desdeAlerta &&
+        Number.isInteger(alertaIdNumero) &&
+        alertaIdNumero > 0
+      ) {
+        try {
+          await api.put(
+            "/ajustes/alertas-consumo/marcar-leidas",
+            {
+              ids: [alertaIdNumero],
+            },
+          );
+        } catch (errorAlerta) {
+          console.error(
+            "La transferencia fue creada, pero no se pudo resolver la alerta:",
+            errorAlerta,
+          );
+
+          window.alert(
+            "La transferencia se creó correctamente, pero la revisión no pudo marcarse como resuelta.",
+          );
+        }
+      }
 
       const numeroTransferencia =
         response.data?.cabecera?.numero_transferencia ||
@@ -884,7 +1073,7 @@ export default function NuevaTransferencia() {
           onClick={abrirCargarReferencia}
           disabled={confirmando}
         >
-          Cargar referencia
+          Cargar movimientos
         </button>
 
         <button
@@ -1002,19 +1191,13 @@ export default function NuevaTransferencia() {
           <table className="tabla-articulos">
             <thead>
               <tr>
-                <th
-                  style={{
-                    width: "170px",
-                  }}
-                >
-                  Código
-                </th>
+                <th style={{ width: 170 }}>Código</th>
 
                 <th>Descripción</th>
 
                 <th
                   style={{
-                    width: "120px",
+                    width: 120,
                     textAlign: "right",
                   }}
                 >
@@ -1023,37 +1206,25 @@ export default function NuevaTransferencia() {
 
                 <th
                   style={{
-                    width: "120px",
+                    width: 120,
                     textAlign: "right",
                   }}
                 >
                   Stock total
                 </th>
 
-                <th
-                  style={{
-                    width: "190px",
-                  }}
-                >
-                  Ubicación
-                </th>
+                <th style={{ width: 190 }}>Ubicación</th>
 
                 <th
                   style={{
-                    width: "140px",
+                    width: 140,
                     textAlign: "right",
                   }}
                 >
                   Cantidad
                 </th>
 
-                <th
-                  style={{
-                    width: "110px",
-                  }}
-                >
-                  Acción
-                </th>
+                <th style={{ width: 110 }}>Acción</th>
               </tr>
             </thead>
 
@@ -1071,21 +1242,15 @@ export default function NuevaTransferencia() {
                       onChange={(event) =>
                         actualizarItem(index, {
                           codigo: event.target.value.toUpperCase(),
-
                           descripcion: "",
-
                           stock: "",
-
                           stockTotal: "",
-
                           ubicacion: "",
                         })
                       }
                       onBlur={() => buscarArticulo(item.codigo, index)}
                       onKeyDown={(event) => handleCodigoKeyDown(event, index)}
-                      style={{
-                        width: "100%",
-                      }}
+                      style={{ width: "100%" }}
                     />
                   </td>
 
@@ -1095,25 +1260,13 @@ export default function NuevaTransferencia() {
                       value={item.descripcion}
                       readOnly
                       placeholder="Se completa automáticamente"
-                      style={{
-                        width: "100%",
-                      }}
+                      style={{ width: "100%" }}
                     />
                   </td>
 
-                  <td
-                    style={{
-                      textAlign: "right",
-                    }}
-                  >
-                    {item.stock ?? ""}
-                  </td>
+                  <td style={{ textAlign: "right" }}>{item.stock ?? ""}</td>
 
-                  <td
-                    style={{
-                      textAlign: "right",
-                    }}
-                  >
+                  <td style={{ textAlign: "right" }}>
                     {item.stockTotal ?? ""}
                   </td>
 
@@ -1128,9 +1281,7 @@ export default function NuevaTransferencia() {
                           ubicacion: event.target.value,
                         })
                       }
-                      style={{
-                        width: "100%",
-                      }}
+                      style={{ width: "100%" }}
                     />
                   </td>
 
@@ -1171,12 +1322,7 @@ export default function NuevaTransferencia() {
           </table>
         </div>
 
-        <div
-          className="nt-actions"
-          style={{
-            marginTop: 14,
-          }}
-        >
+        <div className="nt-actions" style={{ marginTop: 14 }}>
           <button
             type="button"
             className="btn-light"
@@ -1205,11 +1351,10 @@ export default function NuevaTransferencia() {
 
       {mostrarReferencia && (
         <div
-          className="modal"
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0, 0, 0, 0.45)",
+            background: "rgba(0,0,0,0.45)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -1218,43 +1363,46 @@ export default function NuevaTransferencia() {
           }}
         >
           <div
-            className="modal-content modal-wide"
             style={{
-              width: "min(850px, 96vw)",
+              width: "min(900px, 96vw)",
               maxHeight: "90vh",
               overflowY: "auto",
-              background: "#ffffff",
+              background: "#fff",
               borderRadius: 8,
               padding: 22,
-              boxShadow: "0 10px 35px rgba(0,0,0,0.25)",
             }}
           >
-            <h3>Cargar referencia desde Movimientos</h3>
-
-            <p
-              style={{
-                marginTop: 0,
-                opacity: 0.8,
-              }}
-            >
-              Ingresá el número de transacción que aparece en el módulo
-              Movimientos.
-            </p>
+            <h3>Cargar movimientos</h3>
 
             <div
               style={{
                 display: "flex",
-                gap: 10,
-                alignItems: "flex-end",
-                flexWrap: "wrap",
+                gap: 18,
+                marginBottom: 18,
               }}
             >
-              <label
-                style={{
-                  flex: "1 1 260px",
-                }}
-              >
-                Número de transacción
+              <label>
+                <input
+                  type="radio"
+                  checked={modoBusqueda === "referencia"}
+                  onChange={() => cambiarModoBusqueda("referencia")}
+                />{" "}
+                Buscar por referencia
+              </label>
+
+              <label>
+                <input
+                  type="radio"
+                  checked={modoBusqueda === "obra_version"}
+                  onChange={() => cambiarModoBusqueda("obra_version")}
+                />{" "}
+                Buscar por obra y versión
+              </label>
+            </div>
+
+            {modoBusqueda === "referencia" ? (
+              <label>
+                Referencia
                 <input
                   ref={referenciaInputRef}
                   type="text"
@@ -1263,8 +1411,7 @@ export default function NuevaTransferencia() {
                     setNumeroReferencia(event.target.value);
 
                     setOpcionesReferencia([]);
-
-                    setReferenciaSeleccionada("");
+                    setReferenciasSeleccionadas([]);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
@@ -1273,12 +1420,68 @@ export default function NuevaTransferencia() {
                     }
                   }}
                   style={{
+                    display: "block",
                     width: "100%",
                     marginTop: 5,
                   }}
                 />
               </label>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <label style={{ flex: 1 }}>
+                  Obra
+                  <input
+                    ref={referenciaInputRef}
+                    type="text"
+                    value={obraBusqueda}
+                    onChange={(event) => {
+                      setObraBusqueda(event.target.value);
 
+                      setOpcionesReferencia([]);
+                      setReferenciasSeleccionadas([]);
+                    }}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      marginTop: 5,
+                    }}
+                  />
+                </label>
+
+                <label style={{ flex: 1 }}>
+                  Versión
+                  <input
+                    type="text"
+                    value={versionBusqueda}
+                    onChange={(event) => {
+                      setVersionBusqueda(event.target.value);
+
+                      setOpcionesReferencia([]);
+                      setReferenciasSeleccionadas([]);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        buscarReferencia();
+                      }
+                    }}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      marginTop: 5,
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+
+            <div style={{ marginTop: 14 }}>
               <button
                 type="button"
                 className="btn-primary"
@@ -1290,12 +1493,36 @@ export default function NuevaTransferencia() {
             </div>
 
             {opcionesReferencia.length > 0 && (
-              <div
-                style={{
-                  marginTop: 22,
-                }}
-              >
-                <h4>Seleccioná el movimiento que querés cargar</h4>
+              <div style={{ marginTop: 22 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 10,
+                  }}
+                >
+                  <h4>Seleccioná uno o más movimientos</h4>
+
+                  <div>
+                    <button
+                      type="button"
+                      className="btn-light"
+                      onClick={seleccionarTodas}
+                    >
+                      Seleccionar todos
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn-light"
+                      onClick={quitarTodas}
+                      style={{ marginLeft: 8 }}
+                    >
+                      Quitar selección
+                    </button>
+                  </div>
+                </div>
 
                 <div
                   style={{
@@ -1303,73 +1530,78 @@ export default function NuevaTransferencia() {
                     gap: 10,
                   }}
                 >
-                  {opcionesReferencia.map((opcion) => (
-                    <label
-                      key={opcion.id}
-                      style={{
-                        display: "flex",
-                        gap: 12,
-                        alignItems: "flex-start",
-                        padding: 12,
-                        border:
-                          referenciaSeleccionada === opcion.id
-                            ? "2px solid #356ae6"
-                            : "1px solid #cccccc",
-                        borderRadius: 6,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <input
-                        type="radio"
-                        name="referencia-seleccionada"
-                        checked={referenciaSeleccionada === opcion.id}
-                        onChange={() => setReferenciaSeleccionada(opcion.id)}
-                      />
+                  {opcionesReferencia.map((opcion) => {
+                    const seleccionada = referenciasSeleccionadas.includes(
+                      opcion.id,
+                    );
 
-                      <span>
-                        <strong>
-                          {opcion.tipo} {opcion.numeroTransaccion}
-                        </strong>
-                        <br />
-                        Depósito:{" "}
-                        <strong>{opcion.deposito || "Sin depósito"}</strong>
-                        {opcion.sentido && (
-                          <>
-                            {" "}
-                            — Movimiento:{" "}
-                            {opcion.sentido === "I"
-                              ? "Ingreso"
-                              : opcion.sentido === "E"
-                                ? "Egreso"
-                                : opcion.sentido}
-                          </>
-                        )}
-                        <br />
-                        Artículos: {opcion.cantidadArticulos}
-                        {opcion.fechaReal && (
-                          <> — Fecha: {normalizarFecha(opcion.fechaReal)}</>
-                        )}
-                        {opcion.referente && (
-                          <>
-                            <br />
-                            Actuante: {opcion.referente}
-                          </>
-                        )}
-                        {opcion.remitoReferencia && (
-                          <>
-                            <br />
-                            Referencia: {opcion.remitoReferencia}
-                          </>
-                        )}
-                        {opcion.motivo && (
-                          <>
-                            <br />
-                            Motivo: {opcion.motivo}
-                          </>
-                        )}
-                      </span>
-                    </label>
-                  ))}
+                    return (
+                      <label
+                        key={opcion.id}
+                        style={{
+                          display: "flex",
+                          gap: 12,
+                          alignItems: "flex-start",
+                          padding: 12,
+                          border: seleccionada
+                            ? "2px solid #356ae6"
+                            : "1px solid #ccc",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={seleccionada}
+                          onChange={() => alternarOpcionSeleccionada(opcion.id)}
+                        />
+
+                        <span>
+                          <strong>
+                            {opcion.tipo} {opcion.numeroTransaccion}
+                          </strong>
+                          <br />
+                          Depósito:{" "}
+                          <strong>{opcion.deposito || "Sin depósito"}</strong>
+                          {opcion.sentido && (
+                            <>
+                              {" "}
+                              —{" "}
+                              {opcion.sentido === "I"
+                                ? "Ingreso"
+                                : opcion.sentido === "E"
+                                  ? "Egreso"
+                                  : opcion.sentido}
+                            </>
+                          )}
+                          <br />
+                          Artículos: {opcion.cantidadArticulos}
+                          {opcion.fechaReal && (
+                            <> — Fecha: {normalizarFecha(opcion.fechaReal)}</>
+                          )}
+                          {opcion.remitoReferencia && (
+                            <>
+                              <br />
+                              Referencia: {opcion.remitoReferencia}
+                            </>
+                          )}
+                          {opcion.obra && (
+                            <>
+                              <br />
+                              Obra: {opcion.obra}
+                            </>
+                          )}
+                          {opcion.version && <> — Versión: {opcion.version}</>}
+                          {opcion.referente && (
+                            <>
+                              <br />
+                              Actuante: {opcion.referente}
+                            </>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1394,10 +1626,14 @@ export default function NuevaTransferencia() {
               <button
                 type="button"
                 className="btn-primary"
-                onClick={cargarReferenciaSeleccionada}
-                disabled={buscandoReferencia || !referenciaSeleccionada}
+                onClick={cargarReferenciasSeleccionadas}
+                disabled={
+                  buscandoReferencia || !referenciasSeleccionadas.length
+                }
               >
-                {buscandoReferencia ? "Cargando..." : "Cargar seleccionada"}
+                {buscandoReferencia
+                  ? "Cargando..."
+                  : `Cargar seleccionados (${referenciasSeleccionadas.length})`}
               </button>
             </div>
           </div>

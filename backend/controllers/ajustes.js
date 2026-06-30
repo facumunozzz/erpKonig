@@ -79,6 +79,81 @@ function getUsuarioReq(req) {
   return req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
 }
 
+function normalizarFechaExcel(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    String(value).trim() === ""
+  ) {
+    return null;
+  }
+
+  /*
+   * Excel puede entregar la fecha como número serial
+   * cuando la celda tiene formato General.
+   */
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value)
+  ) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+
+    if (!parsed) {
+      return null;
+    }
+
+    const year = parsed.y;
+    const month = String(parsed.m).padStart(2, "0");
+    const day = String(parsed.d).padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
+  }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const text = String(value).trim();
+
+  /*
+   * Formato DD/MM/AAAA.
+   */
+  const fechaArgentina = text.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/,
+  );
+
+  if (fechaArgentina) {
+    const day = fechaArgentina[1].padStart(2, "0");
+    const month = fechaArgentina[2].padStart(2, "0");
+    const year = fechaArgentina[3];
+
+    return `${year}-${month}-${day}`;
+  }
+
+  /*
+   * Formato AAAA-MM-DD.
+   */
+  const fechaIso = text.match(
+    /^(\d{4})-(\d{1,2})-(\d{1,2})/,
+  );
+
+  if (fechaIso) {
+    const year = fechaIso[1];
+    const month = fechaIso[2].padStart(2, "0");
+    const day = fechaIso[3].padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
+  }
+
+  const parsed = new Date(text);
+
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  return null;
+}
+
 // ========================================================
 // UBICACIÓN TÉCNICA DE STOCK
 // ========================================================
@@ -740,85 +815,164 @@ exports.deleteMotivo = async (req, res) => {
   }
 };
 
-// ========================================================
 // LISTADO DE AJUSTES Y BORRADORES
-// ========================================================
-
-exports.getAll = async (_req, res) => {
+exports.getAll = async (req, res) => {
   try {
     await poolConnect;
     const pool = await getPool();
 
-    const result = await pool.request().query(`
-      SELECT
-        CAST(
-          a.numero_ajuste AS VARCHAR(50)
-        ) AS id,
+    /*
+     * Por defecto no se muestran los consumos internos de Dropbox.
+     *
+     * El frontend puede pedirlos enviando:
+     *
+     * GET /ajustes?incluirDropbox=1
+     */
+    const incluirDropbox =
+      String(req.query?.incluirDropbox || "") === "1";
 
-        a.numero_ajuste,
+    const result = await pool
+      .request()
+      .input("incluirDropbox", sql.Bit, incluirDropbox ? 1 : 0)
+      .query(`
+        SELECT
+          CAST(a.numero_ajuste AS VARCHAR(50)) AS id,
+          a.numero_ajuste,
+          CAST(NULL AS INT) AS id_borrador,
+          CAST(
+            CASE
+              WHEN EXISTS
+              (
+                SELECT 1
+                FROM dbo.consumo_produccion_alertas alerta
+                WHERE alerta.numero_movimiento = a.numero_ajuste
+                  AND alerta.leida = 0
+              )
+                THEN 'REVISAR'
+              ELSE 'CONFIRMADO'
+            END
+            AS VARCHAR(20)
+          ) AS estado,
+          a.deposito,
+          a.obra,
+          a.version,
+          CASE
+            WHEN m.nombre IS NULL
+              THEN a.motivo
+            WHEN EXISTS
+            (
+              SELECT 1
+              FROM dbo.ajustes_detalles ad_ingreso
+              WHERE ad_ingreso.ajuste_id = a.numero_ajuste
+                AND ad_ingreso.cantidad > 0
+            )
+            AND NOT EXISTS
+            (
+              SELECT 1
+              FROM dbo.ajustes_detalles ad_egreso
+              WHERE ad_egreso.ajuste_id = a.numero_ajuste
+                AND ad_egreso.cantidad < 0
+            )
+              THEN CONCAT(m.nombre, ' (Ingreso)')
 
-        CAST(NULL AS INT) AS id_borrador,
+            WHEN EXISTS
+            (
+              SELECT 1
+              FROM dbo.ajustes_detalles ad_egreso
+              WHERE ad_egreso.ajuste_id = a.numero_ajuste
+                AND ad_egreso.cantidad < 0
+            )
+            AND NOT EXISTS
+            (
+              SELECT 1
+              FROM dbo.ajustes_detalles ad_ingreso
+              WHERE ad_ingreso.ajuste_id = a.numero_ajuste
+                AND ad_ingreso.cantidad > 0
+            )
+              THEN CONCAT(m.nombre, ' (Egreso)')
 
-        CAST(
-          'CONFIRMADO' AS VARCHAR(20)
-        ) AS estado,
+            WHEN m.tipo_movimiento = 'INGRESO'
+              THEN CONCAT(m.nombre, ' (Ingreso)')
 
-        a.deposito,
-        a.obra,
-        a.version,
+            WHEN m.tipo_movimiento = 'EGRESO'
+              THEN CONCAT(m.nombre, ' (Egreso)')
 
-        m.nombre AS motivo,
+            ELSE m.nombre
+          END AS motivo,
 
-        a.fecha,
-        a.fecha_real,
-        a.remito_referencia,
-        a.id_referente,
+          a.fecha,
+          a.fecha_real,
+          a.remito_referencia,
+          a.id_referente,
 
-        r.nombre AS referente
+          r.nombre AS referente,
 
-      FROM dbo.ajustes a
+          CAST(
+            CASE
+              WHEN UPPER(
+                REPLACE(
+                  LTRIM(RTRIM(ISNULL(a.motivo, ''))),
+                  N'Ó',
+                  N'O'
+                )
+              ) LIKE N'CONSUMO PRODUCCION (DROPBOX)%'
+                THEN 1
+              ELSE 0
+            END
+            AS BIT
+          ) AS es_consumo_dropbox
 
-      LEFT JOIN dbo.ajustes_motivos m
-        ON m.id_motivo = a.motivo_id
+        FROM dbo.ajustes a
 
-      LEFT JOIN dbo.referentes r
-        ON r.id_referente = a.id_referente
+        LEFT JOIN dbo.ajustes_motivos m
+          ON m.id_motivo = a.motivo_id
 
-      UNION ALL
+        LEFT JOIN dbo.referentes r
+          ON r.id_referente = a.id_referente
 
-      SELECT
-        CONCAT(
-          'BORRADOR-',
-          b.id_borrador
-        ) AS id,
+        WHERE
+          @incluirDropbox = 1
 
-        CAST(NULL AS INT) AS numero_ajuste,
+          OR UPPER(
+            REPLACE(
+              LTRIM(RTRIM(ISNULL(a.motivo, ''))),
+              N'Ó',
+              N'O'
+            )
+          ) NOT LIKE N'CONSUMO PRODUCCION (DROPBOX)%'
 
-        b.id_borrador,
+        UNION ALL
 
-        CAST(
-          'BORRADOR' AS VARCHAR(20)
-        ) AS estado,
+        SELECT
+          CONCAT('BORRADOR-', b.id_borrador) AS id,
 
-        b.deposito,
-        b.obra,
-        b.version,
-        b.motivo,
+          CAST(NULL AS INT) AS numero_ajuste,
 
-        b.fecha_creacion AS fecha,
-        b.fecha_real,
-        b.remito_referencia,
-        b.id_referente,
+          b.id_borrador,
 
-        r.nombre AS referente
+          CAST('BORRADOR' AS VARCHAR(20)) AS estado,
 
-      FROM dbo.ajustes_borradores b
+          b.deposito,
+          b.obra,
+          b.version,
+          b.motivo,
 
-      LEFT JOIN dbo.referentes r
-        ON r.id_referente = b.id_referente
+          b.fecha_creacion AS fecha,
+          b.fecha_real,
+          b.remito_referencia,
+          b.id_referente,
 
-      ORDER BY fecha DESC;
-    `);
+          r.nombre AS referente,
+
+          CAST(0 AS BIT) AS es_consumo_dropbox
+
+        FROM dbo.ajustes_borradores b
+
+        LEFT JOIN dbo.referentes r
+          ON r.id_referente = b.id_referente
+
+        ORDER BY fecha DESC;
+      `);
 
     return res.json(result.recordset || []);
   } catch (err) {
@@ -831,10 +985,8 @@ exports.getAll = async (_req, res) => {
   }
 };
 
-// ========================================================
-// OBTENER AJUSTE CONFIRMADO
-// ========================================================
 
+// OBTENER AJUSTE CONFIRMADO
 exports.getById = async (req, res) => {
   try {
     const numero = asInt(req.params.id);
@@ -853,17 +1005,89 @@ exports.getById = async (req, res) => {
         SELECT
           a.numero_ajuste AS id,
           a.numero_ajuste,
+          CAST(
+            CASE
+              WHEN EXISTS
+              (
+                SELECT 1
+                FROM dbo.consumo_produccion_alertas alerta
+                WHERE alerta.numero_movimiento = a.numero_ajuste
+                  AND alerta.leida = 0
+              )
+                THEN 'REVISAR'
+
+              ELSE 'CONFIRMADO'
+            END
+            AS VARCHAR(20)
+          ) AS estado,
           a.deposito,
           a.obra,
           a.version,
           a.motivo_id,
-          m.nombre AS motivo,
+          CASE
+            WHEN m.nombre IS NULL
+              THEN NULL
+
+            WHEN m.tipo_movimiento = 'INGRESO'
+              THEN CONCAT(m.nombre, ' (Ingreso)')
+
+            WHEN m.tipo_movimiento = 'EGRESO'
+              THEN CONCAT(m.nombre, ' (Egreso)')
+
+            WHEN EXISTS
+            (
+              SELECT 1
+              FROM dbo.ajustes_detalles ad_tipo
+              WHERE ad_tipo.ajuste_id = a.numero_ajuste
+                AND ad_tipo.cantidad > 0
+            )
+            AND NOT EXISTS
+            (
+              SELECT 1
+              FROM dbo.ajustes_detalles ad_tipo
+              WHERE ad_tipo.ajuste_id = a.numero_ajuste
+                AND ad_tipo.cantidad < 0
+            )
+              THEN CONCAT(m.nombre, ' (Ingreso)')
+
+            WHEN EXISTS
+            (
+              SELECT 1
+              FROM dbo.ajustes_detalles ad_tipo
+              WHERE ad_tipo.ajuste_id = a.numero_ajuste
+                AND ad_tipo.cantidad < 0
+            )
+            AND NOT EXISTS
+            (
+              SELECT 1
+              FROM dbo.ajustes_detalles ad_tipo
+              WHERE ad_tipo.ajuste_id = a.numero_ajuste
+                AND ad_tipo.cantidad > 0
+            )
+              THEN CONCAT(m.nombre, ' (Egreso)')
+
+            ELSE m.nombre
+          END AS motivo,
           a.fecha,
           a.fecha_real,
           a.remito_referencia,
           a.id_referente,
           r.nombre AS referente,
-          a.usuario
+          a.usuario,
+          CAST(
+            CASE
+              WHEN UPPER(
+                REPLACE(
+                  LTRIM(RTRIM(ISNULL(a.motivo, ''))),
+                  N'Ó',
+                  N'O'
+                )
+              ) LIKE N'CONSUMO PRODUCCION (DROPBOX)%'
+                THEN 1
+              ELSE 0
+            END
+            AS BIT
+          ) AS es_consumo_dropbox
 
         FROM dbo.ajustes a
 
@@ -1237,8 +1461,8 @@ exports.create = async (req, res) => {
       .input("deposito", sql.VarChar(255), nombreDeposito)
       .input("motivoId", sql.Int, motivoId)
       .input("motivo", sql.VarChar(255), motivo.nombre)
-      .input("obra", sql.NVarChar(sql.MAX), obra)
-      .input("version", sql.NVarChar(sql.MAX), version)
+      .input("obra", sql.NVarChar(200), obra)
+      .input("version", sql.NVarChar(100), version)
       .input("remitoReferencia", sql.VarChar(255), remitoReferencia)
       .input("referenteId", sql.Int, referenteId)
       .input("fechaReal", sql.Date, fechaReal)
@@ -1757,10 +1981,7 @@ exports.importarDesdeExcel = async (req, res) => {
   }
 };
 
-// ========================================================
 // ALERTAS DE CONSUMO
-// ========================================================
-
 async function insertAlertaConsumoProduccion(
   transaction,
   {
@@ -1773,38 +1994,123 @@ async function insertAlertaConsumoProduccion(
     cantidadAjustada,
     cantidadFaltante,
     motivo,
+    fechaLinea,
   },
 ) {
-  await new sql.Request(transaction)
-    .input("numeroMovimiento", sql.Int, numeroMovimiento ?? null)
+  const numeroMovimientoDb =
+    numeroMovimiento == null
+      ? null
+      : Number(numeroMovimiento);
+
+  const codigoDb =
+    codigo == null
+      ? null
+      : String(codigo).trim();
+
+  const cantidadFaltanteDb =
+    cantidadFaltante == null
+      ? null
+      : Number(cantidadFaltante);
+
+  /*
+   * Evita insertar dos alertas pendientes para el mismo
+   * movimiento, código y cantidad faltante.
+   *
+   * Esto resuelve el caso en que el error se registra:
+   * 1. desde grupo.articulos;
+   * 2. nuevamente desde grupo.fallidos.
+   */
+  const existente = await new sql.Request(transaction)
     .input(
-      "obra",
-      sql.NVarChar(sql.MAX),
-      obra == null ? null : String(obra).trim(),
-    )
-    .input(
-      "version",
-      sql.NVarChar(sql.MAX),
-      version == null ? null : String(version).trim(),
+      "numeroMovimiento",
+      sql.Int,
+      numeroMovimientoDb,
     )
     .input(
       "codigo",
       sql.VarChar(100),
-      codigo == null ? null : String(codigo).trim(),
+      codigoDb,
+    )
+    .input(
+      "cantidadFaltante",
+      sql.Int,
+      cantidadFaltanteDb,
+    )
+    .query(`
+      SELECT TOP 1
+        id_alerta
+      FROM dbo.consumo_produccion_alertas
+      WHERE numero_movimiento = @numeroMovimiento
+        AND ISNULL(codigo, '') = ISNULL(@codigo, '')
+        AND ISNULL(cantidad_faltante, 0) =
+            ISNULL(@cantidadFaltante, 0)
+        AND leida = 0;
+    `);
+
+  if (existente.recordset.length) {
+    return Number(existente.recordset[0].id_alerta);
+  }
+
+  const result = await new sql.Request(transaction)
+    .input(
+      "numeroMovimiento",
+      sql.Int,
+      numeroMovimientoDb,
+    )
+    .input(
+      "obra",
+      sql.NVarChar(sql.MAX),
+      obra == null
+        ? null
+        : String(obra).trim(),
+    )
+    .input(
+      "version",
+      sql.NVarChar(sql.MAX),
+      version == null
+        ? null
+        : String(version).trim(),
+    )
+    .input(
+      "codigo",
+      sql.VarChar(100),
+      codigoDb,
     )
     .input(
       "descripcion",
       sql.VarChar(500),
-      descripcion == null ? null : String(descripcion).trim(),
+      descripcion == null
+        ? null
+        : String(descripcion).trim(),
     )
-    .input("cantidadRequerida", sql.Int, cantidadRequerida ?? null)
-    .input("cantidadAjustada", sql.Int, cantidadAjustada ?? null)
-    .input("cantidadFaltante", sql.Int, cantidadFaltante ?? null)
+    .input(
+      "cantidadRequerida",
+      sql.Int,
+      cantidadRequerida ?? null,
+    )
+    .input(
+      "cantidadAjustada",
+      sql.Int,
+      cantidadAjustada ?? null,
+    )
+    .input(
+      "cantidadFaltante",
+      sql.Int,
+      cantidadFaltanteDb,
+    )
     .input(
       "motivo",
       sql.NVarChar(sql.MAX),
-      motivo == null ? null : String(motivo).trim(),
-    ).query(`
+      motivo == null
+        ? null
+        : String(motivo).trim(),
+    )
+    .input(
+      "fechaLinea",
+      sql.Date,
+      fechaLinea ?? null,
+    )
+    .query(`
       INSERT INTO dbo.consumo_produccion_alertas
       (
         numero_movimiento,
@@ -1816,6 +2122,7 @@ async function insertAlertaConsumoProduccion(
         cantidad_ajustada,
         cantidad_faltante,
         motivo,
+        fecha_linea,
         leida
       )
       VALUES
@@ -1829,15 +2136,17 @@ async function insertAlertaConsumoProduccion(
         @cantidadAjustada,
         @cantidadFaltante,
         @motivo,
+        @fechaLinea,
         0
       );
+
+      SELECT SCOPE_IDENTITY() AS id_alerta;
     `);
+
+  return Number(result.recordset?.[0]?.id_alerta || 0);
 }
 
-// ========================================================
 // CONSUMIR PRODUCCIÓN DESDE DROPBOX
-// ========================================================
-
 async function runConsumoProduccion() {
   let transaction = null;
 
@@ -2008,13 +2317,13 @@ async function runConsumoProduccion() {
       }
 
       const obra = toDb(row[0]);
-
       const version = toDb(row[4]);
+      const codigo = up(row[1]);
+      const fechaLinea = normalizarFechaExcel(row[7]);
 
       const grupo = obtenerGrupo(obra, version);
 
       const requerido = toNumber0(row[5]);
-
       const yaAjustado = toNumber0(row[6]);
 
       if (yaAjustado >= requerido) {
@@ -2026,8 +2335,6 @@ async function runConsumoProduccion() {
       if (diferencia <= 0) {
         continue;
       }
-
-      const codigo = up(row[1]);
 
       if (!codigo) {
         registrarFallo(grupo, {
@@ -2114,6 +2421,7 @@ async function runConsumoProduccion() {
           delta: anterior?.delta || 0,
           requerido: (anterior?.requerido || 0) + diferencia,
           faltante: (anterior?.faltante || 0) + diferencia,
+          fechaLinea,
           observacion: "Sin stock disponible",
         });
 
@@ -2144,6 +2452,8 @@ async function runConsumoProduccion() {
       }
 
       row[6] = yaAjustado + ajustable;
+      const quedoCompletamenteAjustado =
+        Number(row[6]) >= requerido;
 
       itemsCorrectos.push({
         row: excelRow,
@@ -2181,7 +2491,7 @@ async function runConsumoProduccion() {
         requerido: (anterior?.requerido || 0) + diferencia,
 
         faltante: (anterior?.faltante || 0) + faltante,
-
+        fechaLinea,
         observacion:
           faltante > 0
             ? "Stock parcial: se ajustó hasta cero"
@@ -2287,6 +2597,7 @@ async function runConsumoProduccion() {
             cantidadAjustada: Math.abs(item.delta || 0),
             cantidadFaltante: item.faltante,
             motivo: item.observacion || "Consumo parcial",
+            fechaLinea: item.fechaLinea ?? null,
           });
         }
       }
@@ -2313,6 +2624,7 @@ async function runConsumoProduccion() {
           cantidadAjustada: fallo.ajustado || 0,
           cantidadFaltante: fallo.faltante || null,
           motivo: `Fila ${fallo.row}: ${fallo.motivo}`,
+          fechaLinea: fallo.fechaLinea ?? null,
         });
       }
 
@@ -2386,6 +2698,7 @@ exports.getAlertasConsumoPendientes = async (_req, res) => {
           SELECT TOP 200
             id_alerta,
             fecha,
+            fecha_linea,
             numero_movimiento,
             obra,
             version,
@@ -2421,7 +2734,11 @@ exports.marcarAlertasConsumoLeidas = async (req, res) => {
     const ids = Array.isArray(req.body?.ids)
       ? req.body.ids
           .map((id) => asInt(id))
-          .filter((id) => Number.isFinite(id) && id > 0)
+          .filter(
+            (id) =>
+              Number.isFinite(id) &&
+              id > 0,
+          )
       : [];
 
     if (!ids.length) {
@@ -2439,42 +2756,111 @@ exports.marcarAlertasConsumoLeidas = async (req, res) => {
     const parametros = ids.map((id, index) => {
       const nombre = `id${index}`;
 
-      request.input(nombre, sql.Int, id);
+      request.input(
+        nombre,
+        sql.Int,
+        id,
+      );
 
       return `@${nombre}`;
     });
 
     const result = await request.query(`
-          UPDATE dbo.consumo_produccion_alertas
+      DECLARE @AlertasSeleccionadas TABLE
+      (
+        id_alerta INT PRIMARY KEY,
+        numero_movimiento INT
+      );
 
-          SET leida = 1
+      INSERT INTO @AlertasSeleccionadas
+      (
+        id_alerta,
+        numero_movimiento
+      )
+      SELECT
+        id_alerta,
+        numero_movimiento
+      FROM dbo.consumo_produccion_alertas
+      WHERE id_alerta IN
+      (
+        ${parametros.join(",")}
+      )
+        AND leida = 0;
 
-          WHERE id_alerta IN (
-            ${parametros.join(",")}
-          );
+      /*
+       * La alerta deja de estar pendiente.
+       */
+      UPDATE dbo.consumo_produccion_alertas
+      SET leida = 1
+      WHERE id_alerta IN
+      (
+        SELECT id_alerta
+        FROM @AlertasSeleccionadas
+      );
 
-          SELECT
-            @@ROWCOUNT AS afectados;
-        `);
+      /*
+       * Se conserva cantidad_faltante.
+       *
+       * Solo se agrega una observación histórica.
+       * DISTINCT evita repetir la leyenda cuando se
+       * resuelven varias alertas del mismo movimiento.
+       */
+      UPDATE detalle
+      SET observacion =
+        CASE
+          WHEN CHARINDEX(
+            'Revisión resuelta manualmente',
+            ISNULL(detalle.observacion, '')
+          ) > 0
+            THEN detalle.observacion
+
+          ELSE CONCAT(
+            ISNULL(detalle.observacion, ''),
+            CASE
+              WHEN ISNULL(detalle.observacion, '') = ''
+                THEN ''
+              ELSE ' - '
+            END,
+            'Revisión resuelta manualmente'
+          )
+        END
+
+      FROM dbo.ajustes_detalles detalle
+
+      INNER JOIN
+      (
+        SELECT DISTINCT numero_movimiento
+        FROM @AlertasSeleccionadas
+        WHERE numero_movimiento IS NOT NULL
+      ) alerta
+        ON alerta.numero_movimiento =
+           detalle.ajuste_id;
+
+      SELECT COUNT(*) AS afectados
+      FROM @AlertasSeleccionadas;
+    `);
 
     return res.json({
       ok: true,
-      afectados: Number(result.recordset?.[0]?.afectados || 0),
+      afectados: Number(
+        result.recordset?.[0]?.afectados || 0,
+      ),
     });
   } catch (err) {
-    console.error("ajustes.marcarAlertasConsumoLeidas:", err);
+    console.error(
+      "ajustes.marcarAlertasConsumoLeidas:",
+      err,
+    );
 
     return res.status(500).json({
-      error: "Error al marcar alertas como leídas",
+      error:
+        "Error al marcar alertas como resueltas",
       detalle: err.message,
     });
   }
 };
 
-// ========================================================
 // BORRADORES
-// ========================================================
-
 async function getNombreDeposito(pool, depositoId) {
   const id = asInt(depositoId);
 
@@ -2604,8 +2990,8 @@ exports.saveDraft = async (req, res) => {
         .input("remitoReferencia", sql.NVarChar(255), remitoReferencia)
         .input("referenteId", sql.Int, referenteId)
         .input("fechaReal", sql.Date, fechaReal)
-        .input("obra", sql.NVarChar(sql.MAX), obra)
-        .input("version", sql.NVarChar(sql.MAX), version)
+        .input("obra", sql.NVarChar(200), obra)
+        .input("version", sql.NVarChar(100), version)
         .input("usuario", sql.NVarChar(255), usuario).query(`
             INSERT INTO dbo.ajustes_borradores
             (
@@ -3006,11 +3392,6 @@ exports.confirmDraft = async (req, res) => {
 // ========================================================
 // REVERSIÓN DE MOVIMIENTOS POR REFERENCIA
 // ========================================================
-
-function getUsuarioReq(req) {
-  return req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
-}
-
 async function getExistingTableName(executor, names) {
   const request =
     executor instanceof sql.Transaction
@@ -3048,43 +3429,43 @@ function createDbRequest(executor) {
     : executor.request();
 }
 
-async function getEfectosPorReferencia(executor, referencia) {
+async function getEfectosPorReferencia(
+  executor, 
+  referencia, 
+  tablasReversion = null,
+) {
   const efectos = [];
 
-  const transferenciaDetalle = await getExistingTableName(executor, [
-    "transferencias_detalle",
-    "transferencia_detalles",
-    "transferencias_detalles",
-  ]);
-
-  const ajusteDetalle = await getExistingTableName(executor, [
-    "ajustes_detalles",
-    "ajuste_detalles",
-  ]);
-
-  const ajustesTable = await getExistingTableName(executor, ["ajustes"]);
-
-  const remitosTable = await getExistingTableName(executor, ["remitos"]);
-
-  const remitosDetalle = await getExistingTableName(executor, [
-    "remitos_detalles",
-  ]);
-
-  // ------------------------------------------------------
-  // AJUSTES
-  // ------------------------------------------------------
+  const tablas =
+    tablasReversion ||
+    (await getTablasReversion(executor));
+  
+   const {
+    transferenciaDetalle,
+    ajusteDetalle,
+    ajustesTable,
+    remitosTable,
+    remitosDetalle,
+  } = tablas;
 
   if (ajustesTable && ajusteDetalle) {
     const request = createDbRequest(executor).input(
       "referencia",
-      sql.NVarChar(255),
+      sql.NVarChar(200),
       referencia,
     );
 
     const result = await request.query(`
       SELECT
         CAST(
-          'AJUSTE' AS VARCHAR(50)
+          CASE
+            WHEN ad.cantidad > 0
+              THEN 'AJUSTE (Ingreso)'
+            WHEN ad.cantidad < 0
+              THEN 'AJUSTE (Egreso)'
+            ELSE 'AJUSTE'
+          END
+          AS VARCHAR(50)
         ) AS tipo_original,
 
         CAST(
@@ -3135,18 +3516,7 @@ async function getEfectosPorReferencia(executor, referencia) {
         ON ref.id_referente = a.id_referente
 
       WHERE
-        UPPER(
-          LTRIM(
-            RTRIM(
-              ISNULL(a.remito_referencia, '')
-            )
-          )
-        ) =
-        UPPER(
-          LTRIM(
-            RTRIM(@referencia)
-          )
-        )
+        a.remito_referencia = @referencia
 
         AND UPPER(
           LTRIM(
@@ -3173,7 +3543,7 @@ async function getEfectosPorReferencia(executor, referencia) {
   if (transferenciaDetalle) {
     const request = createDbRequest(executor).input(
       "referencia",
-      sql.NVarChar(255),
+      sql.NVarChar(200),
       referencia,
     );
 
@@ -3234,19 +3604,7 @@ async function getEfectosPorReferencia(executor, referencia) {
         ON ref.id_referente = t.id_referente
 
       WHERE
-        UPPER(
-          LTRIM(
-            RTRIM(
-              ISNULL(t.remito_referencia, '')
-            )
-          )
-        ) =
-        UPPER(
-          LTRIM(
-            RTRIM(@referencia)
-          )
-        )
-
+        t.remito_referencia = @referencia
       UNION ALL
 
       SELECT
@@ -3305,18 +3663,7 @@ async function getEfectosPorReferencia(executor, referencia) {
         ON ref.id_referente = t.id_referente
 
       WHERE
-        UPPER(
-          LTRIM(
-            RTRIM(
-              ISNULL(t.remito_referencia, '')
-            )
-          )
-        ) =
-        UPPER(
-          LTRIM(
-            RTRIM(@referencia)
-          )
-        );
+  t.remito_referencia = @referencia;
     `);
 
     efectos.push(...(result.recordset || []));
@@ -3329,14 +3676,25 @@ async function getEfectosPorReferencia(executor, referencia) {
   if (remitosTable && remitosDetalle) {
     const request = createDbRequest(executor).input(
       "referencia",
-      sql.NVarChar(255),
+      sql.NVarChar(200),
       referencia,
     );
 
     const result = await request.query(`
       SELECT
         CAST(
-          'REMITO' AS VARCHAR(50)
+          CASE
+            WHEN UPPER(
+              LTRIM(
+                RTRIM(
+                  ISNULL(r.tipo, '')
+                )
+              )
+            ) = 'SALIDA'
+              THEN 'REMITO (Egreso)'
+            ELSE 'REMITO (Ingreso)'
+          END
+          AS VARCHAR(50)
         ) AS tipo_original,
 
         CAST(
@@ -3426,18 +3784,112 @@ async function getEfectosPorReferencia(executor, referencia) {
   }
 
   return efectos
-    .map((row) => ({
+  .map((row, index) => {
+    const tipoOriginal = String(
+      row.tipo_original || "",
+    )
+      .trim()
+      .toUpperCase();
+
+    const numeroOriginal = String(
+      row.numero_original || "",
+    ).trim();
+
+    const deposito = String(
+      row.deposito || "",
+    )
+      .trim()
+      .toUpperCase();
+
+    const codigo = String(
+      row.codigo || "",
+    )
+      .trim()
+      .toUpperCase();
+
+    const cantidadOriginal = Number(
+      row.cantidad_original || 0,
+    );
+
+    const cantidadReversion = Number(
+      row.cantidad_reversion || 0,
+    );
+
+    /*
+     * El índice se agrega para diferenciar líneas repetidas
+     * dentro de una misma transacción.
+     */
+    const idMovimientoOriginal = [
+      tipoOriginal,
+      numeroOriginal,
+      deposito,
+      codigo,
+      cantidadOriginal,
+      index,
+    ].join("|");
+
+    return {
       ...row,
 
-      cantidad_original: Number(row.cantidad_original || 0),
+      id_movimiento_original:
+        idMovimientoOriginal,
 
-      cantidad_reversion: Number(row.cantidad_reversion || 0),
+      cantidad_original:
+        cantidadOriginal,
 
-      id_referente: row.id_referente == null ? null : Number(row.id_referente),
-    }))
-    .filter(
-      (row) => row.codigo && row.deposito && row.cantidad_reversion !== 0,
-    );
+      cantidad_reversion:
+        cantidadReversion,
+
+      id_referente:
+        row.id_referente == null
+          ? null
+          : Number(row.id_referente),
+    };
+  })
+  .filter(
+    (row) =>
+      row.codigo &&
+      row.deposito &&
+      row.cantidad_reversion !== 0,
+  );
+}
+
+async function getTablasReversion(executor) {
+  const transferenciaDetalle =
+    await getExistingTableName(executor, [
+      "transferencias_detalle",
+      "transferencia_detalles",
+      "transferencias_detalles",
+    ]);
+
+  const ajusteDetalle =
+    await getExistingTableName(executor, [
+      "ajustes_detalles",
+      "ajuste_detalles",
+    ]);
+
+  const ajustesTable =
+    await getExistingTableName(executor, [
+      "ajustes",
+    ]);
+
+  const remitosTable =
+    await getExistingTableName(executor, [
+      "remitos",
+    ]);
+
+  const remitosDetalle =
+    await getExistingTableName(executor, [
+      "remitos_detalles",
+    ]);
+
+  return {
+    transferenciaDetalle,
+    ajusteDetalle,
+    ajustesTable,
+    remitosTable,
+    remitosDetalle,
+  };
 }
 
 async function consumirStockReversion(
@@ -3525,79 +3977,366 @@ async function consumirStockReversion(
 // PREVISUALIZAR REVERSIÓN
 // ========================================================
 
-exports.previewReversionReferencia = async (req, res) => {
-  try {
-    const referencia = String(req.params.referencia || "").trim();
+async function procesarReferenciasEnLotes(
+  referencias,
+  cantidadPorLote,
+  callback,
+) {
+  const resultados = [];
 
-    if (!referencia) {
+  for (
+    let inicio = 0;
+    inicio < referencias.length;
+    inicio += cantidadPorLote
+  ) {
+    const lote = referencias.slice(
+      inicio,
+      inicio + cantidadPorLote,
+    );
+
+    const resultadosLote = await Promise.all(
+      lote.map(callback),
+    );
+
+    for (const resultado of resultadosLote) {
+      if (Array.isArray(resultado)) {
+        resultados.push(...resultado);
+      }
+    }
+  }
+
+  return resultados;
+}
+
+async function obtenerIdsYaRevertidos(
+  poolOrTransaction,
+  idsMovimientos,
+) {
+  const ids = [
+    ...new Set(
+      (idsMovimientos || [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+
+  const idsRevertidos = new Set();
+
+  if (!ids.length) {
+    return idsRevertidos;
+  }
+
+  /*
+   * SQL Server admite un máximo aproximado de 2100 parámetros.
+   * Usamos bloques de 500 para mantener un margen seguro.
+   */
+  const cantidadPorLote = 500;
+
+  for (
+    let inicio = 0;
+    inicio < ids.length;
+    inicio += cantidadPorLote
+  ) {
+    const lote = ids.slice(
+      inicio,
+      inicio + cantidadPorLote,
+    );
+
+    const request = new sql.Request(
+      poolOrTransaction,
+    );
+
+    const parametros = lote.map((id, index) => {
+      const nombre = `idMovimiento${index}`;
+
+      request.input(
+        nombre,
+        sql.NVarChar(600),
+        id,
+      );
+
+      return `@${nombre}`;
+    });
+
+    const result = await request.query(`
+      SELECT id_movimiento_original
+      FROM dbo.ajustes_reversiones_detalles
+      WHERE id_movimiento_original IN
+      (
+        ${parametros.join(",")}
+      );
+    `);
+
+    for (const fila of result.recordset || []) {
+      const id = String(
+        fila.id_movimiento_original || "",
+      ).trim();
+
+      if (id) {
+        idsRevertidos.add(id);
+      }
+    }
+  }
+
+  return idsRevertidos;
+}
+
+exports.buscarMovimientosParaReversion = async (req, res) => {
+  const inicioProceso = Date.now();
+
+  try {
+    const modo = String(req.query?.modo || "")
+      .trim()
+      .toLowerCase();
+
+    const referencia = String(
+      req.query?.referencia || "",
+    ).trim();
+
+    const obra = String(req.query?.obra || "").trim();
+
+    const version = String(
+      req.query?.version || "",
+    ).trim();
+
+    if (
+      !["referencia", "obra_version"].includes(
+        modo,
+      )
+    ) {
+      return res.status(400).json({
+        error: "Modo de búsqueda inválido",
+      });
+    }
+
+    if (
+      modo === "referencia" &&
+      !referencia
+    ) {
       return res.status(400).json({
         error: "Debe indicar una referencia",
+      });
+    }
+
+    if (
+      modo === "obra_version" &&
+      (!obra || !version)
+    ) {
+      return res.status(400).json({
+        error: "Debe indicar obra y versión",
       });
     }
 
     await poolConnect;
     const pool = await getPool();
 
-    const previa = await pool
-      .request()
-      .input("referencia", sql.NVarChar(255), referencia).query(`
-            SELECT TOP 1
-              id_reversion,
-              referencia_original,
-              fecha_reversion,
-              usuario,
-              motivo,
-              estado
+    const tablasReversion = await getTablasReversion(pool);
+    let movimientos = [];
 
-            FROM dbo.ajustes_reversiones
+    if (modo === "referencia") {
+      movimientos =
+        await getEfectosPorReferencia(
+          pool,
+          referencia,
+          tablasReversion,
+        );
+    } else {
+      /*
+       * Gracias al índice IX_ajustes_obra_version,
+       * esta consulta puede localizar directamente
+       * los ajustes de la obra y la versión.
+       */
+      const referenciasResult = await pool
+        .request()
+        .input(
+          "obra",
+          sql.NVarChar(200),
+          obra,
+        )
+        .input(
+          "version",
+          sql.NVarChar(100),
+          version,
+        )
+        .query(`
+          SELECT DISTINCT
+            remito_referencia
+          FROM dbo.ajustes
+          WHERE obra = @obra
+            AND version = @version
+            AND remito_referencia IS NOT NULL
+            AND remito_referencia <> '';
+        `);
 
-            WHERE
-              UPPER(
-                LTRIM(
-                  RTRIM(
-                    referencia_original
-                  )
-                )
-              ) =
-              UPPER(
-                LTRIM(
-                  RTRIM(
-                    @referencia
-                  )
-                )
-              )
+      const referencias = [
+        ...new Set(
+          (
+            referenciasResult.recordset ||
+            []
+          )
+            .map((fila) =>
+              String(
+                fila.remito_referencia ||
+                  "",
+              ).trim(),
+            )
+            .filter(Boolean),
+        ),
+      ];
 
-              AND estado = 'CONFIRMADA';
-          `);
+      if (!referencias.length) {
+        return res.status(404).json({
+          error:
+            "No se encontraron referencias para esa obra y versión",
+        });
+      }
 
-    if (previa.recordset.length) {
-      return res.status(409).json({
-        error: "La referencia ya fue revertida",
+      movimientos =
+        await procesarReferenciasEnLotes(
+          referencias,
+          15,
+          async (
+            referenciaEncontrada,
+          ) => {
+            const encontrados =
+              await getEfectosPorReferencia(
+                pool,
+                referenciaEncontrada,
+                tablasReversion,
+              );
 
-        reversion: previa.recordset[0],
+            return encontrados.map(
+              (movimiento) => ({
+                ...movimiento,
+
+                referencia_busqueda:
+                  referenciaEncontrada,
+              }),
+            );
+          },
+        );
+    }
+
+    /*
+     * Eliminamos eventuales duplicados.
+     */
+    const movimientosUnicos = [];
+    const idsEncontrados = new Set();
+
+    for (const movimiento of movimientos) {
+      const id = String(
+        movimiento.id_movimiento_original ||
+          "",
+      ).trim();
+
+      if (!id) {
+        continue;
+      }
+
+      if (idsEncontrados.has(id)) {
+        continue;
+      }
+
+      idsEncontrados.add(id);
+
+      movimientosUnicos.push({
+        ...movimiento,
+
+        id_movimiento_original: id,
       });
     }
 
-    const movimientos = await getEfectosPorReferencia(pool, referencia);
-
-    if (!movimientos.length) {
+    if (!movimientosUnicos.length) {
       return res.status(404).json({
-        error: "No se encontraron movimientos para esa referencia",
+        error:
+          modo === "referencia"
+            ? "No se encontraron movimientos para esa referencia"
+            : "No se encontraron movimientos para esa obra y versión",
       });
     }
+
+    /*
+     * Consultamos únicamente los IDs que aparecieron
+     * en esta búsqueda.
+     *
+     * Antes se descargaba la tabla completa de
+     * ajustes_reversiones_detalles.
+     */
+    const idsRevertidos =
+      await obtenerIdsYaRevertidos(
+        pool,
+        movimientosUnicos.map(
+          (movimiento) =>
+            movimiento.id_movimiento_original,
+        ),
+      );
+
+    const movimientosDisponibles =
+      movimientosUnicos.map(
+        (movimiento) => ({
+          ...movimiento,
+
+          ya_revertido:
+            idsRevertidos.has(
+              movimiento.id_movimiento_original,
+            ),
+        }),
+      );
+
+    const tiempoMs =
+      Date.now() - inicioProceso;
+
+    console.log(
+      [
+        "Búsqueda de reversión:",
+        `modo=${modo}`,
+        `movimientos=${movimientosDisponibles.length}`,
+        `revertidos=${idsRevertidos.size}`,
+        `tiempo=${tiempoMs}ms`,
+      ].join(" "),
+    );
 
     return res.json({
-      referencia,
+      modo,
 
-      cantidad_movimientos: movimientos.length,
+      referencia:
+        modo === "referencia"
+          ? referencia
+          : null,
 
-      movimientos,
+      obra:
+        modo === "obra_version"
+          ? obra
+          : null,
+
+      version:
+        modo === "obra_version"
+          ? version
+          : null,
+
+      cantidad_movimientos:
+        movimientosDisponibles.length,
+
+      cantidad_disponibles:
+        movimientosDisponibles.filter(
+          (movimiento) =>
+            !movimiento.ya_revertido,
+        ).length,
+
+      tiempo_ms: tiempoMs,
+
+      movimientos:
+        movimientosDisponibles,
     });
   } catch (err) {
-    console.error("ajustes.previewReversionReferencia:", err);
+    console.error(
+      "ajustes.buscarMovimientosParaReversion:",
+      err,
+    );
 
     return res.status(500).json({
-      error: "Error al consultar la referencia",
+      error:
+        "Error al buscar movimientos para reversión",
 
       detalle: err.message,
     });
@@ -3609,23 +4348,81 @@ exports.previewReversionReferencia = async (req, res) => {
 // ========================================================
 
 exports.revertirReferencia = async (req, res) => {
-  const referencia = String(req.params.referencia || "").trim();
+  const modo = String(
+    req.body?.modo || "",
+  )
+    .trim()
+    .toLowerCase();
 
-  const confirmar = req.body?.confirmar === true;
+  const referencia = String(
+    req.body?.referencia || "",
+  ).trim();
 
-  const motivoUsuario = toDb(req.body?.motivo);
+  const obra = String(
+    req.body?.obra || "",
+  ).trim();
+
+  const version = String(
+    req.body?.version || "",
+  ).trim();
+
+  const confirmar =
+    req.body?.confirmar === true;
+
+  const movimientosSeleccionados =
+    Array.isArray(req.body?.movimientos)
+      ? req.body.movimientos
+          .map((id) =>
+            String(id || "").trim(),
+          )
+          .filter(Boolean)
+      : [];
+
+  const motivoUsuario = toDb(
+    req.body?.motivo,
+  );
 
   const usuario = getUsuarioReq(req);
 
-  if (!referencia) {
+  if (
+    !["referencia", "obra_version"].includes(
+      modo,
+    )
+  ) {
+    return res.status(400).json({
+      error: "Modo de reversión inválido",
+    });
+  }
+
+  if (
+    modo === "referencia" &&
+    !referencia
+  ) {
     return res.status(400).json({
       error: "Debe indicar una referencia",
     });
   }
 
+  if (
+    modo === "obra_version" &&
+    (!obra || !version)
+  ) {
+    return res.status(400).json({
+      error: "Debe indicar obra y versión",
+    });
+  }
+
   if (!confirmar) {
     return res.status(400).json({
-      error: "La reversión requiere confirmar: true",
+      error:
+        "La reversión requiere confirmar: true",
+    });
+  }
+
+  if (!movimientosSeleccionados.length) {
+    return res.status(400).json({
+      error:
+        "Debe seleccionar al menos un movimiento para revertir",
     });
   }
 
@@ -3638,57 +4435,134 @@ exports.revertirReferencia = async (req, res) => {
     transaction = new sql.Transaction(pool);
 
     await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    const tablasReversion =
+      await getTablasReversion(transaction);
 
-    const existente = await new sql.Request(transaction).input(
-      "referencia",
-      sql.NVarChar(255),
+    let todosLosMovimientos = [];
+
+if (modo === "referencia") {
+  todosLosMovimientos =
+    await getEfectosPorReferencia(
+      transaction,
       referencia,
-    ).query(`
-            SELECT TOP 1
-              id_reversion,
-              fecha_reversion
+      tablasReversion,
+    );
+} else {
+  const referenciasResult =
+    await new sql.Request(transaction)
+      .input(
+        "obra",
+        sql.NVarChar(200),
+        obra,
+      )
+      .input(
+        "version",
+        sql.NVarChar(100),
+        version,
+      )
+      .query(`
+        SELECT DISTINCT
+          remito_referencia
+        FROM dbo.ajustes
+        WHERE obra = @obra
+          AND version = @version
+          AND remito_referencia IS NOT NULL
+          AND remito_referencia <> '';
+      `);
 
-            FROM dbo.ajustes_reversiones
-            WITH (UPDLOCK, HOLDLOCK)
+  const referencias = [
+    ...new Set(
+      (referenciasResult.recordset || [])
+        .map((fila) =>
+          String(
+            fila.remito_referencia || "",
+          ).trim(),
+        )
+        .filter(Boolean),
+    ),
+  ];
 
-            WHERE
-              UPPER(
-                LTRIM(
-                  RTRIM(
-                    referencia_original
-                  )
-                )
-              ) =
-              UPPER(
-                LTRIM(
-                  RTRIM(
-                    @referencia
-                  )
-                )
-              )
+  todosLosMovimientos = [];
+  for (const referenciaEncontrada of referencias) {
+    const movimientosReferencia =
+      await getEfectosPorReferencia(
+        transaction,
+        referenciaEncontrada,
+        tablasReversion,
+      );
 
-              AND estado = 'CONFIRMADA';
-          `);
+    todosLosMovimientos.push(
+      ...movimientosReferencia,
+    );
+  }
+}
 
-    if (existente.recordset.length) {
-      await transaction.rollback();
+const seleccionadosSet = new Set(
+  movimientosSeleccionados,
+);
 
-      return res.status(409).json({
-        error: "La referencia ya fue revertida",
+const movimientos =
+  todosLosMovimientos.filter(
+    (movimiento) =>
+      seleccionadosSet.has(
+        String(
+          movimiento.id_movimiento_original,
+        ),
+      ),
+  );
 
-        reversion: existente.recordset[0],
-      });
-    }
-
-    const movimientos = await getEfectosPorReferencia(transaction, referencia);
-
-    if (!movimientos.length) {
+if (!movimientos.length) {
       await transaction.rollback();
 
       return res.status(404).json({
         error: "No se encontraron movimientos para esa referencia",
       });
     }
+
+    const requestRevertidos =
+  new sql.Request(transaction);
+
+const parametrosRevertidos =
+  movimientos.map(
+    (_, index) =>
+      `@movimiento${index}`,
+  );
+
+movimientos.forEach(
+  (movimiento, index) => {
+    requestRevertidos.input(
+      `movimiento${index}`,
+      sql.NVarChar(600),
+      movimiento.id_movimiento_original,
+    );
+  },
+);
+
+const revertidosResult =
+  await requestRevertidos.query(`
+    SELECT
+      id_movimiento_original
+
+    FROM dbo.ajustes_reversiones_detalles
+    WITH (UPDLOCK, HOLDLOCK)
+
+    WHERE id_movimiento_original IN
+    (
+      ${parametrosRevertidos.join(",")}
+    );
+  `);
+
+if (revertidosResult.recordset.length) {
+  await transaction.rollback();
+
+  return res.status(409).json({
+    error:
+      "Uno o más movimientos seleccionados ya fueron revertidos",
+
+    movimientos:
+      revertidosResult.recordset,
+  });
+}
 
     const motivoId = await getMotivoIdByNombreActivo(
       transaction,
@@ -3991,38 +4865,77 @@ exports.revertirReferencia = async (req, res) => {
 
         for (const fuente of grupo.fuentes) {
           await new sql.Request(transaction)
-            .input("idReversion", sql.Int, idReversion)
-            .input("numeroAjuste", sql.Int, numeroAjuste)
-            .input("tipoOriginal", sql.NVarChar(50), fuente.tipo_original)
-            .input("numeroOriginal", sql.NVarChar(50), fuente.numero_original)
-            .input("deposito", sql.NVarChar(255), fuente.deposito)
-            .input("codigo", sql.NVarChar(100), fuente.codigo)
-            .input("cantidadOriginal", sql.Int, fuente.cantidad_original)
-            .input("cantidadReversion", sql.Int, fuente.cantidad_reversion)
-            .query(`
-                INSERT INTO dbo.ajustes_reversiones_detalles
-                (
-                  id_reversion,
-                  numero_ajuste_generado,
-                  tipo_original,
-                  numero_transaccion_original,
-                  deposito,
-                  codigo,
-                  cantidad_original,
-                  cantidad_reversion
-                )
-                VALUES
-                (
-                  @idReversion,
-                  @numeroAjuste,
-                  @tipoOriginal,
-                  @numeroOriginal,
-                  @deposito,
-                  @codigo,
-                  @cantidadOriginal,
-                  @cantidadReversion
-                );
-              `);
+  .input(
+    "idReversion",
+    sql.Int,
+    idReversion,
+  )
+  .input(
+    "numeroAjuste",
+    sql.Int,
+    numeroAjuste,
+  )
+  .input(
+    "tipoOriginal",
+    sql.NVarChar(50),
+    fuente.tipo_original,
+  )
+  .input(
+    "numeroOriginal",
+    sql.NVarChar(50),
+    fuente.numero_original,
+  )
+  .input(
+    "deposito",
+    sql.NVarChar(255),
+    fuente.deposito,
+  )
+  .input(
+    "codigo",
+    sql.NVarChar(100),
+    fuente.codigo,
+  )
+  .input(
+    "cantidadOriginal",
+    sql.Int,
+    fuente.cantidad_original,
+  )
+  .input(
+    "cantidadReversion",
+    sql.Int,
+    fuente.cantidad_reversion,
+  )
+  .input(
+    "idMovimientoOriginal",
+    sql.NVarChar(600),
+    fuente.id_movimiento_original,
+  )
+  .query(`
+    INSERT INTO dbo.ajustes_reversiones_detalles
+    (
+      id_reversion,
+      numero_ajuste_generado,
+      tipo_original,
+      numero_transaccion_original,
+      deposito,
+      codigo,
+      cantidad_original,
+      cantidad_reversion,
+      id_movimiento_original
+    )
+    VALUES
+    (
+      @idReversion,
+      @numeroAjuste,
+      @tipoOriginal,
+      @numeroOriginal,
+      @deposito,
+      @codigo,
+      @cantidadOriginal,
+      @cantidadReversion,
+      @idMovimientoOriginal
+    );
+  `);
         }
       }
 
@@ -4057,7 +4970,7 @@ exports.revertirReferencia = async (req, res) => {
 
     if (Number(err?.number) === 2601 || Number(err?.number) === 2627) {
       return res.status(409).json({
-        error: "La referencia ya fue revertida",
+        error: "Uno de los movimientos seleccionados ya fue revertido",
       });
     }
 

@@ -34,10 +34,6 @@ export default function AlertaConsumoProduccion() {
           lineas.join("\n\n");
 
         window.alert(mensaje);
-
-        await api.put("/ajustes/alertas-consumo/marcar-leidas", {
-          ids: alertas.map((a) => a.id_alerta),
-        });
       } catch (err) {
         console.error("Error consultando alertas de consumo automático:", err);
       }

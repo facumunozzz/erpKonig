@@ -3,7 +3,12 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
 import ReferentesModal from "../components/ReferentesModal";
-import {useExcelFilters, ExcelFilterButton} from "../components/ExcelColumnFilter";
+import RevertirMovimientosModal from "../components/RevertirMovimientosModal";
+import {
+  useExcelFilters,
+  ExcelFilterButton,
+} from "../components/ExcelColumnFilter";
+import RevisionesDropboxModal from "../components/RevisionesDropboxModal";
 
 const AJUSTE_COLUMNS = [
   ["estado", "Estado"],
@@ -33,80 +38,169 @@ const esMotivoOculto = (nombre) =>
 
 export default function Ajustes() {
   const navigate = useNavigate();
+  const [showRevisionesDropbox, setShowRevisionesDropbox] =
+    useState(false);
+  const [mostrarConsumosDropbox, setMostrarConsumosDropbox] =
+    useState(false);
+  const [cantidadRevisiones, setCantidadRevisiones] =
+    useState(0);
 
+  // LISTADO DE AJUSTES
   const [ajustes, setAjustes] = useState([]);
-  const [filtro, setFiltro] = useState("");
+  const [loadingAjustes, setLoadingAjustes] = useState(false);
 
-  // Motivos
-  const [showMotivos, setShowMotivos] = useState(false);
-
-  const [motivos, setMotivos] = useState([]);
-
-  const [nuevoMotivo, setNuevoMotivo] = useState("");
-
-  const [nuevoTipoMovimiento, setNuevoTipoMovimiento] = useState("");
-
-  const [motivosError, setMotivosError] = useState("");
-
-  // Referentes
-  const [showReferentes, setShowReferentes] = useState(false);
-
-  // Paginado
   const [currentPage, setCurrentPage] = useState(1);
-
   const [pageSize, setPageSize] = useState(25);
-
   const [gotoPage, setGotoPage] = useState("");
 
-  // Reversión por referencia
+  const [totalRows, setTotalRows] = useState(0);
+  const [serverTotalPages, setServerTotalPages] = useState(1);
+  const [paginacionServidor, setPaginacionServidor] = useState(false);
+
+  // =====================================================
+  // MOTIVOS
+  // =====================================================
+
+  const [showMotivos, setShowMotivos] = useState(false);
+  const [motivos, setMotivos] = useState([]);
+  const [nuevoMotivo, setNuevoMotivo] = useState("");
+  const [nuevoTipoMovimiento, setNuevoTipoMovimiento] = useState("");
+  const [motivosError, setMotivosError] = useState("");
+
+  // =====================================================
+  // REFERENTES
+  // =====================================================
+
+  const [showReferentes, setShowReferentes] = useState(false);
+
+  // =====================================================
+  // REVERSIÓN
+  // =====================================================
+
   const [showReversion, setShowReversion] = useState(false);
 
-  const [referenciaReversion, setReferenciaReversion] = useState("");
+  // =====================================================
+  // CARGAR AJUSTES
+  // =====================================================
 
-  const [motivoReversion, setMotivoReversion] = useState("");
+  const fetchAjustes = async () => {
+    try {
+      setLoadingAjustes(true);
 
-  const [movimientosReversion, setMovimientosReversion] = useState([]);
-
-  const [buscandoReversion, setBuscandoReversion] = useState(false);
-
-  const [confirmandoReversion, setConfirmandoReversion] = useState(false);
-
-  const [errorReversion, setErrorReversion] = useState("");
-
-  const fetchAjustes = () => {
-    api
-      .get("/ajustes")
-      .then((response) => {
-        setAjustes(Array.isArray(response.data) ? response.data : []);
-      })
-      .catch((error) => {
-        console.error("Error cargando ajustes:", error);
+      const response = await api.get("/ajustes", {
+        params: {
+          page: currentPage,
+          pageSize,
+          incluirDropbox: mostrarConsumosDropbox ? 1 : 0,
+        },
       });
+
+      const payload = response.data;
+
+      /*
+       * Compatibilidad con el backend anterior.
+       *
+       * Si devuelve un array, el paginado se hace
+       * en el navegador.
+       */
+      if (Array.isArray(payload)) {
+        setPaginacionServidor(false);
+        setAjustes(payload);
+        setTotalRows(payload.length);
+        setServerTotalPages(Math.ceil(payload.length / pageSize) || 1);
+
+        return;
+      }
+
+      /*
+       * Si el backend devuelve:
+       *
+       * {
+       *   data: [],
+       *   total: 100,
+       *   totalPages: 4
+       * }
+       *
+       * utilizamos el paginado del servidor.
+       */
+      const data = Array.isArray(payload?.data) ? payload.data : [];
+
+      setPaginacionServidor(true);
+      setAjustes(data);
+      setTotalRows(Number(payload?.total || 0));
+      setServerTotalPages(Number(payload?.totalPages || 1));
+    } catch (error) {
+      console.error("Error cargando ajustes:", error);
+
+      setAjustes([]);
+      setTotalRows(0);
+      setServerTotalPages(1);
+    } finally {
+      setLoadingAjustes(false);
+    }
+  };
+
+  const fetchCantidadRevisiones = async () => {
+    try {
+      const response = await api.get(
+        "/ajustes/alertas-consumo/pendientes",
+      );
+      const payload = response.data;
+      const revisiones = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.data)
+          ? payload.data
+          : Array.isArray(payload?.alertas)
+            ? payload.alertas
+            : [];
+      setCantidadRevisiones(revisiones.length);
+    } catch (error) {
+      console.error(
+        "Error cargando revisiones Dropbox:",
+        error,
+      );
+      setCantidadRevisiones(0);
+    }
   };
 
   useEffect(() => {
-    fetchAjustes();
+    const timer = setTimeout(() => {
+      fetchAjustes();
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [currentPage, pageSize, mostrarConsumosDropbox]);
+
+  useEffect(() => {
+    fetchCantidadRevisiones();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // CONSUMIR PRODUCCIÓN
   const consumirProduccion = async () => {
     try {
       const response = await api.post("/ajustes/consumir-produccion");
 
       alert(
-        `Proceso finalizado. Ajustados: ${
-          response.data.ajustados || 0
-        }\nFallidos: ${response.data.fallidos || 0}`,
+        `Proceso finalizado.\n\nAjustados: ${
+          response.data?.ajustados || 0
+        }\nFallidos: ${response.data?.fallidos || 0}`,
       );
 
-      fetchAjustes();
+      await fetchAjustes();
+      await fetchCantidadRevisiones();
     } catch (error) {
-      alert(error.response?.data?.error || "Error al consumir producción");
+      alert(
+        error.response?.data?.error ||
+          error.response?.data?.detalle ||
+          "Error al consumir producción",
+      );
     }
   };
 
-  // =========================
-  // Descargar plantilla
-  // =========================
+  // =====================================================
+  // DESCARGAR PLANTILLA
+  // =====================================================
 
   const descargarPlantilla = async () => {
     try {
@@ -115,13 +209,13 @@ export default function Ajustes() {
       });
 
       const url = window.URL.createObjectURL(response.data);
-
       const link = document.createElement("a");
 
       link.href = url;
       link.download = "Plantilla_Ajustes.xlsx";
 
       document.body.appendChild(link);
+
       link.click();
       link.remove();
 
@@ -133,9 +227,9 @@ export default function Ajustes() {
     }
   };
 
-  // =========================
-  // Importar Excel
-  // =========================
+  // =====================================================
+  // IMPORTAR EXCEL
+  // =====================================================
 
   const importarExcel = async (event) => {
     const file = event.target.files?.[0];
@@ -155,7 +249,7 @@ export default function Ajustes() {
         },
       });
 
-      fetchAjustes();
+      await fetchAjustes();
 
       alert("Ajustes importados correctamente");
     } catch (error) {
@@ -163,7 +257,10 @@ export default function Ajustes() {
 
       const mensaje =
         error.response?.data?.error ||
-        (error.response?.data?.errores ? "Hay errores en el Excel" : null) ||
+        error.response?.data?.detalle ||
+        (error.response?.data?.errores
+          ? "Hay errores en el archivo Excel"
+          : null) ||
         "Error al importar ajustes";
 
       alert(mensaje);
@@ -172,9 +269,9 @@ export default function Ajustes() {
     }
   };
 
-  // =========================
-  // Motivos
-  // =========================
+  // =====================================================
+  // MOTIVOS
+  // =====================================================
 
   const fetchMotivos = async () => {
     const response = await api.get("/ajustes/motivos");
@@ -198,6 +295,7 @@ export default function Ajustes() {
 
       setMotivosError(
         error.response?.data?.error ||
+          error.response?.data?.detalle ||
           error.message ||
           "No se pudieron cargar los motivos.",
       );
@@ -214,16 +312,14 @@ export default function Ajustes() {
     try {
       await api.post("/ajustes/motivos", {
         nombre,
-
         tipo_movimiento: nuevoTipoMovimiento || null,
       });
 
       setNuevoMotivo("");
       setNuevoTipoMovimiento("");
+      setMotivosError("");
 
       await fetchMotivos();
-
-      setMotivosError("");
     } catch (error) {
       alert(error.response?.data?.error || "Error al crear motivo");
     }
@@ -247,9 +343,9 @@ export default function Ajustes() {
         nombre,
       });
 
-      await fetchMotivos();
-
       setMotivosError("");
+
+      await fetchMotivos();
     } catch (error) {
       alert(error.response?.data?.error || "Error al editar motivo");
     }
@@ -261,9 +357,9 @@ export default function Ajustes() {
         activo: !activo,
       });
 
-      await fetchMotivos();
-
       setMotivosError("");
+
+      await fetchMotivos();
     } catch (error) {
       alert(error.response?.data?.error || "Error al cambiar estado");
     }
@@ -275,19 +371,20 @@ export default function Ajustes() {
         tipo_movimiento: tipoMovimiento || null,
       });
 
-      await fetchMotivos();
-
       setMotivosError("");
+
+      await fetchMotivos();
     } catch (error) {
       alert(
-        error.response?.data?.error || "Error al cambiar tipo de movimiento",
+        error.response?.data?.error ||
+          "Error al cambiar el tipo de movimiento",
       );
     }
   };
 
   const borrarMotivo = async (id) => {
     const confirmado = window.confirm(
-      "¿Borrar motivo? Solo se podrá borrar si nunca fue usado.",
+      "¿Borrar motivo? Solo se podrá borrar si nunca fue utilizado.",
     );
 
     if (!confirmado) {
@@ -297,17 +394,23 @@ export default function Ajustes() {
     try {
       await api.delete(`/ajustes/motivos/${id}`);
 
-      await fetchMotivos();
-
       setMotivosError("");
+
+      await fetchMotivos();
     } catch (error) {
       alert(error.response?.data?.error || "Error al borrar motivo");
     }
   };
 
+  // =====================================================
+  // FILTROS DE LA TABLA
+  // =====================================================
+
   const getAjusteValue = (ajuste, key) => {
     if (key === "fecha") {
-      return ajuste.fecha ? new Date(ajuste.fecha).toLocaleString("es-AR") : "";
+      return ajuste.fecha
+        ? new Date(ajuste.fecha).toLocaleString("es-AR")
+        : "";
     }
 
     if (key === "fecha_real") {
@@ -328,7 +431,6 @@ export default function Ajustes() {
       AJUSTE_COLUMNS.map(([key, label]) => ({
         key,
         label,
-
         getValue: (row) => getAjusteValue(row, key),
       })),
     [],
@@ -338,246 +440,142 @@ export default function Ajustes() {
     onChange: () => setCurrentPage(1),
   });
 
-  // =========================
-  // Filtro
-  // =========================
+  const filtrados = useMemo(() => {
+    return excel.rows;
+  }, [excel.rows]);
+  
+  // PAGINADO DE AJUSTES
+  const totalPages = paginacionServidor
+    ? serverTotalPages || 1
+    : Math.ceil(filtrados.length / pageSize) || 1;
 
-  const filtrados = excel.rows.filter(
-    (ajuste) =>
-      !filtro ||
-      Object.values(ajuste).some((value) =>
-        String(value ?? "")
-          .toLowerCase()
-          .includes(filtro.toLowerCase()),
-      ),
-  );
+  const paginated = useMemo(() => {
+    if (paginacionServidor) {
+      return filtrados;
+    }
 
-  // =========================
-  // Paginado
-  // =========================
+    const inicio = (currentPage - 1) * pageSize;
+    const fin = currentPage * pageSize;
 
-  const totalPages = Math.ceil(filtrados.length / pageSize) || 1;
-
-  const paginated = filtrados.slice(
-    (currentPage - 1) * pageSize,
-
-    currentPage * pageSize,
-  );
+    return filtrados.slice(inicio, fin);
+  }, [
+    paginacionServidor,
+    filtrados,
+    currentPage,
+    pageSize,
+  ]);
 
   const irPagina = (pagina) => {
     const numero = Number(pagina);
 
-    if (!Number.isFinite(numero) || numero < 1 || numero > totalPages) {
+    if (
+      !Number.isFinite(numero) ||
+      numero < 1 ||
+      numero > totalPages
+    ) {
       return;
     }
 
     setCurrentPage(numero);
   };
 
-  const from = filtrados.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const cantidadTotalMostrada = paginacionServidor
+    ? totalRows
+    : filtrados.length;
 
-  const to = Math.min(currentPage * pageSize, filtrados.length);
+  const from =
+    cantidadTotalMostrada === 0
+      ? 0
+      : (currentPage - 1) * pageSize + 1;
 
-  // =========================
-  // Reversión por referencia
-  // =========================
+  const to = Math.min(
+    currentPage * pageSize,
+    cantidadTotalMostrada,
+  );
 
-  const abrirReversion = () => {
-    setReferenciaReversion("");
-    setMotivoReversion("");
-    setMovimientosReversion([]);
-    setErrorReversion("");
-    setShowReversion(true);
-  };
-
-  const cerrarReversion = () => {
-    if (buscandoReversion || confirmandoReversion) {
-      return;
-    }
-
-    setShowReversion(false);
-    setReferenciaReversion("");
-    setMotivoReversion("");
-    setMovimientosReversion([]);
-    setErrorReversion("");
-  };
-
-  const buscarMovimientosReversion = async () => {
-    const referencia = String(referenciaReversion || "").trim();
-
-    if (!referencia) {
-      setErrorReversion("Ingresá una referencia.");
-
-      return;
-    }
-
-    try {
-      setBuscandoReversion(true);
-      setErrorReversion("");
-      setMovimientosReversion([]);
-
-      const response = await api.get(
-        `/ajustes/reversiones/referencia/${encodeURIComponent(referencia)}`,
-      );
-
-      const movimientos = Array.isArray(response.data?.movimientos)
-        ? response.data.movimientos
-        : [];
-
-      if (!movimientos.length) {
-        setErrorReversion("No se encontraron movimientos para esa referencia.");
-
-        return;
-      }
-
-      setMovimientosReversion(movimientos);
-    } catch (error) {
-      console.error("Error buscando referencia:", error);
-
-      const mensaje =
-        error.response?.data?.error ||
-        error.response?.data?.detalle ||
-        "No se pudo buscar la referencia.";
-
-      const reversion = error.response?.data?.reversion;
-
-      if (error.response?.status === 409 && reversion) {
-        setErrorReversion(
-          `${mensaje}. Fecha: ${
-            reversion.fecha_reversion
-              ? new Date(reversion.fecha_reversion).toLocaleString("es-AR")
-              : ""
-          }`,
-        );
-      } else {
-        setErrorReversion(mensaje);
-      }
-    } finally {
-      setBuscandoReversion(false);
-    }
-  };
-
-  const confirmarReversion = async () => {
-    const referencia = String(referenciaReversion || "").trim();
-
-    if (!referencia) {
-      setErrorReversion("Ingresá una referencia.");
-
-      return;
-    }
-
-    if (!movimientosReversion.length) {
-      setErrorReversion("Primero buscá la referencia.");
-
-      return;
-    }
-
-    const confirmado = window.confirm(
-      `Se revertirán todos los movimientos de la referencia "${referencia}".\n\n` +
-        "Se crearán ajustes inversos y se modificará el stock.\n\n" +
-        "Esta operación no puede ejecutarse dos veces.\n\n" +
-        "¿Confirmás la reversión?",
-    );
-
-    if (!confirmado) {
-      return;
-    }
-
-    try {
-      setConfirmandoReversion(true);
-
-      setErrorReversion("");
-
-      const response = await api.post(
-        `/ajustes/reversiones/referencia/${encodeURIComponent(referencia)}`,
-        {
-          confirmar: true,
-
-          motivo: motivoReversion.trim() || null,
-        },
-      );
-
-      const ajustesGenerados = Array.isArray(response.data?.ajustes_generados)
-        ? response.data.ajustes_generados
-        : [];
-
-      const detalle = ajustesGenerados
-        .map((ajuste) => `Ajuste ${ajuste.numero_ajuste} - ${ajuste.deposito}`)
-        .join("\n");
-
-      alert(
-        `Referencia revertida correctamente.${detalle ? `\n\n${detalle}` : ""}`,
-      );
-
-      setShowReversion(false);
-      setReferenciaReversion("");
-      setMotivoReversion("");
-      setMovimientosReversion([]);
-      setErrorReversion("");
-
-      fetchAjustes();
-    } catch (error) {
-      console.error("Error revirtiendo referencia:", error);
-
-      const mensaje =
-        error.response?.data?.error ||
-        error.response?.data?.detalle ||
-        "No se pudo revertir la referencia.";
-
-      const faltantes = error.response?.data?.faltantes;
-
-      if (Array.isArray(faltantes) && faltantes.length) {
-        const detalle = faltantes
-          .map(
-            (item) =>
-              `${item.codigo} en ${item.deposito}: necesita ${item.requerido}, disponible ${item.disponible}`,
-          )
-          .join("\n");
-
-        setErrorReversion(`${mensaje}\n${detalle}`);
-      } else {
-        setErrorReversion(mensaje);
-      }
-    } finally {
-      setConfirmandoReversion(false);
-    }
-  };
+  // =====================================================
+  // RENDER
+  // =====================================================
 
   return (
     <div className="transferencias-page">
       <h2 className="module-title">Ajustes</h2>
 
       <div className="acciones">
-        <button type="button" onClick={() => navigate("/ajustes/nuevo")}>
+        <button
+          type="button"
+          onClick={() => navigate("/ajustes/nuevo")}
+        >
           Nuevo ajuste
-        </button>
-
-        <button type="button" onClick={abrirReversion}>
-          ↩ Revertir referencia
-        </button>
-
-        <button type="button" onClick={abrirMotivos}>
-          🧾 Motivos
-        </button>
-
-        <button type="button" onClick={() => setShowReferentes(true)}>
-          👤 Actuantes
         </button>
 
         <button
           type="button"
+          onClick={() => setShowReversion(true)}
+        >
+          ↩ Revertir movimientos
+        </button>
+
+        <button type="button" className={
+            cantidadRevisiones > 0
+              ? "btn-con-revisiones"
+              : ""
+          }
+          onClick={() =>
+            setShowRevisionesDropbox(true)
+          }
+        >
+          ⚠ Revisiones Dropbox
+          {cantidadRevisiones > 0
+            ? ` (${cantidadRevisiones})`
+            : ""}
+        </button>
+
+        <button
+          type="button"
+          onClick={abrirMotivos}
+        >
+          🧾 Motivos
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowReferentes(true)}
+        >
+          👤 Actuantes
+        </button>
+
+        <label style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: "pointer",
+            padding: "6px 10px",
+          }}
+        >
+          <input type="checkbox" checked={mostrarConsumosDropbox}
+            onChange={(event) => {
+              setMostrarConsumosDropbox(event.target.checked);
+              setCurrentPage(1);
+            }}
+          />
+          Mostrar consumos Dropbox
+        </label>
+
+        <button
+          type="button"
           onClick={() => {
-            setFiltro("");
-
             excel.clearAllFilters();
-
             setCurrentPage(1);
           }}
         >
           Limpiar filtros
         </button>
 
-        <button type="button" onClick={descargarPlantilla}>
+        <button
+          type="button"
+          onClick={descargarPlantilla}
+        >
           📤 Descargar plantilla
         </button>
 
@@ -587,6 +585,7 @@ export default function Ajustes() {
           }}
         >
           📥 Importar Excel
+
           <input
             type="file"
             accept=".xlsx,.xls"
@@ -597,17 +596,6 @@ export default function Ajustes() {
           />
         </label>
 
-        <input
-          type="text"
-          placeholder="Filtrar ajustes"
-          value={filtro}
-          onChange={(event) => {
-            setFiltro(event.target.value);
-
-            setCurrentPage(1);
-          }}
-        />
-
         <button
           type="button"
           className="btn-primary btn-ajuste-produccion"
@@ -616,6 +604,10 @@ export default function Ajustes() {
           ⚙️ Ajustar Registro de Producción
         </button>
       </div>
+
+      {/* =================================================
+          TABLA DE AJUSTES
+      ================================================= */}
 
       <table className="tabla-transferencias">
         <thead>
@@ -630,12 +622,9 @@ export default function Ajustes() {
                 <div
                   style={{
                     display: "flex",
-
                     alignItems: "center",
-
                     justifyContent: "space-between",
-
-                    gap: "6px",
+                    gap: 6,
                   }}
                 >
                   <span>{label}</span>
@@ -653,7 +642,8 @@ export default function Ajustes() {
 
         <tbody>
           {paginated.map((ajuste) => {
-            const id = ajuste.numero_ajuste ?? ajuste.id;
+            const id =
+              ajuste.numero_ajuste ?? ajuste.id;
 
             return (
               <tr
@@ -662,8 +652,12 @@ export default function Ajustes() {
                   cursor: "pointer",
                 }}
                 onClick={() => {
-                  if (ajuste.estado === "BORRADOR") {
-                    navigate(`/ajustes/nuevo?borradorId=${ajuste.id_borrador}`);
+                  if (
+                    ajuste.estado === "BORRADOR"
+                  ) {
+                    navigate(
+                      `/ajustes/nuevo?borradorId=${ajuste.id_borrador}`,
+                    );
                   } else {
                     navigate(`/ajustes/${id}`);
                   }
@@ -672,81 +666,108 @@ export default function Ajustes() {
               >
                 <td>
                   {ajuste.estado === "BORRADOR" ? (
-                    <span className="badge-borrador">BORRADOR</span>
+                    <span className="badge-borrador">
+                      BORRADOR
+                    </span>
+                  ) : ajuste.estado === "REVISAR" ? (
+                    <span className="badge-revisar">
+                      REVISAR
+                    </span>
                   ) : (
-                    <span className="badge-confirmado">CONFIRMADO</span>
+                    <span className="badge-confirmado">
+                      CONFIRMADO
+                    </span>
                   )}
                 </td>
 
                 <td>
                   {ajuste.fecha
-                    ? new Date(ajuste.fecha).toLocaleString("es-AR")
+                    ? new Date(
+                        ajuste.fecha,
+                      ).toLocaleString("es-AR")
                     : ""}
                 </td>
 
                 <td>
                   {ajuste.fecha_real
-                    ? new Date(ajuste.fecha_real).toLocaleDateString("es-AR")
+                    ? new Date(
+                        ajuste.fecha_real,
+                      ).toLocaleDateString("es-AR")
                     : ""}
                 </td>
 
-                <td>{ajuste.deposito}</td>
-
+                <td>{ajuste.deposito || ""}</td>
                 <td>{ajuste.motivo || ""}</td>
-
                 <td>{ajuste.referente || ""}</td>
-
-                <td>{ajuste.remito_referencia || ""}</td>
-
+                <td>
+                  {ajuste.remito_referencia || ""}
+                </td>
                 <td>{id}</td>
               </tr>
             );
           })}
 
-          {paginated.length === 0 && (
+          {loadingAjustes && (
             <tr>
-              <td colSpan={8}>Sin ajustes.</td>
+              <td colSpan={8}>
+                Cargando ajustes...
+              </td>
             </tr>
           )}
+
+          {!loadingAjustes &&
+            paginated.length === 0 && (
+              <tr>
+                <td colSpan={8}>
+                  Sin ajustes.
+                </td>
+              </tr>
+            )}
         </tbody>
       </table>
 
+      {/* =================================================
+          PAGINADO DE AJUSTES
+      ================================================= */}
+
       <div className="paginado-pro">
         <div className="paginado-info">
-          Mostrando {from}-{to} de {filtrados.length}
+          Mostrando {from}-{to} de{" "}
+          {cantidadTotalMostrada}
         </div>
 
         <div className="paginado-size">
           <select
             value={pageSize}
             onChange={(event) => {
-              setPageSize(Number(event.target.value));
+              setPageSize(
+                Number(event.target.value),
+              );
 
               setCurrentPage(1);
             }}
           >
             <option value={10}>10</option>
-
             <option value={25}>25</option>
-
             <option value={50}>50</option>
-
             <option value={100}>100</option>
           </select>
         </div>
 
         <div className="paginado-goto">
           Ir a:
+
           <input
             type="number"
             min="1"
             max={totalPages}
             value={gotoPage}
-            onChange={(event) => setGotoPage(event.target.value)}
+            onChange={(event) =>
+              setGotoPage(event.target.value)
+            }
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 irPagina(Number(gotoPage));
-
                 setGotoPage("");
               }
             }}
@@ -766,7 +787,9 @@ export default function Ajustes() {
           <button
             type="button"
             className="pg-btn"
-            onClick={() => irPagina(currentPage - 1)}
+            onClick={() =>
+              irPagina(currentPage - 1)
+            }
             disabled={currentPage === 1}
           >
             ◀
@@ -782,17 +805,27 @@ export default function Ajustes() {
               (page) =>
                 page === 1 ||
                 page === totalPages ||
-                Math.abs(page - currentPage) <= 1,
+                Math.abs(
+                  page - currentPage,
+                ) <= 1,
             )
             .map((page, index, array) => (
               <React.Fragment key={page}>
-                {index > 0 && page - array[index - 1] > 1 && (
-                  <span className="pg-dots">…</span>
-                )}
+                {index > 0 &&
+                  page - array[index - 1] >
+                    1 && (
+                    <span className="pg-dots">
+                      …
+                    </span>
+                  )}
 
                 <button
                   type="button"
-                  className={`pg-btn ${currentPage === page ? "activo" : ""}`}
+                  className={`pg-btn ${
+                    currentPage === page
+                      ? "activo"
+                      : ""
+                  }`}
                   onClick={() => irPagina(page)}
                 >
                   {page}
@@ -803,8 +836,12 @@ export default function Ajustes() {
           <button
             type="button"
             className="pg-btn"
-            onClick={() => irPagina(currentPage + 1)}
-            disabled={currentPage === totalPages}
+            onClick={() =>
+              irPagina(currentPage + 1)
+            }
+            disabled={
+              currentPage === totalPages
+            }
           >
             ▶
           </button>
@@ -812,17 +849,21 @@ export default function Ajustes() {
           <button
             type="button"
             className="pg-btn"
-            onClick={() => irPagina(totalPages)}
-            disabled={currentPage === totalPages}
+            onClick={() =>
+              irPagina(totalPages)
+            }
+            disabled={
+              currentPage === totalPages
+            }
           >
             ⏭
           </button>
         </div>
       </div>
 
-      {/* =========================
-          MODAL MOTIVOS
-      ========================= */}
+      {/* =================================================
+          MODAL DE MOTIVOS
+      ================================================= */}
 
       {showMotivos && (
         <div
@@ -833,7 +874,11 @@ export default function Ajustes() {
             zIndex: 999999,
           }}
           onMouseDown={(event) => {
-            if (event.target.classList.contains("modal-backdrop")) {
+            if (
+              event.target.classList.contains(
+                "modal-backdrop",
+              )
+            ) {
               setShowMotivos(false);
             }
           }}
@@ -842,13 +887,18 @@ export default function Ajustes() {
             className="modal-card"
             style={{
               position: "relative",
-              zIndex: 999999,
+              zIndex: 1000000,
             }}
           >
             <div className="modal-head">
-              <h3>Motivos de Ajuste</h3>
+              <h3>Motivos de ajuste</h3>
 
-              <button type="button" onClick={() => setShowMotivos(false)}>
+              <button
+                type="button"
+                onClick={() =>
+                  setShowMotivos(false)
+                }
+              >
                 ✕
               </button>
             </div>
@@ -867,7 +917,11 @@ export default function Ajustes() {
             <div className="modal-row">
               <input
                 value={nuevoMotivo}
-                onChange={(event) => setNuevoMotivo(event.target.value)}
+                onChange={(event) =>
+                  setNuevoMotivo(
+                    event.target.value,
+                  )
+                }
                 placeholder="Nuevo motivo…"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
@@ -878,14 +932,24 @@ export default function Ajustes() {
 
               <select
                 value={nuevoTipoMovimiento}
-                onChange={(event) => setNuevoTipoMovimiento(event.target.value)}
+                onChange={(event) =>
+                  setNuevoTipoMovimiento(
+                    event.target.value,
+                  )
+                }
                 title="Tipo de movimiento sugerido"
               >
-                <option value="">Ingreso / Egreso</option>
+                <option value="">
+                  Ingreso / Egreso
+                </option>
 
-                <option value="INGRESO">Ingreso</option>
+                <option value="INGRESO">
+                  Ingreso
+                </option>
 
-                <option value="EGRESO">Egreso</option>
+                <option value="EGRESO">
+                  Egreso
+                </option>
               </select>
 
               <button
@@ -896,7 +960,10 @@ export default function Ajustes() {
                 Agregar
               </button>
 
-              <button type="button" onClick={fetchMotivos}>
+              <button
+                type="button"
+                onClick={fetchMotivos}
+              >
                 ↻ Recargar
               </button>
             </div>
@@ -912,11 +979,8 @@ export default function Ajustes() {
                 <thead>
                   <tr>
                     <th>Nombre</th>
-
                     <th>Tipo</th>
-
                     <th>Activo</th>
-
                     <th>Acciones</th>
                   </tr>
                 </thead>
@@ -928,7 +992,10 @@ export default function Ajustes() {
 
                       <td>
                         <select
-                          value={motivo.tipo_movimiento || ""}
+                          value={
+                            motivo.tipo_movimiento ||
+                            ""
+                          }
                           onChange={(event) =>
                             cambiarTipoMovimientoMotivo(
                               motivo.id_motivo,
@@ -936,22 +1003,30 @@ export default function Ajustes() {
                             )
                           }
                         >
-                          <option value="">Ingreso / Egreso</option>
+                          <option value="">
+                            Ingreso / Egreso
+                          </option>
 
-                          <option value="INGRESO">Ingreso</option>
+                          <option value="INGRESO">
+                            Ingreso
+                          </option>
 
-                          <option value="EGRESO">Egreso</option>
+                          <option value="EGRESO">
+                            Egreso
+                          </option>
                         </select>
                       </td>
 
-                      <td>{motivo.activo ? "SI" : "NO"}</td>
+                      <td>
+                        {motivo.activo
+                          ? "SI"
+                          : "NO"}
+                      </td>
 
                       <td
                         style={{
                           display: "flex",
-
                           gap: 8,
-
                           flexWrap: "wrap",
                         }}
                       >
@@ -959,7 +1034,10 @@ export default function Ajustes() {
                           type="button"
                           className="btn-light"
                           onClick={() =>
-                            editarMotivo(motivo.id_motivo, motivo.nombre)
+                            editarMotivo(
+                              motivo.id_motivo,
+                              motivo.nombre,
+                            )
                           }
                         >
                           Editar
@@ -969,16 +1047,25 @@ export default function Ajustes() {
                           type="button"
                           className="btn-light"
                           onClick={() =>
-                            toggleMotivo(motivo.id_motivo, motivo.activo)
+                            toggleMotivo(
+                              motivo.id_motivo,
+                              motivo.activo,
+                            )
                           }
                         >
-                          {motivo.activo ? "Desactivar" : "Activar"}
+                          {motivo.activo
+                            ? "Desactivar"
+                            : "Activar"}
                         </button>
 
                         <button
                           type="button"
                           className="borrar-btn"
-                          onClick={() => borrarMotivo(motivo.id_motivo)}
+                          onClick={() =>
+                            borrarMotivo(
+                              motivo.id_motivo,
+                            )
+                          }
                         >
                           Eliminar
                         </button>
@@ -988,7 +1075,9 @@ export default function Ajustes() {
 
                   {motivos.length === 0 && (
                     <tr>
-                      <td colSpan={4}>Sin motivos.</td>
+                      <td colSpan={4}>
+                        Sin motivos.
+                      </td>
                     </tr>
                   )}
                 </tbody>
@@ -996,7 +1085,12 @@ export default function Ajustes() {
             </div>
 
             <div className="modal-foot">
-              <button type="button" onClick={() => setShowMotivos(false)}>
+              <button
+                type="button"
+                onClick={() =>
+                  setShowMotivos(false)
+                }
+              >
                 Cerrar
               </button>
             </div>
@@ -1004,265 +1098,32 @@ export default function Ajustes() {
         </div>
       )}
 
-      {/* =========================
-          MODAL REVERSIÓN
-      ========================= */}
-
-      {showReversion && (
-        <div
-          className="modal-backdrop"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 999999,
-            background: "rgba(0,0,0,0.45)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 20,
-          }}
-          onMouseDown={(event) => {
-            if (event.target.classList.contains("modal-backdrop")) {
-              cerrarReversion();
-            }
-          }}
-        >
-          <div
-            className="modal-card"
-            style={{
-              position: "relative",
-              zIndex: 1000000,
-              width: "min(1100px, 96vw)",
-              maxHeight: "92vh",
-              overflowY: "auto",
-            }}
-          >
-            <div className="modal-head">
-              <h3>Revertir movimientos por referencia</h3>
-
-              <button
-                type="button"
-                onClick={cerrarReversion}
-                disabled={buscandoReversion || confirmandoReversion}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div
-              className="modal-row"
-              style={{
-                alignItems: "flex-end",
-
-                marginTop: 15,
-              }}
-            >
-              <label
-                style={{
-                  flex: "1 1 300px",
-                }}
-              >
-                Número de referencia
-                <input
-                  type="text"
-                  value={referenciaReversion}
-                  onChange={(event) => {
-                    setReferenciaReversion(event.target.value);
-
-                    setMovimientosReversion([]);
-
-                    setErrorReversion("");
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-
-                      buscarMovimientosReversion();
-                    }
-                  }}
-                  placeholder="Ingresá la referencia exacta"
-                  style={{
-                    width: "100%",
-
-                    marginTop: 5,
-                  }}
-                />
-              </label>
-
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={buscarMovimientosReversion}
-                disabled={buscandoReversion || confirmandoReversion}
-              >
-                {buscandoReversion ? "Buscando..." : "Buscar movimientos"}
-              </button>
-            </div>
-
-            {errorReversion && (
-              <div
-                className="nt-error"
-                style={{
-                  marginTop: 15,
-
-                  whiteSpace: "pre-line",
-                }}
-              >
-                {errorReversion}
-              </div>
-            )}
-
-            {movimientosReversion.length > 0 && (
-              <>
-                <div
-                  style={{
-                    marginTop: 20,
-
-                    marginBottom: 10,
-                  }}
-                >
-                  <strong>
-                    Se encontraron {movimientosReversion.length} movimientos.
-                  </strong>
-
-                  <div
-                    style={{
-                      marginTop: 5,
-
-                      fontSize: 13,
-                    }}
-                  >
-                    La columna “Reversión” muestra el movimiento inverso que se
-                    aplicará.
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    overflowX: "auto",
-                  }}
-                >
-                  <table className="tabla-transferencias">
-                    <thead>
-                      <tr>
-                        <th>Tipo</th>
-
-                        <th>Número</th>
-
-                        <th>Fecha</th>
-
-                        <th>Depósito</th>
-
-                        <th>Código</th>
-
-                        <th>Descripción</th>
-
-                        <th>Original</th>
-
-                        <th>Reversión</th>
-
-                        <th>Actuante</th>
-                      </tr>
-                    </thead>
-
-                    <tbody>
-                      {movimientosReversion.map((movimiento, index) => (
-                        <tr
-                          key={`${movimiento.tipo_original}-${movimiento.numero_original}-${movimiento.deposito}-${movimiento.codigo}-${index}`}
-                        >
-                          <td>{movimiento.tipo_original}</td>
-
-                          <td>{movimiento.numero_original}</td>
-
-                          <td>
-                            {movimiento.fecha_real
-                              ? new Date(
-                                  movimiento.fecha_real,
-                                ).toLocaleDateString("es-AR")
-                              : ""}
-                          </td>
-
-                          <td>{movimiento.deposito}</td>
-
-                          <td>{movimiento.codigo}</td>
-
-                          <td>{movimiento.descripcion}</td>
-
-                          <td
-                            style={{
-                              textAlign: "right",
-                            }}
-                          >
-                            {movimiento.cantidad_original}
-                          </td>
-
-                          <td
-                            style={{
-                              textAlign: "right",
-
-                              fontWeight: "bold",
-                            }}
-                          >
-                            {movimiento.cantidad_reversion}
-                          </td>
-
-                          <td>{movimiento.referente || ""}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div
-                  style={{
-                    marginTop: 20,
-                  }}
-                >
-                </div>
-              </>
-            )}
-
-            <div
-              className="modal-foot"
-              style={{
-                marginTop: 20,
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 10,
-              }}
-            >
-              <button
-                type="button"
-                onClick={cerrarReversion}
-                disabled={buscandoReversion || confirmandoReversion}
-              >
-                Cancelar
-              </button>
-
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={confirmarReversion}
-                disabled={
-                  confirmandoReversion ||
-                  buscandoReversion ||
-                  !movimientosReversion.length
-                }
-              >
-                {confirmandoReversion
-                  ? "Revirtiendo..."
-                  : "Confirmar reversión"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RevertirMovimientosModal
+        abierto={showReversion}
+        onClose={() => setShowReversion(false)}
+        onChanged={() => {
+          fetchAjustes();
+        }}
+      />
 
       <ReferentesModal
         abierto={showReferentes}
-        onClose={() => setShowReferentes(false)}
+        onClose={() =>
+          setShowReferentes(false)
+        }
         onChanged={() => {
           fetchAjustes();
+        }}
+      />
+
+      <RevisionesDropboxModal
+        abierto={showRevisionesDropbox}
+        onClose={() =>
+          setShowRevisionesDropbox(false)
+        }
+        onChanged={async () => {
+          await fetchAjustes();
+          await fetchCantidadRevisiones();
         }}
       />
     </div>

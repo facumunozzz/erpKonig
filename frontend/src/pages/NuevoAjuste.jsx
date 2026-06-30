@@ -33,6 +33,32 @@ export default function NuevoAjuste() {
   const [searchParams] = useSearchParams();
 
   const borradorIdUrl = searchParams.get("borradorId");
+  const desdeAlerta =
+    searchParams.get("desdeAlerta") === "1";
+
+  const alertaIdUrl =
+    searchParams.get("alertaId") || "";
+
+  const codigoAlerta =
+    searchParams.get("codigo") || "";
+
+  const descripcionAlerta =
+    searchParams.get("descripcion") || "";
+
+  const cantidadAlerta =
+    searchParams.get("cantidad") || "";
+
+  const obraAlerta =
+    searchParams.get("obra") || "";
+
+  const versionAlerta =
+    searchParams.get("version") || "";
+
+  const fechaAlerta =
+    searchParams.get("fecha") || "";
+
+  const remitoAlerta =
+    searchParams.get("remitoReferencia") || "";
 
   const [idBorrador, setIdBorrador] = useState(borradorIdUrl || null);
 
@@ -166,6 +192,119 @@ export default function NuevoAjuste() {
     cargarDatosIniciales();
   }, []);
 
+  useEffect(() => {
+    if (!desdeAlerta || borradorIdUrl) {
+      return;
+    }
+
+    const cargarDesdeAlerta = async () => {
+      const codigo = String(codigoAlerta || "")
+        .trim()
+        .toUpperCase();
+
+      const cantidad = Math.abs(
+        Number(cantidadAlerta || 0),
+      );
+
+      setTipoAjuste("INGRESO");
+
+      setObra(obraAlerta);
+      setVersion(versionAlerta);
+
+      setRemitoReferencia(remitoAlerta);
+
+      if (fechaAlerta) {
+        setFechaReal(
+          String(fechaAlerta).slice(0, 10),
+        );
+      }
+
+      if (!codigo) {
+        return;
+      }
+
+      setItems([
+        {
+          ...crearItemVacio(),
+          codigo,
+          descripcion: descripcionAlerta,
+          cantidad:
+            Number.isFinite(cantidad) &&
+            cantidad > 0
+              ? String(cantidad)
+              : "",
+        },
+      ]);
+
+      /*
+      * Busca los datos reales del artículo.
+      * Si el depósito todavía no terminó de cargar,
+      * la consulta de stock se hará al seleccionarlo.
+      */
+      try {
+        const response = await api.get(
+          `/articulos/codigo/${encodeURIComponent(
+            codigo,
+          )}`,
+        );
+
+        const articulo = response.data || {};
+
+        setItems([
+          {
+            ...crearItemVacio(),
+            codigo:
+              String(
+                articulo.codigo || codigo,
+              )
+                .trim()
+                .toUpperCase(),
+
+            descripcion:
+              articulo.descripcion ||
+              descripcionAlerta ||
+              "",
+
+            proveedor:
+              articulo.proveedor || "",
+
+            ubicacion:
+              articulo.ubicacion || "",
+
+            cantidad:
+              Number.isFinite(cantidad) &&
+              cantidad > 0
+                ? String(cantidad)
+                : "",
+          },
+        ]);
+      } catch (error) {
+        console.error(
+          "No se pudo validar el artículo de la alerta:",
+          error,
+        );
+
+        setItems([
+          {
+            ...crearItemVacio(),
+            codigo,
+            descripcion:
+              descripcionAlerta ||
+              "Artículo no encontrado",
+
+            cantidad:
+              Number.isFinite(cantidad) &&
+              cantidad > 0
+                ? String(cantidad)
+                : "",
+          },
+        ]);
+      }
+    };
+    cargarDesdeAlerta();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desdeAlerta]);
+
   /*
    * Cuando cambia el depósito se limpia el stock
    * correspondiente al depósito anterior.
@@ -174,10 +313,11 @@ export default function NuevoAjuste() {
    * haberla editado manualmente.
    */
   useEffect(() => {
-    if (cargandoBorradorRef.current) {
-      return;
-    }
+  if (cargandoBorradorRef.current) {
+    return;
+  }
 
+  if (!depositoId) {
     setItems((itemsActuales) =>
       itemsActuales.map((item) => ({
         ...item,
@@ -185,7 +325,74 @@ export default function NuevoAjuste() {
         stockTotal: "",
       })),
     );
-  }, [depositoId]);
+
+    return;
+  }
+
+  const actualizarStocks = async () => {
+    const itemsActuales = [...items];
+
+    const nuevosItems = await Promise.all(
+      itemsActuales.map(async (item) => {
+        const codigo = String(item.codigo || "")
+          .trim()
+          .toUpperCase();
+
+        if (!codigo) {
+          return {
+            ...item,
+            stock: "",
+            stockTotal: "",
+          };
+        }
+
+        try {
+          const response = await api.get(
+            "/transferencias/stock-articulo",
+            {
+              params: {
+                codigo,
+                deposito_id: Number(depositoId),
+              },
+            },
+          );
+
+          return {
+            ...item,
+            codigo: response.data?.codigo || codigo,
+            stock:
+              response.data?.stock_deposito ??
+              response.data?.stock ??
+              0,
+            stockTotal:
+              response.data?.stock_total ?? 0,
+            ubicacion:
+              response.data?.ubicacion ??
+              item.ubicacion ??
+              "",
+          };
+        } catch (error) {
+          console.error(
+            `Error consultando stock de ${codigo}:`,
+            error,
+          );
+
+          return {
+            ...item,
+            stock: "Error",
+            stockTotal: "Error",
+          };
+        }
+      }),
+    );
+
+    setItems(nuevosItems);
+  };
+
+  actualizarStocks();
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [depositoId]);
 
   const consultarStock = async (codigo, index) => {
     const codigoNormalizado = String(codigo || "")
@@ -639,26 +846,16 @@ export default function NuevoAjuste() {
 
       const body = {
         deposito_id: depositoNumero,
-
         id_ubicacion: null,
-
         motivo_id: motivoNumero,
-
         obra: obra.trim() || null,
-
         version: version.trim() || null,
-
         remito_referencia: remitoReferencia.trim() || null,
-
         id_referente: referenteId ? Number(referenteId) : null,
-
         fecha_real: fechaReal || null,
-
         items: itemsConCodigo.map((item) => ({
           cod_articulo: item.cod_articulo,
-
           ubicacion: item.ubicacion,
-
           cantidad:
             tipoAjuste === "EGRESO"
               ? -Math.abs(Math.trunc(item.cantidad))
@@ -667,6 +864,30 @@ export default function NuevoAjuste() {
       };
 
       const response = await api.post("/ajustes", body);
+      const alertaIdNumero = Number(alertaIdUrl);
+      if (
+        desdeAlerta &&
+        Number.isInteger(alertaIdNumero) &&
+        alertaIdNumero > 0
+      ) {
+        try {
+          await api.put(
+            "/ajustes/alertas-consumo/marcar-leidas",
+            {
+              ids: [alertaIdNumero],
+            },
+          );
+        } catch (errorAlerta) {
+          console.error(
+            "El ajuste fue creado, pero no se pudo resolver la alerta:",
+            errorAlerta,
+          );
+
+          window.alert(
+            "El ajuste se creó correctamente, pero la revisión no pudo marcarse como resuelta.",
+          );
+        }
+      }
 
       const numeroAjuste =
         response.data?.ajuste?.numero_ajuste ||
@@ -918,24 +1139,26 @@ export default function NuevoAjuste() {
 
           <div className="nt-field obra-version-field">
             <div className="mini-field">
-              <label htmlFor="ajuste-obra">Obra</label>
+              <label>Obra</label>
 
               <input
-                id="ajuste-obra"
                 type="text"
                 value={obra}
-                onChange={(event) => setObra(event.target.value)}
+                onChange={(e) => setObra(e.target.value)}
+                placeholder="Número o nombre de obra"
+                maxLength={100}
               />
             </div>
 
             <div className="mini-field">
-              <label htmlFor="ajuste-version">Versión</label>
+              <label>Versión</label>
 
               <input
-                id="ajuste-version"
                 type="text"
                 value={version}
-                onChange={(event) => setVersion(event.target.value)}
+                onChange={(e) => setVersion(e.target.value)}
+                placeholder="Versión"
+                maxLength={100}
               />
             </div>
           </div>
