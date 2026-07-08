@@ -221,14 +221,24 @@ exports.getArticuloByCodigo = async (req, res) => {
 
 exports.create = async (req, res) => {
   const usuario =
-    req.user?.username ?? req.user?.email ?? req.user?.name ?? null;
+    req.user?.username ??
+    req.user?.email ??
+    req.user?.name ??
+    null;
 
   const origenId = asInt(req.body?.origen_id);
   const destinoId = asInt(req.body?.destino_id);
 
-  const remitoReferencia = cleanTextOrNull(req.body?.remito_referencia);
+  const ubicacionDestinoId = asInt(
+    req.body?.id_ubicacion_destino,
+  );
+
+  const remitoReferencia = cleanTextOrNull(
+    req.body?.remito_referencia,
+  );
 
   const referenteRaw = req.body?.id_referente;
+
   const referenteId =
     referenteRaw === null ||
     referenteRaw === undefined ||
@@ -237,6 +247,7 @@ exports.create = async (req, res) => {
       : asInt(referenteRaw);
 
   const fechaRealRaw = req.body?.fecha_real;
+
   const fechaReal =
     fechaRealRaw === null ||
     fechaRealRaw === undefined ||
@@ -244,392 +255,386 @@ exports.create = async (req, res) => {
       ? null
       : String(fechaRealRaw).trim();
 
-  const itemsRaw = Array.isArray(req.body?.items) ? req.body.items : [];
+  const itemsRaw = Array.isArray(req.body?.items)
+    ? req.body.items
+    : [];
 
-  if (!Number.isFinite(origenId) || !Number.isFinite(destinoId)) {
+  // =====================================================
+  // VALIDACIONES GENERALES
+  // =====================================================
+
+  if (
+    !Number.isFinite(origenId) ||
+    origenId <= 0 ||
+    !Number.isFinite(destinoId) ||
+    destinoId <= 0
+  ) {
     return res.status(400).json({
       error: "Debe indicar depósito origen y destino",
     });
   }
 
-  if (Number(origenId) === Number(destinoId)) {
+  if (
+    !Number.isFinite(ubicacionDestinoId) ||
+    ubicacionDestinoId <= 0
+  ) {
     return res.status(400).json({
-      error: "El depósito origen y destino deben ser distintos",
+      error: "Debe indicar la ubicación destino",
     });
   }
 
-  if (referenteId !== null && !Number.isFinite(referenteId)) {
-    return res.status(400).json({ error: "Referente inválido" });
+  if (
+    referenteId !== null &&
+    !Number.isFinite(referenteId)
+  ) {
+    return res.status(400).json({
+      error: "Referente inválido",
+    });
   }
 
   const items = itemsRaw
-    .map((it) => ({
-      codigo: toUpperTrim(it.codigo),
-
-      cantidad: asInt(it.cantidad),
-
-      ubicacion:
-        it.ubicacion === null ||
-        it.ubicacion === undefined ||
-        String(it.ubicacion).trim() === ""
-          ? null
-          : String(it.ubicacion).trim(),
-
-      actualizarUbicacion: Object.prototype.hasOwnProperty.call(
-        it || {},
-        "ubicacion",
+    .map((item) => ({
+      codigo: toUpperTrim(item?.codigo),
+      cantidad: Number(item?.cantidad),
+      id_ubicacion_origen: asInt(
+        item?.id_ubicacion_origen,
       ),
     }))
     .filter(
-      (it) => it.codigo && Number.isFinite(it.cantidad) && it.cantidad > 0,
+      (item) =>
+        item.codigo &&
+        Number.isFinite(item.cantidad) &&
+        item.cantidad > 0 &&
+        Number.isFinite(item.id_ubicacion_origen) &&
+        item.id_ubicacion_origen > 0,
     );
 
   if (!items.length) {
     return res.status(400).json({
-      error: "Debe incluir items con cantidad mayor a 0",
+      error:
+        "Debe incluir al menos un artículo con cantidad mayor a 0",
     });
   }
 
-  const agg = new Map();
+  // Agrupar códigos repetidos
+  const agrupados = new Map();
 
-  for (const it of items) {
-    const actual = agg.get(it.codigo) || {
-      codigo: it.codigo,
+  for (const item of items) {
+    const clave = `${item.codigo}|${item.id_ubicacion_origen}`;
+    const actual = agrupados.get(clave) || {
+      codigo: item.codigo,
       cantidad: 0,
-      ubicacion: null,
-      actualizarUbicacion: false,
+      id_ubicacion_origen: item.id_ubicacion_origen,
     };
 
-    actual.cantidad += it.cantidad;
-
-    if (it.actualizarUbicacion) {
-      actual.ubicacion = it.ubicacion;
-      actual.actualizarUbicacion = true;
-    }
-
-    agg.set(it.codigo, actual);
+    actual.cantidad += item.cantidad;
+    agrupados.set(clave, actual);
   }
 
-  const itemsMerged = Array.from(agg.values());
+  const itemsMerged = Array.from(agrupados.values());
 
-  let trans;
+  let transaction;
 
   try {
     await poolConnect;
     const pool = await getPool();
 
-    trans = new sql.Transaction(pool);
-    await trans.begin();
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
 
-    const execQ = async (sqlText, bindFn) => {
-      const r = new sql.Request(trans);
-      if (bindFn) bindFn(r);
-      return r.query(sqlText);
-    };
+    const ejecutar = async (consulta, configurar) => {
+      const request = new sql.Request(transaction);
 
-    // ------------------------------------------------------------------------
-    // Helper: devuelve ubicación GENERAL del depósito o la primera activa.
-    // Aunque el usuario ya no la elija, la tabla stock necesita id_ubicacion.
-    // ------------------------------------------------------------------------
-    const resolveUbicacionInterna = async (idDeposito) => {
-      const g = await execQ(
-        `
-        SELECT TOP 1 id_ubicacion, id_deposito, nombre
-        FROM dbo.ubicaciones
-        WHERE id_deposito = @dep
-          AND activa = 1
-          AND UPPER(LTRIM(RTRIM(nombre))) = 'GENERAL'
-        ORDER BY id_ubicacion
-        `,
-        (r) => r.input("dep", sql.Int, idDeposito),
-      );
-
-      if (g.recordset[0]) return g.recordset[0];
-
-      const any = await execQ(
-        `
-        SELECT TOP 1 id_ubicacion, id_deposito, nombre
-        FROM dbo.ubicaciones
-        WHERE id_deposito = @dep
-          AND activa = 1
-        ORDER BY id_ubicacion
-        `,
-        (r) => r.input("dep", sql.Int, idDeposito),
-      );
-
-      return any.recordset[0] || null;
-    };
-
-    // ------------------------------------------------------------------------
-    // Helper: suma/resta stock en una ubicación concreta.
-    // Para el destino se suma en GENERAL o primera ubicación activa.
-    // ------------------------------------------------------------------------
-    const upsertStockDelta = async ({
-      idDeposito,
-      idArticulo,
-      idUbicacion,
-      delta,
-    }) => {
-      await execQ(
-        `
-        MERGE dbo.stock WITH (HOLDLOCK) AS t
-        USING (
-          SELECT 
-            @dep AS id_deposito, 
-            @art AS id_articulo, 
-            @ub AS id_ubicacion
-        ) AS s
-          ON (
-            t.id_deposito = s.id_deposito
-            AND t.id_articulo = s.id_articulo
-            AND t.id_ubicacion = s.id_ubicacion
-          )
-        WHEN MATCHED THEN
-          UPDATE SET cantidad = t.cantidad + @d
-        WHEN NOT MATCHED THEN
-          INSERT (id_deposito, id_articulo, id_ubicacion, cantidad)
-          VALUES (s.id_deposito, s.id_articulo, s.id_ubicacion, @d);
-        `,
-        (r) =>
-          r
-            .input("dep", sql.Int, idDeposito)
-            .input("art", sql.Int, idArticulo)
-            .input("ub", sql.Int, idUbicacion)
-            .input("d", sql.Int, delta),
-      );
-    };
-
-    // ------------------------------------------------------------------------
-    // Helper: descuenta stock del depósito origen sin que el usuario elija
-    // ubicación. Consume desde las ubicaciones con stock disponible.
-    // Primero GENERAL, luego el resto.
-    // ------------------------------------------------------------------------
-    const consumirStockDesdeDeposito = async ({
-      idDeposito,
-      idArticulo,
-      cantidad,
-    }) => {
-      let restante = Number(cantidad);
-
-      const rows = await execQ(
-        `
-        SELECT 
-          s.id_stock,
-          s.id_ubicacion,
-          s.cantidad,
-          u.nombre AS ubicacion
-        FROM dbo.stock s WITH (UPDLOCK, HOLDLOCK)
-        LEFT JOIN dbo.ubicaciones u ON u.id_ubicacion = s.id_ubicacion
-        WHERE s.id_deposito = @dep
-          AND s.id_articulo = @art
-          AND s.cantidad > 0
-        ORDER BY
-          CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(u.nombre, '')))) = 'GENERAL' THEN 0 ELSE 1 END,
-          s.id_ubicacion,
-          s.id_stock
-        `,
-        (r) =>
-          r.input("dep", sql.Int, idDeposito).input("art", sql.Int, idArticulo),
-      );
-
-      for (const row of rows.recordset || []) {
-        if (restante <= 0) break;
-
-        const disponibleFila = Number(row.cantidad || 0);
-        const tomar = Math.min(disponibleFila, restante);
-
-        if (tomar <= 0) continue;
-
-        const upd = await execQ(
-          `
-          UPDATE dbo.stock
-          SET cantidad = cantidad - @cant
-          WHERE id_stock = @idStock
-            AND cantidad >= @cant;
-
-          SELECT @@ROWCOUNT AS affected;
-          `,
-          (r) =>
-            r
-              .input("idStock", sql.Int, Number(row.id_stock))
-              .input("cant", sql.Int, tomar),
-        );
-
-        const affected = Number(upd.recordset?.[0]?.affected || 0);
-
-        if (affected !== 1) {
-          throw new Error(
-            "No se pudo descontar stock. Volvé a intentar la operación.",
-          );
-        }
-
-        restante -= tomar;
+      if (configurar) {
+        configurar(request);
       }
 
-      if (restante > 0) {
-        throw new Error(
-          `Stock insuficiente. Faltan ${restante} unidades para descontar.`,
-        );
-      }
+      return request.query(consulta);
     };
 
-    // ------------------------------------------------------------------------
-    // Depósitos
-    // ------------------------------------------------------------------------
-    const deps = await execQ(`
-      SELECT id_deposito, nombre
+    // =====================================================
+    // VALIDAR DEPÓSITOS
+    // =====================================================
+
+    const depositosResult = await ejecutar(
+      `
+      SELECT
+        id_deposito,
+        nombre
       FROM dbo.depositos
-    `);
+      WHERE id_deposito IN (@origenId, @destinoId);
+      `,
+      (request) =>
+        request
+          .input("origenId", sql.Int, origenId)
+          .input("destinoId", sql.Int, destinoId),
+    );
 
-    const depMap = new Map(
-      deps.recordset.map((d) => [
-        Number(d.id_deposito),
-        String(d.nombre || ""),
+    const depositoMap = new Map(
+      (depositosResult.recordset || []).map((deposito) => [
+        Number(deposito.id_deposito),
+        String(deposito.nombre || ""),
       ]),
     );
 
-    if (!depMap.has(origenId)) {
-      await trans.rollback();
-      return res.status(400).json({ error: "Depósito origen inexistente" });
-    }
+    if (!depositoMap.has(origenId)) {
+      await transaction.rollback();
 
-    if (!depMap.has(destinoId)) {
-      await trans.rollback();
-      return res.status(400).json({ error: "Depósito destino inexistente" });
-    }
-
-    // ------------------------------------------------------------------------
-    // Referente
-    // ------------------------------------------------------------------------
-    if (referenteId !== null) {
-      const ref = await execQ(
-        `
-        SELECT id_referente, nombre, activo
-        FROM dbo.referentes WITH (UPDLOCK, HOLDLOCK)
-        WHERE id_referente = @id
-        `,
-        (r) => r.input("id", sql.Int, referenteId),
-      );
-
-      if (!ref.recordset.length) {
-        await trans.rollback();
-        return res.status(400).json({ error: "Referente inexistente" });
-      }
-
-      if (!ref.recordset[0].activo) {
-        await trans.rollback();
-        return res.status(400).json({ error: "Referente inactivo" });
-      }
-    }
-
-    // ------------------------------------------------------------------------
-    // Ubicaciones internas automáticas
-    // ------------------------------------------------------------------------
-    const uOrigen = await resolveUbicacionInterna(origenId);
-    const uDestino = await resolveUbicacionInterna(destinoId);
-
-    if (!uOrigen) {
-      await trans.rollback();
       return res.status(400).json({
-        error:
-          "El depósito origen no tiene ninguna ubicación activa. Creá una ubicación GENERAL.",
+        error: "El depósito origen no existe",
       });
     }
 
-    if (!uDestino) {
-      await trans.rollback();
+    if (!depositoMap.has(destinoId)) {
+      await transaction.rollback();
+
       return res.status(400).json({
-        error:
-          "El depósito destino no tiene ninguna ubicación activa. Creá una ubicación GENERAL.",
+        error: "El depósito destino no existe",
       });
     }
-
-    // ------------------------------------------------------------------------
-    // Artículos
-    // ------------------------------------------------------------------------
-    const inList = itemsMerged.map((_, i) => `@c${i}`).join(",");
-
-    const arts = await execQ(
+    
+    // VALIDAR UBICACIÓN DESTINO
+    const ubicacionDestinoResult = await ejecutar(
       `
-      SELECT 
-        id_articulo,
-        UPPER(LTRIM(RTRIM(codigo))) AS codigo,
-        descripcion
-      FROM dbo.articulos
-      WHERE UPPER(LTRIM(RTRIM(codigo))) IN (${inList})
+      SELECT
+        id_ubicacion,
+        id_deposito,
+        nombre,
+        activa
+      FROM dbo.ubicaciones WITH (UPDLOCK, HOLDLOCK)
+      WHERE id_ubicacion = @ubicacionId
+        AND id_deposito = @depositoId;
       `,
-      (r) =>
-        itemsMerged.forEach((it, i) =>
-          r.input(`c${i}`, sql.VarChar, it.codigo),
-        ),
+      (request) =>
+        request
+          .input(
+            "ubicacionId",
+            sql.Int,
+            ubicacionDestinoId,
+          )
+          .input("depositoId", sql.Int, destinoId),
     );
 
-    const artIdByCodigo = new Map(
-      arts.recordset.map((a) => [String(a.codigo), Number(a.id_articulo)]),
-    );
+    if (!ubicacionDestinoResult.recordset.length) {
+      await transaction.rollback();
 
-    const faltan = itemsMerged
-      .filter((it) => !artIdByCodigo.has(it.codigo))
-      .map((it) => it.codigo);
-
-    if (faltan.length) {
-      await trans.rollback();
       return res.status(400).json({
-        error: "Códigos inexistentes",
-        detalle: faltan,
+        error:
+          "La ubicación destino no pertenece al depósito destino",
       });
     }
 
-    // ------------------------------------------------------------------------
-    // Validar stock total por depósito origen
-    // Ya no validamos ubicación, porque el usuario trabaja por almacén.
-    // ------------------------------------------------------------------------
-    const faltantesStock = [];
+    if (!ubicacionDestinoResult.recordset[0].activa) {
+      await transaction.rollback();
 
-    for (const it of itemsMerged) {
-      const idArt = artIdByCodigo.get(it.codigo);
+      return res.status(400).json({
+        error: "La ubicación destino está inactiva",
+      });
+    }
 
-      const chk = await execQ(
+    const primeraUbicacionOrigenId = itemsMerged[0].id_ubicacion_origen;
+
+const ubicacionOrigenResult = await ejecutar(
+  `
+  SELECT
+    id_ubicacion,
+    id_deposito,
+    nombre,
+    activa
+  FROM dbo.ubicaciones WITH (UPDLOCK, HOLDLOCK)
+  WHERE id_ubicacion = @ubicacionId
+    AND id_deposito = @depositoId;
+  `,
+  (request) =>
+    request
+      .input("ubicacionId", sql.Int, primeraUbicacionOrigenId)
+      .input("depositoId", sql.Int, origenId)
+);
+
+if (!ubicacionOrigenResult.recordset.length) {
+  await transaction.rollback();
+
+  return res.status(400).json({
+    error: "La ubicación origen no pertenece al depósito origen",
+  });
+}
+
+if (!ubicacionOrigenResult.recordset[0].activa) {
+  await transaction.rollback();
+
+  return res.status(400).json({
+    error: "La ubicación origen está inactiva",
+  });
+}
+
+const ubicacionOrigen = ubicacionOrigenResult.recordset[0];
+
+const ubicacionDestino = ubicacionDestinoResult.recordset[0];
+
+    // =====================================================
+    // VALIDAR REFERENTE
+    // =====================================================
+
+    if (referenteId !== null) {
+      const referenteResult = await ejecutar(
         `
-        SELECT ISNULL(SUM(cantidad), 0) AS q
-        FROM dbo.stock WITH (UPDLOCK, HOLDLOCK)
-        WHERE id_deposito = @dep
-          AND id_articulo = @art
+        SELECT
+          id_referente,
+          nombre,
+          activo
+        FROM dbo.referentes
+        WHERE id_referente = @referenteId;
         `,
-        (r) =>
-          r
-            .input("dep", sql.Int, origenId)
-            .input("art", sql.Int, Number(idArt)),
+        (request) =>
+          request.input(
+            "referenteId",
+            sql.Int,
+            referenteId,
+          ),
       );
 
-      const disponible = Number(chk.recordset[0]?.q || 0);
+      if (!referenteResult.recordset.length) {
+        await transaction.rollback();
 
-      if (disponible < it.cantidad) {
-        faltantesStock.push({
-          codigo: it.codigo,
-          requerido: it.cantidad,
-          disponible,
+        return res.status(400).json({
+          error: "El referente no existe",
+        });
+      }
+
+      if (!referenteResult.recordset[0].activo) {
+        await transaction.rollback();
+
+        return res.status(400).json({
+          error: "El referente está inactivo",
         });
       }
     }
 
-    if (faltantesStock.length) {
-      await trans.rollback();
+    // =====================================================
+    // OBTENER ARTÍCULOS
+    // =====================================================
+
+    const parametrosCodigos = itemsMerged
+      .map((_, index) => `@codigo${index}`)
+      .join(",");
+
+    const articulosResult = await ejecutar(
+      `
+      SELECT
+        id_articulo,
+        UPPER(LTRIM(RTRIM(codigo))) AS codigo,
+        descripcion
+      FROM dbo.articulos
+      WHERE UPPER(LTRIM(RTRIM(codigo)))
+        IN (${parametrosCodigos});
+      `,
+      (request) => {
+        itemsMerged.forEach((item, index) => {
+          request.input(
+            `codigo${index}`,
+            sql.NVarChar(100),
+            item.codigo,
+          );
+        });
+      },
+    );
+
+    const articuloMap = new Map(
+      (articulosResult.recordset || []).map((articulo) => [
+        String(articulo.codigo),
+        {
+          id_articulo: Number(articulo.id_articulo),
+          descripcion: articulo.descripcion,
+        },
+      ]),
+    );
+
+    const codigosInexistentes = itemsMerged
+      .filter((item) => !articuloMap.has(item.codigo))
+      .map((item) => item.codigo);
+
+    if (codigosInexistentes.length) {
+      await transaction.rollback();
+
       return res.status(400).json({
-        error: "Stock insuficiente en depósito origen",
-        faltantes: faltantesStock,
+        error: "Hay códigos de artículo inexistentes",
+        detalle: codigosInexistentes,
       });
     }
 
-    // ------------------------------------------------------------------------
-    // Cabecera
-    // Ahora se guarda solo el nombre del depósito, sin mostrar ubicación.
-    // Internamente se guardan id_ubicacion_origen/destino para compatibilidad.
-    // ------------------------------------------------------------------------
-    const origenTxt = depMap.get(origenId);
-    const destinoTxt = depMap.get(destinoId);
+    // =====================================================
+    // VALIDAR STOCK EN LA UBICACIÓN ORIGEN
+    // =====================================================
 
-    const ins = await execQ(
+    const faltantes = [];
+
+    for (const item of itemsMerged) {
+      const articulo = articuloMap.get(item.codigo);
+      const ubicacionOrigenId =
+        item.id_ubicacion_origen;
+
+      const stockResult = await ejecutar(
+        `
+        SELECT
+          ISNULL(cantidad, 0) AS cantidad
+        FROM dbo.stock WITH (UPDLOCK, HOLDLOCK)
+        WHERE id_deposito = @depositoId
+          AND id_ubicacion = @ubicacionId
+          AND id_articulo = @articuloId;
+        `,
+        (request) =>
+          request
+            .input("depositoId", sql.Int, origenId)
+            .input(
+              "ubicacionId",
+              sql.Int,
+              ubicacionOrigenId,
+            )
+            .input(
+              "articuloId",
+              sql.Int,
+              articulo.id_articulo,
+            ),
+      );
+
+      const disponible = stockResult.recordset.length
+        ? Number(stockResult.recordset[0].cantidad || 0)
+        : 0;
+
+      if (disponible < item.cantidad) {
+        faltantes.push({
+          codigo: item.codigo,
+          descripcion: articulo.descripcion,
+          requerido: item.cantidad,
+          disponible,
+          faltante: item.cantidad - disponible,
+          deposito: depositoMap.get(origenId),
+          ubicacion: ubicacionOrigen.nombre,
+        });
+      }
+    }
+
+    if (faltantes.length) {
+      await transaction.rollback();
+
+      return res.status(400).json({
+        error:
+          "Stock insuficiente en la ubicación origen",
+        faltantes,
+      });
+    }
+
+    // =====================================================
+    // INSERTAR CABECERA
+    // =====================================================
+
+    const origenTexto =
+      `${depositoMap.get(origenId)} - ${ubicacionOrigen.nombre}`;
+
+    const destinoTexto =
+      `${depositoMap.get(destinoId)} - ${ubicacionDestino.nombre}`;
+
+    const cabeceraResult = await ejecutar(
       `
       INSERT INTO dbo.transferencias
       (
@@ -643,7 +648,7 @@ exports.create = async (req, res) => {
         id_ubicacion_destino,
         usuario
       )
-      OUTPUT INSERTED.id AS id
+      OUTPUT INSERTED.id
       VALUES
       (
         @origen,
@@ -652,119 +657,265 @@ exports.create = async (req, res) => {
         COALESCE(@fechaReal, CONVERT(date, GETDATE())),
         @remitoReferencia,
         @referenteId,
-        @uO,
-        @uD,
-        @usr
-      )
+        @ubicacionOrigenId,
+        @ubicacionDestinoId,
+        @usuario
+      );
       `,
-      (r) =>
-        r
-          .input("origen", sql.VarChar, origenTxt)
-          .input("destino", sql.VarChar, destinoTxt)
+      (request) =>
+        request
+          .input(
+            "origen",
+            sql.VarChar(100),
+            origenTexto,
+          )
+          .input(
+            "destino",
+            sql.VarChar(100),
+            destinoTexto,
+          )
           .input("fechaReal", sql.Date, fechaReal)
-          .input("remitoReferencia", sql.VarChar, remitoReferencia)
-          .input("referenteId", sql.Int, referenteId)
-          .input("uO", sql.Int, Number(uOrigen.id_ubicacion))
-          .input("uD", sql.Int, Number(uDestino.id_ubicacion))
-          .input("usr", sql.VarChar, usuario),
+          .input(
+            "remitoReferencia",
+            sql.NVarChar(100),
+            remitoReferencia,
+          )
+          .input(
+            "referenteId",
+            sql.Int,
+            referenteId,
+          )
+          .input(
+            "ubicacionOrigenId",
+            sql.Int,
+            itemsMerged[0]?.id_ubicacion_origen,
+          )
+          .input(
+            "ubicacionDestinoId",
+            sql.Int,
+            ubicacionDestinoId,
+          )
+          .input(
+            "usuario",
+            sql.VarChar(120),
+            usuario,
+          ),
     );
 
-    const transferenciaId = Number(ins.recordset[0].id);
+    const transferenciaId = Number(
+      cabeceraResult.recordset[0].id,
+    );
 
-    await execQ(
+    await ejecutar(
       `
       UPDATE dbo.transferencias
-      SET numero_transferencia = CAST(id AS VARCHAR(20))
-      WHERE id = @id
+      SET numero_transferencia =
+        CAST(id AS VARCHAR(20))
+      WHERE id = @transferenciaId;
       `,
-      (r) => r.input("id", sql.Int, transferenciaId),
+      (request) =>
+        request.input(
+          "transferenciaId",
+          sql.Int,
+          transferenciaId,
+        ),
     );
 
-    // ------------------------------------------------------------------------
-    // Detalle + movimientos de stock
-    // ------------------------------------------------------------------------
-    for (const it of itemsMerged) {
-      const idArt = artIdByCodigo.get(it.codigo);
-      const qty = Number(it.cantidad);
+    // =====================================================
+    // DETALLE Y MOVIMIENTO DE STOCK
+    // =====================================================
 
-      if (it.actualizarUbicacion) {
-        await execQ(
-          `
-    UPDATE dbo.articulos
-    SET ubicacion = @ubicacion
-    WHERE id_articulo = @idArticulo
-    `,
-          (r) =>
-            r
-              .input("ubicacion", sql.VarChar(100), it.ubicacion)
-              .input("idArticulo", sql.Int, Number(idArt)),
+    for (const item of itemsMerged) {
+      const articulo = articuloMap.get(item.codigo);
+      const cantidad = Number(item.cantidad);
+
+      // Descontar exclusivamente de la ubicación origen
+      const descuentoResult = await ejecutar(
+        `
+        UPDATE dbo.stock
+        SET cantidad = cantidad - @cantidad
+        WHERE id_deposito = @depositoId
+          AND id_ubicacion = @ubicacionId
+          AND id_articulo = @articuloId
+          AND cantidad >= @cantidad;
+
+        SELECT @@ROWCOUNT AS filas;
+        `,
+        (request) =>
+          request
+            .input(
+              "cantidad",
+              sql.Decimal(18, 2),
+              cantidad,
+            )
+            .input("depositoId", sql.Int, origenId)
+            .input(
+              "ubicacionId",
+              sql.Int,
+              item.id_ubicacion_origen,
+            )
+            .input(
+              "articuloId",
+              sql.Int,
+              articulo.id_articulo,
+            ),
+      );
+
+      const filasDescontadas = Number(
+        descuentoResult.recordset?.[0]?.filas || 0,
+      );
+
+      if (filasDescontadas !== 1) {
+        throw new Error(
+          `No se pudo descontar el artículo ${item.codigo} de la ubicación ${ubicacionOrigen.nombre}`,
         );
       }
 
-      await execQ(
+      // Sumar exclusivamente en la ubicación destino
+      await ejecutar(
+        `
+        MERGE dbo.stock WITH (HOLDLOCK) AS destino
+
+        USING
+        (
+          SELECT
+            @depositoId AS id_deposito,
+            @ubicacionId AS id_ubicacion,
+            @articuloId AS id_articulo
+        ) AS origen
+
+        ON destino.id_deposito = origen.id_deposito
+        AND destino.id_ubicacion = origen.id_ubicacion
+        AND destino.id_articulo = origen.id_articulo
+
+        WHEN MATCHED THEN
+          UPDATE SET
+            cantidad = destino.cantidad + @cantidad
+
+        WHEN NOT MATCHED THEN
+          INSERT
+          (
+            id_deposito,
+            id_ubicacion,
+            id_articulo,
+            cantidad,
+            asignado
+          )
+          VALUES
+          (
+            origen.id_deposito,
+            origen.id_ubicacion,
+            origen.id_articulo,
+            @cantidad,
+            0
+          );
+        `,
+        (request) =>
+          request
+            .input(
+              "depositoId",
+              sql.Int,
+              destinoId,
+            )
+            .input(
+              "ubicacionId",
+              sql.Int,
+              ubicacionDestinoId,
+            )
+            .input(
+              "articuloId",
+              sql.Int,
+              articulo.id_articulo,
+            )
+            .input(
+              "cantidad",
+              sql.Decimal(18, 2),
+              cantidad,
+            ),
+      );
+
+      // Guardar detalle
+      await ejecutar(
         `
         INSERT INTO dbo.transferencias_detalle
         (
           transferencia_id,
           articulo_id,
-          cantidad
+          cantidad,
+          id_ubicacion_origen
         )
         VALUES
         (
-          @tid,
-          @artId,
-          @qty
-        )
+          @transferenciaId,
+          @articuloId,
+          @cantidad,
+          @ubicacionOrigenId
+        );
         `,
-        (r) =>
-          r
-            .input("tid", sql.Int, transferenciaId)
-            .input("artId", sql.Int, Number(idArt))
-            .input("qty", sql.Int, qty),
+        (request) =>
+          request
+            .input(
+              "transferenciaId",
+              sql.Int,
+              transferenciaId,
+            )
+            .input(
+              "articuloId",
+              sql.Int,
+              articulo.id_articulo,
+            )
+            .input(
+              "cantidad",
+              sql.Int,
+              Math.trunc(cantidad),
+            )
+            .input(
+              "ubicacionOrigenId",
+              sql.Int,
+              item.id_ubicacion_origen,
+            ),
       );
-
-      await consumirStockDesdeDeposito({
-        idDeposito: origenId,
-        idArticulo: Number(idArt),
-        cantidad: qty,
-      });
-
-      await upsertStockDelta({
-        idDeposito: destinoId,
-        idArticulo: Number(idArt),
-        idUbicacion: Number(uDestino.id_ubicacion),
-        delta: qty,
-      });
     }
 
-    await trans.commit();
+    await transaction.commit();
 
-    res.status(201).json({
-      message: "Transferencia creada",
-      id: transferenciaId,
-      cabecera: {
+    return res.status(201).json({
+      message: "Transferencia creada correctamente",
+      transferencia: {
         id: transferenciaId,
-        numero_transferencia: String(transferenciaId),
-        fecha: new Date(),
-        fecha_real: fechaReal || new Date().toISOString().slice(0, 10),
+        numero_transferencia: String(
+          transferenciaId,
+        ),
+        origen: origenTexto,
+        destino: destinoTexto,
+        id_deposito_origen: origenId,
+        id_deposito_destino: destinoId,
+        id_ubicacion_origen: itemsMerged[0]?.id_ubicacion_origen,
+        id_ubicacion_destino: ubicacionDestinoId,
+        fecha_real:
+          fechaReal ||
+          new Date().toISOString().slice(0, 10),
         remito_referencia: remitoReferencia,
         id_referente: referenteId,
-        origen: origenTxt,
-        destino: destinoTxt,
-        id_ubicacion_origen: Number(uOrigen.id_ubicacion),
-        id_ubicacion_destino: Number(uDestino.id_ubicacion),
         usuario,
       },
     });
   } catch (err) {
-    try {
-      if (trans) await trans.rollback();
-    } catch {}
-
     console.error("transferencias.create:", err);
 
-    res.status(500).json({
-      error: "Error al crear transferencia",
+    try {
+      if (transaction) {
+        await transaction.rollback();
+      }
+    } catch (rollbackError) {
+      console.error(
+        "Error haciendo rollback:",
+        rollbackError,
+      );
+    }
+
+    return res.status(500).json({
+      error: "Error al crear la transferencia",
       detalle: err.message,
     });
   }

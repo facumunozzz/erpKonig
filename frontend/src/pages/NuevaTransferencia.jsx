@@ -8,7 +8,8 @@ const crearItemVacio = () => ({
   descripcion: "",
   stock: "",
   stockTotal: "",
-  ubicacion: "",
+  id_ubicacion_origen: "",
+  ubicacion_origen: "",
   cantidad: "",
 });
 
@@ -28,24 +29,21 @@ const normalizarFecha = (valor) => {
 export default function NuevaTransferencia() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const desdeAlerta =
-    searchParams.get("desdeAlerta") === "1";
-  const alertaIdUrl =
-    searchParams.get("alertaId") || "";
-  const codigoAlerta =
-    searchParams.get("codigo") || "";
-  const descripcionAlerta =
-    searchParams.get("descripcion") || "";
-  const cantidadAlerta =
-    searchParams.get("cantidad") || "";
-  const fechaAlerta =
-    searchParams.get("fecha") || "";
-  const remitoAlerta =
-    searchParams.get("remitoReferencia") || "";
+  const desdeAlerta = searchParams.get("desdeAlerta") === "1";
+  const alertaIdUrl = searchParams.get("alertaId") || "";
+  const codigoAlerta = searchParams.get("codigo") || "";
+  const descripcionAlerta = searchParams.get("descripcion") || "";
+  const cantidadAlerta = searchParams.get("cantidad") || "";
+  const fechaAlerta = searchParams.get("fecha") || "";
+  const remitoAlerta = searchParams.get("remitoReferencia") || "";
   const [depositos, setDepositos] = useState([]);
   const [referentes, setReferentes] = useState([]);
   const [origenId, setOrigenId] = useState("");
   const [destinoId, setDestinoId] = useState("");
+  const [ubicacionesOrigen, setUbicacionesOrigen] = useState([]);
+  const [ubicacionesDestino, setUbicacionesDestino] = useState([]);
+  const [ubicacionDestinoId, setUbicacionDestinoId] = useState("");
+  const [loadingUbicacionDestino, setLoadingUbicacionDestino] = useState(false);
   const [remitoReferencia, setRemitoReferencia] = useState("");
   const [referenteId, setReferenteId] = useState("");
   const [fechaReal, setFechaReal] = useState(() =>
@@ -90,16 +88,65 @@ export default function NuevaTransferencia() {
 
   const buscarDepositoPorNombre = (nombre) => {
     const nombreNormalizado = normalizarTexto(nombre);
-
     if (!nombreNormalizado) {
       return null;
     }
-
     return (
       depositos.find(
         (deposito) => normalizarTexto(deposito.nombre) === nombreNormalizado,
       ) || null
     );
+  };
+
+  const cargarUbicacionesDeposito = async (
+    depositoId,
+    setLista,
+    setSeleccionada,
+    setLoading,
+  ) => {
+    const id = Number(depositoId);
+
+    setLista([]);
+    setSeleccionada("");
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const response = await api.get("/ubicaciones/by-deposito", {
+        params: {
+          deposito_id: id,
+        },
+      });
+
+      const lista = Array.isArray(response.data)
+        ? response.data.filter((ubicacion) => ubicacion.activa)
+        : [];
+
+      setLista(lista);
+
+      const general = lista.find(
+        (ubicacion) => normalizarTexto(ubicacion.nombre) === "GENERAL",
+      );
+
+      if (general) {
+        setSeleccionada(String(general.id_ubicacion));
+      }
+    } catch (error) {
+      console.error("Error cargando ubicaciones:", error);
+
+      setLista([]);
+      setSeleccionada("");
+
+      setErrorMsg(
+        "No se pudieron cargar las ubicaciones del depósito seleccionado.",
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   const cargarReferentes = async () => {
@@ -150,166 +197,104 @@ export default function NuevaTransferencia() {
   }, []);
 
   useEffect(() => {
-    if (cargandoReferenciaRef.current) {
-      return;
-    }
+    let activo = true;
 
-    const articulosConCodigo = items
-      .map((item, index) => ({
-        codigo: normalizarTexto(item.codigo),
-        index,
-      }))
-      .filter((item) => item.codigo);
+    const cargar = async () => {
+      setUbicacionesOrigen([]);
 
-    if (!origenId) {
-      setItems((itemsActuales) =>
-        itemsActuales.map((item) => ({
-          ...item,
-          stock: "",
-          stockTotal: "",
-        })),
-      );
+      if (!origenId) {
+        setItems((actuales) =>
+          actuales.map((item) => ({
+            ...item,
+            id_ubicacion_origen: "",
+            ubicacion_origen: "",
+            stock: "",
+          })),
+        );
 
-      return;
-    }
+        return;
+      }
 
-    if (!articulosConCodigo.length) {
-      return;
-    }
+      try {
+        const response = await api.get("/ubicaciones/by-deposito", {
+          params: {
+            deposito_id: Number(origenId),
+          },
+        });
 
-    const actualizarStocks = async () => {
-      const nuevosItems = [...items];
+        if (!activo) return;
 
-      await Promise.all(
-        articulosConCodigo.map(async ({ codigo, index }) => {
-          try {
-            const response = await api.get("/transferencias/stock-articulo", {
-              params: {
-                codigo,
-                deposito_id: Number(origenId),
-              },
-            });
+        const lista = Array.isArray(response.data)
+          ? response.data.filter((ubicacion) => ubicacion.activa)
+          : [];
 
-            nuevosItems[index] = {
-              ...nuevosItems[index],
+        setUbicacionesOrigen(lista);
 
-              codigo: response.data?.codigo || codigo,
+        const general = lista.find(
+          (ubicacion) => normalizarTexto(ubicacion.nombre) === "GENERAL",
+        );
 
-              stock: response.data?.stock_deposito ?? response.data?.stock ?? 0,
+        const generalId = general ? String(general.id_ubicacion) : "";
 
-              stockTotal: response.data?.stock_total ?? 0,
+        setItems((actuales) =>
+          actuales.map((item) => ({
+            ...item,
+            id_ubicacion_origen: generalId,
+            ubicacion_origen: general?.nombre || "",
+            stock: "",
+          })),
+        );
+      } catch (error) {
+        console.error("Error cargando ubicaciones origen:", error);
 
-              ubicacion:
-                response.data?.ubicacion ?? nuevosItems[index]?.ubicacion ?? "",
-            };
-          } catch (error) {
-            console.error(`Error consultando stock de ${codigo}:`, error);
-
-            nuevosItems[index] = {
-              ...nuevosItems[index],
-              stock: "Error",
-              stockTotal: "Error",
-            };
-          }
-        }),
-      );
-
-      setItems(nuevosItems);
+        if (activo) {
+          setErrorMsg(
+            "No se pudieron cargar las ubicaciones del depósito origen.",
+          );
+        }
+      }
     };
 
-    actualizarStocks();
+    cargar();
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      activo = false;
+    };
   }, [origenId]);
 
   useEffect(() => {
-  if (!desdeAlerta) {
-    return;
-  }
-
-  const cargarDesdeAlerta = async () => {
-    const codigo = normalizarTexto(
-      codigoAlerta,
+    cargarUbicacionesDeposito(
+      destinoId,
+      setUbicacionesDestino,
+      setUbicacionDestinoId,
+      setLoadingUbicacionDestino,
     );
+  }, [destinoId]);
 
-    const cantidad = Math.abs(
-      Number(cantidadAlerta || 0),
-    );
-
-    setRemitoReferencia(remitoAlerta);
-
-    if (fechaAlerta) {
-      setFechaReal(
-        String(fechaAlerta).slice(0, 10),
-      );
-    }
-
-    /*
-     * El depósito origen debe quedar vacío.
-     */
-    setOrigenId("");
-
-    if (!codigo) {
+  useEffect(() => {
+    if (!desdeAlerta) {
       return;
     }
 
-    setItems([
-      {
-        ...crearItemVacio(),
+    const cargarDesdeAlerta = async () => {
+      const codigo = normalizarTexto(codigoAlerta);
 
-        codigo,
+      const cantidad = Math.abs(Number(cantidadAlerta || 0));
 
-        descripcion:
-          descripcionAlerta || "",
+      setRemitoReferencia(remitoAlerta);
 
-        cantidad:
-          Number.isFinite(cantidad) &&
-          cantidad > 0
-            ? String(cantidad)
-            : "",
-      },
-    ]);
+      if (fechaAlerta) {
+        setFechaReal(String(fechaAlerta).slice(0, 10));
+      }
 
-    try {
-      const response = await api.get(
-        "/transferencias/articulo",
-        {
-          params: {
-            codigo,
-          },
-        },
-      );
+      /*
+       * El depósito origen debe quedar vacío.
+       */
+      setOrigenId("");
 
-      const articulo = response.data || {};
-
-      setItems([
-        {
-          ...crearItemVacio(),
-
-          codigo: normalizarTexto(
-            articulo.codigo || codigo,
-          ),
-
-          descripcion:
-            articulo.descripcion ||
-            descripcionAlerta ||
-            "",
-
-          ubicacion:
-            articulo.ubicacion || "",
-
-          cantidad:
-            Number.isFinite(cantidad) &&
-            cantidad > 0
-              ? String(cantidad)
-              : "",
-        },
-      ]);
-    } catch (error) {
-      console.error(
-        "No se pudo validar el artículo de la alerta:",
-        error,
-      );
+      if (!codigo) {
+        return;
+      }
 
       setItems([
         {
@@ -317,24 +302,58 @@ export default function NuevaTransferencia() {
 
           codigo,
 
-          descripcion:
-            descripcionAlerta ||
-            "Artículo no encontrado",
+          descripcion: descripcionAlerta || "",
 
           cantidad:
-            Number.isFinite(cantidad) &&
-            cantidad > 0
-              ? String(cantidad)
-              : "",
+            Number.isFinite(cantidad) && cantidad > 0 ? String(cantidad) : "",
         },
       ]);
-    }
-  };
 
-  cargarDesdeAlerta();
+      try {
+        const response = await api.get("/transferencias/articulo", {
+          params: {
+            codigo,
+          },
+        });
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [desdeAlerta]);
+        const articulo = response.data || {};
+
+        setItems([
+          {
+            ...crearItemVacio(),
+
+            codigo: normalizarTexto(articulo.codigo || codigo),
+
+            descripcion: articulo.descripcion || descripcionAlerta || "",
+
+            ubicacion: articulo.ubicacion || "",
+
+            cantidad:
+              Number.isFinite(cantidad) && cantidad > 0 ? String(cantidad) : "",
+          },
+        ]);
+      } catch (error) {
+        console.error("No se pudo validar el artículo de la alerta:", error);
+
+        setItems([
+          {
+            ...crearItemVacio(),
+
+            codigo,
+
+            descripcion: descripcionAlerta || "Artículo no encontrado",
+
+            cantidad:
+              Number.isFinite(cantidad) && cantidad > 0 ? String(cantidad) : "",
+          },
+        ]);
+      }
+    };
+
+    cargarDesdeAlerta();
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desdeAlerta]);
 
   const actualizarItem = (index, cambios) => {
     setItems((itemsActuales) =>
@@ -349,14 +368,17 @@ export default function NuevaTransferencia() {
     );
   };
 
-  const consultarStockPorDeposito = async (codigo, depositoId) => {
+  const consultarStockPorDeposito = async (codigo, depositoId, ubicacionId) => {
     const codigoNormalizado = normalizarTexto(codigo);
     const depositoNumero = Number(depositoId);
+    const ubicacionNumero = Number(ubicacionId);
 
     if (
       !codigoNormalizado ||
       !Number.isInteger(depositoNumero) ||
-      depositoNumero <= 0
+      depositoNumero <= 0 ||
+      !Number.isInteger(ubicacionNumero) ||
+      ubicacionNumero <= 0
     ) {
       return {
         codigo: codigoNormalizado,
@@ -371,13 +393,18 @@ export default function NuevaTransferencia() {
         params: {
           codigo: codigoNormalizado,
           deposito_id: depositoNumero,
+          id_ubicacion: ubicacionNumero,
         },
       });
 
       return {
         codigo: response.data?.codigo || codigoNormalizado,
 
-        stock: response.data?.stock_deposito ?? response.data?.stock ?? 0,
+        stock:
+          response.data?.stock_ubicacion ??
+          response.data?.stock_deposito ??
+          response.data?.stock ??
+          0,
 
         stockTotal: response.data?.stock_total ?? 0,
 
@@ -396,10 +423,15 @@ export default function NuevaTransferencia() {
   };
 
   const consultarStock = async (codigo, index) => {
-    const datosStock = await consultarStockPorDeposito(codigo, origenId);
-
+    const ubicacionId =
+      items[index]?.id_ubicacion_origen;
+    const datosStock =
+      await consultarStockPorDeposito(
+        codigo,
+        origenId,
+        ubicacionId,
+      );
     actualizarItem(index, datosStock);
-
     return datosStock.stock !== "Error";
   };
 
@@ -834,9 +866,55 @@ export default function NuevaTransferencia() {
 
       const nuevosItems = await Promise.all(
         articulos.map(async (articulo) => {
-          const datosStock = await consultarStockPorDeposito(
-            articulo.codigo,
-            nuevoOrigenId,
+          const responseUbicaciones = await api.get(
+            "/ubicaciones/by-deposito",
+            {
+              params: {
+                deposito_id: Number(nuevoOrigenId),
+              },
+            },
+          );
+
+          const listaUbicaciones = Array.isArray(responseUbicaciones.data)
+            ? responseUbicaciones.data.filter((ubicacion) => ubicacion.activa)
+            : [];
+
+          const ubicacionGeneral = listaUbicaciones.find(
+            (ubicacion) => normalizarTexto(ubicacion.nombre) === "GENERAL",
+          );
+
+          if (!ubicacionGeneral) {
+            setErrorMsg(
+              "El depósito origen no tiene una ubicación GENERAL configurada.",
+            );
+
+            return;
+          }
+
+          const nuevaUbicacionOrigenId = String(ubicacionGeneral.id_ubicacion);
+
+          const nuevosItems = await Promise.all(
+            articulos.map(async (articulo) => {
+              const datosStock = await consultarStockPorDeposito(
+                articulo.codigo,
+                nuevoOrigenId,
+                nuevaUbicacionOrigenId,
+              );
+
+              return {
+                codigo: datosStock.codigo || articulo.codigo,
+
+                descripcion: articulo.descripcion || "",
+
+                stock: datosStock.stock,
+
+                stockTotal: datosStock.stockTotal,
+
+                ubicacion: datosStock.ubicacion,
+
+                cantidad: String(Math.trunc(articulo.cantidad)),
+              };
+            }),
           );
 
           return {
@@ -857,7 +935,8 @@ export default function NuevaTransferencia() {
 
       const primeraOpcion = seleccionadas[0];
 
-      setOrigenId(nuevoOrigenId);
+      setUbicacionesOrigen(listaUbicaciones);
+      setUbicacionOrigenId(nuevaUbicacionOrigenId);
       setDestinoId("");
 
       setReferenteId(
@@ -923,21 +1002,23 @@ export default function NuevaTransferencia() {
         return;
       }
 
-      if (depositoOrigenId === depositoDestinoId) {
-        setErrorMsg("El depósito origen y destino deben ser distintos.");
+      const ubicacionDestinoNumero = Number(ubicacionDestinoId);
 
+      if (
+        !Number.isInteger(ubicacionDestinoNumero) ||
+        ubicacionDestinoNumero <= 0
+      ) {
+        setErrorMsg("Seleccioná la ubicación destino.");
         return;
       }
 
       const itemsConCodigo = items
         .map((item) => ({
           codigo: normalizarTexto(item.codigo),
-
           descripcion: String(item.descripcion || "").trim(),
-
           ubicacion: String(item.ubicacion || "").trim(),
-
           cantidad: Number(item.cantidad),
+          id_ubicacion_origen: Number(item.id_ubicacion_origen),
         }))
         .filter((item) => item.codigo);
 
@@ -976,18 +1057,43 @@ export default function NuevaTransferencia() {
         origen_id: depositoOrigenId,
         destino_id: depositoDestinoId,
 
-        remito_referencia: remitoReferencia.trim() || null,
+        id_ubicacion_destino:
+          ubicacionDestinoNumero,
 
-        id_referente: referenteId ? Number(referenteId) : null,
+        remito_referencia:
+          remitoReferencia.trim() || null,
 
-        fecha_real: fechaReal || null,
+        id_referente:
+          referenteId
+            ? Number(referenteId)
+            : null,
+
+        fecha_real:
+          fechaReal || null,
 
         items: itemsConCodigo.map((item) => ({
           codigo: item.codigo,
-          ubicacion: item.ubicacion,
           cantidad: Math.trunc(item.cantidad),
+          id_ubicacion_origen:
+            Number(item.id_ubicacion_origen),
         })),
       };
+
+      const itemsSinUbicacion = itemsConCodigo.filter(
+        (item) =>
+          !Number.isInteger(
+            Number(item.id_ubicacion_origen),
+          ) ||
+          Number(item.id_ubicacion_origen) <= 0,
+      );
+
+      if (itemsSinUbicacion.length) {
+        setErrorMsg(
+          "Todos los artículos deben tener una ubicación origen.",
+        );
+
+        return;
+      }
 
       const response = await api.post("/transferencias", body);
       const alertaIdNumero = Number(alertaIdUrl);
@@ -997,12 +1103,9 @@ export default function NuevaTransferencia() {
         alertaIdNumero > 0
       ) {
         try {
-          await api.put(
-            "/ajustes/alertas-consumo/marcar-leidas",
-            {
-              ids: [alertaIdNumero],
-            },
-          );
+          await api.put("/ajustes/alertas-consumo/marcar-leidas", {
+            ids: [alertaIdNumero],
+          });
         } catch (errorAlerta) {
           console.error(
             "La transferencia fue creada, pero no se pudo resolver la alerta:",
@@ -1053,10 +1156,15 @@ export default function NuevaTransferencia() {
     }
   };
 
-  const mismoDeposito =
-    Number(origenId) > 0 &&
-    Number(destinoId) > 0 &&
-    Number(origenId) === Number(destinoId);
+  const mismoOrigenDestino = items.some(
+    (item) =>
+      Number(origenId) > 0 &&
+      Number(destinoId) > 0 &&
+      Number(origenId) === Number(destinoId) &&
+      Number(item.id_ubicacion_origen) > 0 &&
+      Number(ubicacionDestinoId) > 0 &&
+      Number(item.id_ubicacion_origen) === Number(ubicacionDestinoId)
+  );
 
   const hayItemsConDatos = items.some((item) =>
     String(item.codigo || "").trim(),
@@ -1089,9 +1197,9 @@ export default function NuevaTransferencia() {
 
       {errorMsg && <div className="nt-error">{errorMsg}</div>}
 
-      {mismoDeposito && (
+      {mismoOrigenDestino && (
         <div className="nt-error">
-          El depósito origen y destino deben ser distintos.
+          La ubicación origen y destino no pueden ser iguales.
         </div>
       )}
 
@@ -1131,6 +1239,34 @@ export default function NuevaTransferencia() {
                 </option>
               ))}
             </select>
+
+            <div className="nt-field">
+              <label htmlFor="transferencia-ubicacion-destino">
+                Ubicación destino
+              </label>
+
+              <select
+                id="transferencia-ubicacion-destino"
+                value={ubicacionDestinoId}
+                onChange={(event) => setUbicacionDestinoId(event.target.value)}
+                disabled={!destinoId || loadingUbicacionDestino}
+              >
+                <option value="">
+                  {loadingUbicacionDestino
+                    ? "Cargando ubicaciones..."
+                    : "-- Seleccioná ubicación destino --"}
+                </option>
+
+                {ubicacionesDestino.map((ubicacion) => (
+                  <option
+                    key={ubicacion.id_ubicacion}
+                    value={ubicacion.id_ubicacion}
+                  >
+                    {ubicacion.nombre}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="nt-field">
@@ -1204,25 +1340,9 @@ export default function NuevaTransferencia() {
                   Stock origen
                 </th>
 
-                <th
-                  style={{
-                    width: 120,
-                    textAlign: "right",
-                  }}
-                >
-                  Stock total
-                </th>
-
-                <th style={{ width: 190 }}>Ubicación</th>
-
-                <th
-                  style={{
-                    width: 140,
-                    textAlign: "right",
-                  }}
-                >
-                  Cantidad
-                </th>
+                <th style={{ width: 120, textAlign: "right" }}>Stock total</th>
+                <th style={{ width: 190 }}>Ubicación origen</th>
+                <th style={{ width: 140, textAlign: "right" }}>Cantidad</th>
 
                 <th style={{ width: 110 }}>Acción</th>
               </tr>
@@ -1271,18 +1391,47 @@ export default function NuevaTransferencia() {
                   </td>
 
                   <td>
-                    <input
-                      type="text"
-                      value={item.ubicacion || ""}
-                      placeholder="Ubicación del artículo"
-                      maxLength={100}
-                      onChange={(event) =>
+                    <select
+                      value={item.id_ubicacion_origen || ""}
+                      onChange={async (event) => {
+                        const idUbicacion = event.target.value;
+
+                        const ubicacionSeleccionada = ubicacionesOrigen.find(
+                          (ubicacion) =>
+                            String(ubicacion.id_ubicacion) === String(idUbicacion)
+                        );
+
                         actualizarItem(index, {
-                          ubicacion: event.target.value,
-                        })
-                      }
+                          id_ubicacion_origen: idUbicacion,
+                          ubicacion_origen: ubicacionSeleccionada?.nombre || "",
+                          stock: "",
+                        });
+
+                        if (item.codigo && idUbicacion) {
+                          const datosStock = await consultarStockPorDeposito(
+                            item.codigo,
+                            origenId,
+                            idUbicacion
+                          );
+
+                          actualizarItem(index, {
+                            ...datosStock,
+                            id_ubicacion_origen: idUbicacion,
+                            ubicacion_origen: ubicacionSeleccionada?.nombre || "",
+                          });
+                        }
+                      }}
+                      disabled={!origenId}
                       style={{ width: "100%" }}
-                    />
+                    >
+                      <option value="">-- Seleccioná ubicación --</option>
+
+                      {ubicacionesOrigen.map((ubicacion) => (
+                        <option key={ubicacion.id_ubicacion} value={ubicacion.id_ubicacion}>
+                          {ubicacion.nombre}
+                        </option>
+                      ))}
+                    </select>
                   </td>
 
                   <td>
@@ -1340,8 +1489,10 @@ export default function NuevaTransferencia() {
               confirmando ||
               !origenId ||
               !destinoId ||
+              !items.some((item) => Number(item.id_ubicacion_origen) > 0) ||
+              !ubicacionDestinoId ||
               !hayItemsConDatos ||
-              mismoDeposito
+              mismoOrigenDestino
             }
           >
             {confirmando ? "Confirmando..." : "Confirmar transferencia"}

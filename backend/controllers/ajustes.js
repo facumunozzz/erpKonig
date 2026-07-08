@@ -269,7 +269,8 @@ async function upsertStockDelta(
     .input("depositoId", sql.Int, depositoId)
     .input("articuloId", sql.Int, articuloId)
     .input("ubicacionId", sql.Int, ubicacionId)
-    .input("delta", sql.Int, delta).query(`
+    .input("delta", sql.Decimal(18, 2), Number(delta))
+    .query(`
       MERGE dbo.stock WITH (HOLDLOCK) AS destino
 
       USING (
@@ -315,7 +316,8 @@ async function tryDescontarStock(
     .input("depositoId", sql.Int, depositoId)
     .input("articuloId", sql.Int, articuloId)
     .input("ubicacionId", sql.Int, ubicacionId)
-    .input("delta", sql.Int, deltaNegativo).query(`
+    .input("delta", sql.Decimal(18, 2), Number(deltaNegativo))
+    .query(`
       UPDATE dbo.stock
       SET cantidad = cantidad + @delta
       WHERE id_deposito = @depositoId
@@ -1147,8 +1149,6 @@ exports.create = async (req, res) => {
 
   const depositoId = asInt(req.body?.deposito_id);
 
-  const ubicacionIdBody = req.body?.id_ubicacion ?? null;
-
   const motivoId = asInt(req.body?.motivo_id);
 
   const remitoReferencia = toDb(req.body?.remito_referencia);
@@ -1214,22 +1214,23 @@ exports.create = async (req, res) => {
       continue;
     }
 
-    const actual = agrupados.get(codigo) || {
-      codigo,
-      cantidad: 0,
-      ubicacion: null,
-      actualizarUbicacion: false,
-    };
+    const ubicacionItemId = asInt(item?.id_ubicacion);
 
-    actual.cantidad += cantidad;
+if (!Number.isFinite(ubicacionItemId) || ubicacionItemId <= 0) {
+  continue;
+}
 
-    if (Object.prototype.hasOwnProperty.call(item || {}, "ubicacion")) {
-      actual.ubicacion = toDb(item.ubicacion);
+const clave = `${codigo}|${ubicacionItemId}`;
 
-      actual.actualizarUbicacion = true;
-    }
+const actual = agrupados.get(clave) || {
+  codigo,
+  cantidad: 0,
+  id_ubicacion: ubicacionItemId,
+};
 
-    agrupados.set(codigo, actual);
+actual.cantidad += cantidad;
+
+agrupados.set(clave, actual);
   }
 
   const items = Array.from(agrupados.values());
@@ -1334,15 +1335,6 @@ exports.create = async (req, res) => {
     }
 
     // ----------------------------------------------------
-    // UBICACIÓN TÉCNICA DE STOCK
-    // ----------------------------------------------------
-
-    const ubicacionId = await resolveUbicacionId(transaction, {
-      depositoId,
-      ubicacionId: ubicacionIdBody,
-    });
-
-    // ----------------------------------------------------
     // ARTÍCULOS
     // ----------------------------------------------------
 
@@ -1409,9 +1401,15 @@ exports.create = async (req, res) => {
     for (const item of items) {
       const articulo = articulosPorCodigo.get(item.codigo);
 
+      const ubicacionId = await resolveUbicacionId(transaction, {
+        depositoId,
+        ubicacionId: item.id_ubicacion,
+      });
+
       const disponible = await getStockActual(transaction, {
         depositoId,
         articuloId: articulo.id_articulo,
+        ubicacionId,
       });
 
       const proyectado = disponible + item.cantidad;
@@ -1507,26 +1505,17 @@ exports.create = async (req, res) => {
     for (const item of items) {
       const articulo = articulosPorCodigo.get(item.codigo);
 
-      /*
-       * Esta ubicación es descriptiva y pertenece
-       * al artículo, no a una fila de stock.
-       */
-      if (item.actualizarUbicacion) {
-        await new sql.Request(transaction)
-          .input("articuloId", sql.Int, articulo.id_articulo)
-          .input("ubicacion", sql.VarChar(100), item.ubicacion).query(`
-            UPDATE dbo.articulos
-            SET ubicacion = @ubicacion
-            WHERE id_articulo = @articuloId;
-          `);
-      }
-
       await insertDetalle(transaction, {
         ajusteId: numeroAjuste,
         cod: item.codigo,
         desc: articulo.descripcion,
         cantidad: item.cantidad,
         usuario,
+      });
+
+      const ubicacionId = await resolveUbicacionId(transaction, {
+        depositoId,
+        ubicacionId: item.id_ubicacion,
       });
 
       await upsertStockDelta(transaction, {

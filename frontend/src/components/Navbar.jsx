@@ -22,8 +22,34 @@ function Navbar() {
         {hasUtilidad('Artículos') && (
           <li><NavLink to="/articulos" className={linkClass}>Artículos</NavLink></li>
         )}
-        {hasUtilidad('Stock') && (
-          <li><NavLink to="/stock" className={linkClass}>Stock</NavLink></li>
+        {hasUtilidad("Stock") && (
+          <li className="navbar-dropdown">
+            <NavLink
+              to="/stock"
+              className={({ isActive }) =>
+                isActive
+                  ? "active navbar-dropdown-title"
+                  : "navbar-dropdown-title"
+              }
+            >
+              Stock
+              <span className="navbar-dropdown-arrow">▲</span>
+            </NavLink>
+
+            <ul className="navbar-dropdown-menu">
+              <li>
+                <NavLink to="/stock" className={linkClass}>
+                  Stock general
+                </NavLink>
+              </li>
+
+              <li>
+                <NavLink to="/stock-recortes" className={linkClass}>
+                  Stock recortes
+                </NavLink>
+              </li>
+            </ul>
+          </li>
         )}
         {hasUtilidad('Transferencias') && (
           <li><NavLink to="/transferencias" className={linkClass}>Transferencias</NavLink></li>

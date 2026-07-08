@@ -76,6 +76,7 @@ const dropboxRegistroRoutes = require("./routes/dropboxRegistro");
 const dashboardObrasRoutes = require("./routes/dashboardObras");
 const estadoResumenRoutes = require("./routes/estadoResumen");
 const referentesRoutes = require("./routes/referentes");
+const stockRecortesRoutes = require("./routes/stockRecortes");
 
 // =====================
 // BACKEND ROUTES
@@ -102,6 +103,7 @@ app.use("/api/dropbox", dropboxRegistroRoutes);
 app.use("/api/dashboard-obras", dashboardObrasRoutes);
 app.use("/api/estado-resumen", estadoResumenRoutes);
 app.use("/referentes", referentesRoutes);
+app.use("/api/stock-recortes", stockRecortesRoutes);
 
 // =====================
 // DEBUG / HEALTHCHECK

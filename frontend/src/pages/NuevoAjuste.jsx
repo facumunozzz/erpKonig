@@ -24,7 +24,8 @@ const crearItemVacio = () => ({
   proveedor: "",
   stock: "",
   stockTotal: "",
-  ubicacion: "",
+  id_ubicacion: "",
+  ubicacion_nombre: "",
   cantidad: "",
 });
 
@@ -75,6 +76,9 @@ export default function NuevoAjuste() {
   const [referentes, setReferentes] = useState([]);
 
   const [depositoId, setDepositoId] = useState("");
+  const [ubicaciones, setUbicaciones] = useState([]);
+  const [ubicacionId, setUbicacionId] = useState("");
+  const [loadingUbicaciones, setLoadingUbicaciones] = useState(false);
   const [motivoId, setMotivoId] = useState("");
   const [referenteId, setReferenteId] = useState("");
 
@@ -191,6 +195,83 @@ export default function NuevoAjuste() {
 
     cargarDatosIniciales();
   }, []);
+
+  useEffect(() => {
+  let activo = true;
+
+  const cargar = async () => {
+    setUbicaciones([]);
+    setUbicacionId("");
+
+    if (!depositoId) return;
+
+    try {
+      setLoadingUbicaciones(true);
+
+      const response = await api.get(
+        "/ubicaciones/by-deposito",
+        {
+          params: {
+            deposito_id: Number(depositoId),
+          },
+        },
+      );
+
+      if (!activo) return;
+
+      const lista = Array.isArray(response.data)
+        ? response.data.filter(
+            (ubicacion) => ubicacion.activa,
+          )
+        : [];
+
+      setUbicaciones(lista);
+
+      const general = lista.find(
+        (ubicacion) =>
+          normalizarMotivo(
+            ubicacion.nombre,
+          ) === "GENERAL",
+      );
+
+      if (general) {
+        const generalId = String(general.id_ubicacion);
+
+        setUbicacionId(generalId);
+
+        setItems((itemsActuales) =>
+          itemsActuales.map((item) => ({
+            ...item,
+            id_ubicacion: item.id_ubicacion || generalId,
+            ubicacion_nombre: item.ubicacion_nombre || general.nombre || "",
+            stock: "",
+          }))
+        );
+      }
+    } catch (error) {
+      console.error(
+        "Error cargando ubicaciones:",
+        error,
+      );
+
+      if (activo) {
+        setErrorMsg(
+          "No se pudieron cargar las ubicaciones.",
+        );
+      }
+    } finally {
+      if (activo) {
+        setLoadingUbicaciones(false);
+      }
+    }
+  };
+
+  cargar();
+
+  return () => {
+    activo = false;
+  };
+}, [depositoId]);
 
   useEffect(() => {
     if (!desdeAlerta || borradorIdUrl) {
@@ -353,6 +434,7 @@ export default function NuevoAjuste() {
               params: {
                 codigo,
                 deposito_id: Number(depositoId),
+                id_ubicacion: Number(item.id_ubicacion),
               },
             },
           );
@@ -366,10 +448,8 @@ export default function NuevoAjuste() {
               0,
             stockTotal:
               response.data?.stock_total ?? 0,
-            ubicacion:
-              response.data?.ubicacion ??
-              item.ubicacion ??
-              "",
+            id_ubicacion: item.id_ubicacion,
+            ubicacion_nombre: item.ubicacion_nombre,
           };
         } catch (error) {
           console.error(
@@ -399,11 +479,19 @@ export default function NuevoAjuste() {
       .trim()
       .toUpperCase();
 
-    if (!codigoNormalizado || !depositoId) {
+    const item = items[index];
+
+    const ubicacionNumero = Number(item?.id_ubicacion);
+
+    if (
+      !codigoNormalizado ||
+      !depositoId ||
+      !Number.isInteger(ubicacionNumero) ||
+      ubicacionNumero <= 0
+    ) {
       actualizarItem(index, {
         stock: "",
         stockTotal: "",
-        ubicacion: "",
       });
 
       return false;
@@ -414,17 +502,20 @@ export default function NuevoAjuste() {
         params: {
           codigo: codigoNormalizado,
           deposito_id: Number(depositoId),
+          id_ubicacion: ubicacionNumero,
         },
       });
 
       actualizarItem(index, {
         codigo: response.data?.codigo || codigoNormalizado,
 
-        stock: response.data?.stock_deposito ?? response.data?.stock ?? 0,
+        stock:
+          response.data?.stock_ubicacion ??
+          response.data?.stock_deposito ??
+          response.data?.stock ??
+          0,
 
         stockTotal: response.data?.stock_total ?? 0,
-
-        ubicacion: response.data?.ubicacion ?? "",
       });
 
       return true;
@@ -434,7 +525,6 @@ export default function NuevoAjuste() {
       actualizarItem(index, {
         stock: "Error",
         stockTotal: "Error",
-        ubicacion: "",
       });
 
       return false;
@@ -810,9 +900,9 @@ export default function NuevoAjuste() {
 
           descripcion: String(item.descripcion || "").trim(),
 
-          ubicacion: String(item.ubicacion || "").trim(),
-
           cantidad: Number(item.cantidad),
+
+          id_ubicacion: Number(item.id_ubicacion),
         }))
         .filter((item) => item.cod_articulo);
 
@@ -844,22 +934,48 @@ export default function NuevoAjuste() {
         return;
       }
 
+      const sinUbicacion = itemsConCodigo.filter(
+        (item) =>
+          !Number.isInteger(item.id_ubicacion) ||
+          item.id_ubicacion <= 0
+      );
+
+      if (sinUbicacion.length) {
+        setErrorMsg("Todos los artículos deben tener una ubicación.");
+
+        return;
+      }
+
       const body = {
-        deposito_id: depositoNumero,
-        id_ubicacion: null,
-        motivo_id: motivoNumero,
-        obra: obra.trim() || null,
-        version: version.trim() || null,
-        remito_referencia: remitoReferencia.trim() || null,
-        id_referente: referenteId ? Number(referenteId) : null,
+        deposito_id: Number(depositoId),
+
+        motivo_id: Number(motivoId),
+
+        tipo_ajuste: tipoAjuste,
+
+        remito_referencia:
+          remitoReferencia.trim() || null,
+
+        id_referente:
+          referenteId
+            ? Number(referenteId)
+            : null,
+
         fecha_real: fechaReal || null,
+
+        obra: obra.trim() || null,
+
+        version: version.trim() || null,
+
         items: itemsConCodigo.map((item) => ({
           cod_articulo: item.cod_articulo,
-          ubicacion: item.ubicacion,
+
           cantidad:
             tipoAjuste === "EGRESO"
-              ? -Math.abs(Math.trunc(item.cantidad))
-              : Math.abs(Math.trunc(item.cantidad)),
+              ? -Math.trunc(item.cantidad)
+              : Math.trunc(item.cantidad),
+
+          id_ubicacion: item.id_ubicacion,
         })),
       };
 
@@ -1314,20 +1430,69 @@ export default function NuevoAjuste() {
                   </td>
 
                   <td>
-                    <input
-                      type="text"
-                      value={item.ubicacion || ""}
-                      placeholder="Ubicación del artículo"
-                      maxLength={100}
-                      onChange={(event) =>
+                    <select 
+                      value={item.id_ubicacion || ""}
+                      onChange={async (event) => {
+                        const idUbicacion = event.target.value;
+
+                        const ubicacionSeleccionada = ubicaciones.find(
+                          (ubicacion) =>
+                            String(ubicacion.id_ubicacion) === String(idUbicacion)
+                        );
+
                         actualizarItem(index, {
-                          ubicacion: event.target.value,
-                        })
-                      }
-                      style={{
-                        width: "100%",
+                          id_ubicacion: idUbicacion,
+                          ubicacion_nombre: ubicacionSeleccionada?.nombre || "",
+                          stock: "",
+                        });
+
+                        if (item.codigo && idUbicacion) {
+                          try {
+                            const response = await api.get("/transferencias/stock-articulo", {
+                              params: {
+                                codigo: String(item.codigo || "").trim().toUpperCase(),
+                                deposito_id: Number(depositoId),
+                                id_ubicacion: Number(idUbicacion),
+                              },
+                            });
+
+                            actualizarItem(index, {
+                              id_ubicacion: idUbicacion,
+                              ubicacion_nombre: ubicacionSeleccionada?.nombre || "",
+
+                              stock:
+                                response.data?.stock_ubicacion ??
+                                response.data?.stock_deposito ??
+                                response.data?.stock ??
+                                0,
+
+                              stockTotal: response.data?.stock_total ?? 0,
+                            });
+                          } catch (error) {
+                            console.error("Error consultando stock por ubicación:", error);
+
+                            actualizarItem(index, {
+                              stock: "Error",
+                              stockTotal: "Error",
+                            });
+                          }
+                        }
                       }}
-                    />
+                      disabled={!depositoId || loadingUbicaciones}
+                      style={{ width: "100%" }}
+                    >
+                      <option value="">
+                        {loadingUbicaciones
+                          ? "Cargando ubicaciones..."
+                          : "-- Seleccioná ubicación --"}
+                      </option>
+
+                      {ubicaciones.map((ubicacion) => (
+                        <option key={ubicacion.id_ubicacion} value={ubicacion.id_ubicacion}>
+                          {ubicacion.nombre}
+                        </option>
+                      ))}
+                    </select>
                   </td>
 
                   <td>

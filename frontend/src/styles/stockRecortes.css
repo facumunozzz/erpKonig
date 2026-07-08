@@ -1,0 +1,442 @@
+/* =====================================================
+   CONTENEDOR PRINCIPAL
+   ===================================================== */
+
+.stock-recortes-container {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+
+  margin-top: 20px;
+  padding: 0;
+
+  box-sizing: border-box;
+}
+
+/* =====================================================
+   CABECERA
+   ===================================================== */
+
+.stock-recortes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+
+  margin-bottom: 15px;
+}
+
+.stock-recortes-header h2 {
+  margin-top: 0;
+}
+
+/* =====================================================
+   TÍTULO, IGUAL A STOCK
+   ===================================================== */
+
+.stock-recortes-container h2.module-title {
+  position: relative;
+
+  margin-bottom: 1rem;
+  padding-bottom: 0.4rem;
+
+  font-family: "Poppins", "Segoe UI", sans-serif;
+  font-size: 1.8rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+
+  background: linear-gradient(90deg, #004080, #0059b3);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+
+  text-shadow: 0 3px 6px rgba(0, 0, 0, 0.2);
+}
+
+.stock-recortes-container h2.module-title::after {
+  content: "";
+
+  position: absolute;
+  bottom: 0;
+  left: 0;
+
+  width: 0;
+  height: 3px;
+
+  background: linear-gradient(90deg, #004080, #0059b3);
+  border-radius: 2px;
+
+  transition: width 0.4s ease-in-out;
+}
+
+.stock-recortes-container h2.module-title:hover::after {
+  width: 100%;
+}
+
+/* =====================================================
+   BARRA DE ACCIONES
+   ===================================================== */
+
+.stock-recortes-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  margin-bottom: 15px;
+}
+
+.stock-recortes-toolbar input {
+  flex: 1;
+
+  min-width: 240px;
+  padding: 6px 8px;
+
+  border: 1px solid #ccc;
+  border-radius: 4px;
+
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.stock-recortes-toolbar button,
+.btn-recorte-principal {
+  padding: 6px 10px;
+
+  border: none;
+  border-radius: 4px;
+
+  background-color: #007acc;
+  color: white;
+
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.stock-recortes-toolbar button:hover,
+.btn-recorte-principal:hover {
+  background-color: #0068ad;
+}
+
+.stock-recortes-toolbar button:disabled,
+.btn-recorte-principal:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* =====================================================
+   TABLA PRINCIPAL
+   ===================================================== */
+
+.stock-recortes-tabla-wrap {
+  width: 100%;
+  max-width: 100%;
+
+  margin-top: 10px;
+
+  overflow-x: auto;
+  overflow-y: visible;
+
+  box-sizing: border-box;
+}
+
+.stock-recortes-tabla {
+  width: 100%;
+  min-width: 900px;
+
+  border-collapse: collapse;
+
+  font-size: 13px;
+  white-space: nowrap;
+
+  background: #ffffff;
+}
+
+.stock-recortes-tabla th,
+.stock-recortes-tabla td {
+  min-width: 120px;
+  padding: 4px 6px;
+
+  border: 1px solid #dddddd;
+
+  text-align: left;
+  vertical-align: middle;
+}
+
+.stock-recortes-tabla th {
+  background: #f4f4f4;
+  font-weight: 600;
+}
+
+.stock-recortes-tabla tbody tr:hover {
+  background: #f8fafc;
+}
+
+.stock-recortes-tabla .numero {
+  text-align: right;
+}
+
+.stock-recortes-tabla .acciones-columna {
+  width: 220px;
+  min-width: 220px;
+}
+
+.stock-recortes-tabla .acciones-celda {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  min-width: 220px;
+  white-space: nowrap;
+}
+
+/* Botones internos de tabla */
+
+.stock-recortes-tabla button {
+  padding: 5px 9px;
+
+  border: 1px solid #007acc;
+  border-radius: 4px;
+
+  background: #ffffff;
+  color: #007acc;
+
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stock-recortes-tabla button:hover {
+  background: #eaf5fc;
+}
+
+.stock-recortes-tabla .btn-eliminar-recorte {
+  border-color: #c62828;
+
+  background: #ffffff;
+  color: #c62828;
+}
+
+.stock-recortes-tabla .btn-eliminar-recorte:hover {
+  background: #ffebee;
+}
+
+/* =====================================================
+   DETALLE DE UBICACIONES
+   ===================================================== */
+
+.fila-detalle-recorte td {
+  padding: 12px;
+
+  background: #fcfcfc;
+}
+
+.detalle-recorte {
+  width: 100%;
+  max-width: 650px;
+
+  font-size: 13px;
+}
+
+.detalle-recorte > strong {
+  display: block;
+  margin-bottom: 8px;
+
+  color: #334155;
+  font-size: 13px;
+}
+
+.tabla-ubicaciones-recorte {
+  width: 100%;
+  margin-top: 8px;
+
+  border-collapse: collapse;
+
+  background: #ffffff;
+  font-size: 12.5px;
+}
+
+.tabla-ubicaciones-recorte th,
+.tabla-ubicaciones-recorte td {
+  min-width: 0;
+  padding: 6px 8px;
+
+  border: 1px solid #dddddd;
+}
+
+.tabla-ubicaciones-recorte th {
+  background: #f4f4f4;
+  font-weight: 600;
+}
+
+/* =====================================================
+   MENSAJES
+   ===================================================== */
+
+.sin-resultados,
+.sin-ubicaciones,
+.stock-recortes-mensaje {
+  padding: 20px;
+
+  color: #666666;
+
+  text-align: center !important;
+  font-size: 13px;
+}
+
+.stock-recortes-error {
+  margin-bottom: 15px;
+  padding: 10px 12px;
+
+  border: 1px solid #ffcdd2;
+  border-radius: 5px;
+
+  background: #ffebee;
+  color: #b00020;
+
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* =====================================================
+   MODAL
+   ===================================================== */
+
+.recorte-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 18px;
+
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.recorte-modal {
+  width: min(520px, 95vw);
+  max-height: 85vh;
+
+  padding: 30px;
+
+  overflow-y: auto;
+
+  background: #ffffff;
+  border-radius: 12px;
+
+  box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
+
+  box-sizing: border-box;
+}
+
+.recorte-modal h3 {
+  margin: 0 0 20px;
+
+  color: #004080;
+
+  font-family: "Poppins", "Segoe UI", sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.recorte-modal label {
+  display: block;
+
+  margin-bottom: 12px;
+
+  color: #334155;
+
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.recorte-modal input {
+  display: block;
+
+  width: 100%;
+  margin-top: 5px;
+  padding: 8px;
+
+  border: 1px solid #cccccc;
+  border-radius: 5px;
+
+  font-size: 13px;
+
+  box-sizing: border-box;
+}
+
+.recorte-modal input:focus {
+  border-color: #007acc;
+  outline: none;
+
+  box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.12);
+}
+
+.recorte-modal-acciones {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+
+  margin-top: 20px;
+}
+
+.recorte-modal-acciones button {
+  padding: 6px 14px;
+
+  border: none;
+  border-radius: 5px;
+
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.recorte-modal-acciones button:first-child {
+  background: #cccccc;
+  color: #222222;
+}
+
+.recorte-modal-acciones button:first-child:hover {
+  background: #bdbdbd;
+}
+
+.recorte-modal-acciones .btn-recorte-principal {
+  background: #007acc;
+  color: #ffffff;
+}
+
+.recorte-modal-acciones .btn-recorte-principal:hover {
+  background: #0068ad;
+}
+
+/* =====================================================
+   RESPONSIVE
+   ===================================================== */
+
+@media (max-width: 767px) {
+  .stock-recortes-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .stock-recortes-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .stock-recortes-toolbar input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .btn-recorte-principal {
+    width: 100%;
+  }
+
+  .recorte-modal {
+    padding: 20px;
+  }
+}

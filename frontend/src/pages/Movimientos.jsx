@@ -162,8 +162,16 @@ function Movimientos() {
         label: "Depósito Origen",
       },
       {
+        key: "ubicacion_origen",
+        label: "Ubicación Origen",
+      },
+      {
         key: "deposito_destino",
         label: "Depósito Destino",
+      },
+      {
+        key: "ubicacion_destino",
+        label: "Ubicación Destino",
       },
       {
         key: "tipo_transaccion",
@@ -859,7 +867,7 @@ function Movimientos() {
           <tbody>
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={19}>Sin movimientos.</td>
+                <td colSpan={21}>Sin movimientos.</td>
               </tr>
             ) : (
               paginated.map((r, i) => {
@@ -883,7 +891,9 @@ function Movimientos() {
                     <td>{r.descripcion ?? ""}</td>
                     <td style={{ textAlign: "right" }}>{r.cantidad ?? ""}</td>
                     <td>{r.deposito_origen ?? ""}</td>
+                    <td>{r.ubicacion_origen ?? ""}</td>
                     <td>{r.deposito_destino ?? ""}</td>
+                    <td>{r.ubicacion_destino ?? ""}</td>
                     <td>{r.tipo_transaccion ?? ""}</td>
                     <td>{r.motivo ?? ""}</td>
                     <td>{r.remito_referencia ?? ""}</td>

@@ -3,8 +3,10 @@ import api from "../api/axiosConfig";
 import * as XLSX from "xlsx";
 import "./../styles/stock.css";
 import UbicacionesModal from "../components/UbicacionesModal";
-import UbicacionAutocomplete from "../components/UbicacionesAutocomplete";
-import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
+import {
+  useExcelFilters,
+  ExcelFilterButton,
+} from "../components/ExcelColumnFilter";
 
 const normalizeHeader = (txt) => {
   const clean = String(txt || "")
@@ -18,7 +20,7 @@ const normalizeHeader = (txt) => {
     .map((p, i) =>
       i === 0
         ? p.toLowerCase()
-        : p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()
+        : p.charAt(0).toUpperCase() + p.slice(1).toLowerCase(),
     )
     .join("");
 };
@@ -31,7 +33,6 @@ const STOCK_COLS = [
   "folio",
   "proveedor",
   "almacen",
-  "ubicacion",
   "cantidad_total",
   "punto_pedido",
   "tipo",
@@ -46,7 +47,6 @@ const STOCK_HEADERS = [
   ["folio", "Folio"],
   ["proveedor", "Proveedor"],
   ["almacen", "Almacén"],
-  ["ubicacion", "Ubicación"],
   ["cantidad_total", "Cantidad"],
   ["punto_pedido", "Punto ped"],
   ["tipo", "Tipo"],
@@ -110,13 +110,15 @@ function Stock() {
   const [panelCodigo, setPanelCodigo] = useState("");
   const [panelDesc, setPanelDesc] = useState("");
   const [panelData, setPanelData] = useState([]);
+  const [panelDepositoId, setPanelDepositoId] = useState("");
   const [panelLoading, setPanelLoading] = useState(false);
   const [panelError, setPanelError] = useState("");
 
   // cache por código
   const [detalleCache, setDetalleCache] = useState({});
-  const [savingUbicacionId, setSavingUbicacionId] = useState(null);
   const [openUbicaciones, setOpenUbicaciones] = useState(false);
+  const [depositosUbicaciones, setDepositosUbicaciones] = useState([]);
+  const [depositoUbicacionesId, setDepositoUbicacionesId] = useState("");
   const [ubicaciones, setUbicaciones] = useState([]);
   const excelRef = useRef(null);
   const tableWrapRef = useRef(null);
@@ -126,7 +128,6 @@ function Stock() {
 
   useEffect(() => {
     fetchStock();
-    fetchUbicaciones();
   }, []);
 
   useEffect(() => {
@@ -208,20 +209,56 @@ function Stock() {
       .catch((err) => console.error(err));
   };
 
-  const fetchUbicaciones = async () => {
-    try {
-      const res = await api.get("/ubicaciones");
-      setUbicaciones(res.data || []);
-    } catch (err) {
-      console.error("No se pudieron cargar ubicaciones:", err);
-      setUbicaciones([]);
+  const refreshAll = async () => {
+    fetchStock();
+    setDetalleCache({});
+
+    if (depositoUbicacionesId) {
+      await cargarUbicacionesAdministracion(depositoUbicacionesId);
     }
   };
 
-  const refreshAll = async () => {
-    fetchStock();
-    fetchUbicaciones();
-    setDetalleCache({});
+  const abrirAdministrarUbicaciones = async () => {
+    try {
+      const response = await api.get("/depositos");
+
+      const lista = Array.isArray(response.data) ? response.data : [];
+
+      setDepositosUbicaciones(lista);
+      setDepositoUbicacionesId("");
+      setUbicaciones([]);
+      setOpenUbicaciones(true);
+    } catch (error) {
+      console.error("Error cargando depósitos para ubicaciones:", error);
+
+      alert("No se pudieron cargar los depósitos.");
+    }
+  };
+
+  const cargarUbicacionesAdministracion = async (idDeposito) => {
+    const id = Number(idDeposito);
+
+    setDepositoUbicacionesId(idDeposito ? String(idDeposito) : "");
+
+    setUbicaciones([]);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return;
+    }
+
+    try {
+      const response = await api.get("/ubicaciones/by-deposito", {
+        params: {
+          deposito_id: id,
+        },
+      });
+
+      setUbicaciones(Array.isArray(response.data) ? response.data : []);
+    } catch (error) {
+      console.error("Error cargando ubicaciones del depósito:", error);
+
+      alert("No se pudieron cargar las ubicaciones del depósito.");
+    }
   };
 
   const handleFilter = (e, key) => {
@@ -250,9 +287,9 @@ function Stock() {
         };
 
         return Object.keys(nuevosFiltros).every((k) =>
-          valores[k].toLowerCase().includes(nuevosFiltros[k])
+          valores[k].toLowerCase().includes(nuevosFiltros[k]),
         );
-      })
+      }),
     );
 
     setCurrentPage(1);
@@ -307,7 +344,7 @@ function Stock() {
         label,
         getValue: (row) => getStockFilterValue(row, key),
       })),
-    []
+    [],
   );
 
   const excel = useExcelFilters(stock, excelColumns, {
@@ -322,7 +359,7 @@ function Stock() {
 
   const paginated = excel.rows.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
 
   const clampPage = (p) => {
@@ -365,7 +402,7 @@ function Stock() {
       const existe = (res.data || []).some(
         (dep) =>
           dep.nombre.trim().toLowerCase() ===
-          nuevoDeposito.trim().toLowerCase()
+          nuevoDeposito.trim().toLowerCase(),
       );
 
       if (existe) {
@@ -430,7 +467,7 @@ function Stock() {
 
   const eliminarDeposito = async (dep) => {
     const ok = window.confirm(
-      `Vas a eliminar el depósito "${dep.nombre}".\n\nATENCIÓN: se borrará TODO el stock dentro de ese depósito (incluyendo ubicaciones).\n\n¿Seguro que querés continuar?`
+      `Vas a eliminar el depósito "${dep.nombre}".\n\nATENCIÓN: se borrará TODO el stock dentro de ese depósito (incluyendo ubicaciones).\n\n¿Seguro que querés continuar?`,
     );
     if (!ok) return;
 
@@ -445,79 +482,16 @@ function Stock() {
     }
   };
 
-  const actualizarUbicacionLocal = (idArticulo, value) => {
-  setStock((prev) =>
-    (prev || []).map((item) =>
-      Number(item.id_articulo) === Number(idArticulo)
-        ? { ...item, ubicacion: value }
-        : item
-    )
-  );
-
-  setFiltered((prev) =>
-    (prev || []).map((item) =>
-      Number(item.id_articulo) === Number(idArticulo)
-        ? { ...item, ubicacion: value }
-        : item
-    )
-  );
-};
-
-const guardarUbicacion = async (item, ubicacionValidada) => {
-  try {
-    const idArticulo = item?.id_articulo;
-
-    if (!idArticulo) {
-      alert("No se encontró el ID del artículo para guardar la ubicación.");
-      return;
-    }
-
-    setSavingUbicacionId(idArticulo);
-
-    await api.patch(`/articulos/${idArticulo}/ubicacion`, {
-      ubicacion: ubicacionValidada ?? item.ubicacion ?? "",
-    });
-
-    await refreshAll();
-  } catch (err) {
-    console.error("Error guardando ubicación:", err);
-
-    alert(
-      err.response?.data?.error ||
-        err.response?.data?.detalle ||
-        "No se pudo guardar la ubicación."
-    );
-
-    await refreshAll();
-  } finally {
-    setSavingUbicacionId(null);
-  }
-};
-
-const handleUbicacionKeyDown = (e, item) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    e.currentTarget.blur();
-  }
-
-  if (e.key === "Escape") {
-    e.preventDefault();
-    refreshAll();
-  }
-};
-
-  // =========================
   // EXPORTAR EXCEL (dinámico por depósitos)
-  // =========================
   const exportarExcel = () => {
     const almacenes = Array.from(
       new Set(
         (filtered || []).flatMap((it) =>
           (it.depositos || [])
             .map((d) => String(d.almacen || "").trim())
-            .filter(Boolean)
-        )
-      )
+            .filter(Boolean),
+        ),
+      ),
     ).sort((a, b) => a.localeCompare(b));
 
     const headers = [
@@ -542,7 +516,7 @@ const handleUbicacionKeyDown = (e, item) => {
 
     (filtered || []).forEach((it) => {
       const depMap = new Map(
-        (it.depositos || []).map((d) => [String(d.almacen || "").trim(), d])
+        (it.depositos || []).map((d) => [String(d.almacen || "").trim(), d]),
       );
 
       const row = [
@@ -581,13 +555,16 @@ const handleUbicacionKeyDown = (e, item) => {
   // Abrir panel detalle (▶)
   // =========================
   const abrirDetalle = async (codigo, descripcion) => {
-    const c = String(codigo ?? "").trim().toUpperCase();
+    const c = String(codigo ?? "")
+      .trim()
+      .toUpperCase();
     if (!c) return;
 
     setPanelOpen(true);
     setPanelCodigo(c);
     setPanelDesc(descripcion || "");
     setPanelError("");
+    setPanelDepositoId("");
 
     if (detalleCache[c]) {
       setPanelData(detalleCache[c]);
@@ -622,33 +599,68 @@ const handleUbicacionKeyDown = (e, item) => {
     setPanelLoading(false);
   };
 
-// =========================
-// Panel: agrupa solo por depósito
-// =========================
-const agrupado = useMemo(() => {
-  const map = new Map();
+  // =========================
+  // Panel: agrupa solo por depósito
+  // =========================
+  const agrupado = useMemo(() => {
+    const map = new Map();
 
-  for (const r of panelData || []) {
-    const almacen = r.almacen || "SIN ALMACEN";
+    for (const fila of panelData || []) {
+      const idDeposito = Number(fila.id_deposito);
 
-    if (!map.has(almacen)) {
-      map.set(almacen, {
-        id_deposito: r.id_deposito,
-        almacen,
-        total: 0,
+      const almacen = fila.almacen || fila.deposito || "SIN ALMACEN";
+
+      if (!map.has(idDeposito)) {
+        map.set(idDeposito, {
+          id_deposito: idDeposito,
+          almacen,
+          total: 0,
+          ubicaciones: [],
+        });
+      }
+
+      const deposito = map.get(idDeposito);
+
+      const cantidad = Number(fila.cantidad || 0);
+
+      deposito.total += cantidad;
+
+      deposito.ubicaciones.push({
+        id_ubicacion: Number(fila.id_ubicacion),
+        ubicacion: fila.ubicacion || "SIN UBICACIÓN",
+        cantidad,
       });
     }
 
-    map.get(almacen).total += Number(r.cantidad || 0);
-  }
+    const resultado = Array.from(map.values());
 
-  const out = Array.from(map.values());
+    resultado.sort((a, b) =>
+      String(a.almacen).localeCompare(String(b.almacen), "es"),
+    );
 
-  out.sort((a, b) => String(a.almacen).localeCompare(String(b.almacen)));
+    resultado.forEach((deposito) => {
+      deposito.ubicaciones.sort((a, b) =>
+        String(a.ubicacion).localeCompare(String(b.ubicacion), "es", {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      );
+    });
 
-  return out;
-}, [panelData]);
+    return resultado;
+  }, [panelData]);
 
+  useEffect(() => {
+    if (agrupado.length > 0 && !panelDepositoId) {
+      setPanelDepositoId(String(agrupado[0].id_deposito));
+    }
+  }, [agrupado, panelDepositoId]);
+
+  const depositoPanelSeleccionado = useMemo(() => {
+    return agrupado.find(
+      (dep) => String(dep.id_deposito) === String(panelDepositoId)
+    );
+  }, [agrupado, panelDepositoId]);
 
   useEffect(() => {
     const wrap = tableWrapRef.current;
@@ -704,17 +716,18 @@ const agrupado = useMemo(() => {
       <div className="acciones">
         <button onClick={() => setMostrarModal(true)}>Crear depósito</button>
         <button onClick={abrirVerDepositos}>Ver depósitos</button>
-        <button onClick={() => setOpenUbicaciones(true)}>Administrar ubicaciones</button>
+        <button onClick={abrirAdministrarUbicaciones}>
+          Administrar ubicaciones
+        </button>
         <button onClick={exportarExcel}>Exportar a Excel</button>
         <button onClick={limpiarFiltros}>Limpiar filtros</button>
       </div>
 
       <UbicacionesModal
-        isOpen={openUbicaciones}
-        onClose={() => setOpenUbicaciones(false)}
-        onSaved={refreshAll}
-      />
-
+  isOpen={openUbicaciones}
+  onClose={() => setOpenUbicaciones(false)}
+  onSaved={refreshAll}
+/>
       {mostrarModal && (
         <div className="modal">
           <div className="modal-content">
@@ -796,7 +809,9 @@ const agrupado = useMemo(() => {
             </div>
 
             <div className="modal-footer">
-              <button onClick={() => setModalVerDepositos(false)}>Cerrar</button>
+              <button onClick={() => setModalVerDepositos(false)}>
+                Cerrar
+              </button>
             </div>
           </div>
         </div>
@@ -887,96 +902,84 @@ const agrupado = useMemo(() => {
           </thead>
 
           <tbody>
-  {paginated.map((item) => {
-    const codKey = String(item.codigo || "").trim().toUpperCase();
+            {paginated.map((item) => {
+              const codKey = String(item.codigo || "")
+                .trim()
+                .toUpperCase();
 
-    return (
-      <tr key={item.id_articulo ?? codKey}>
-        {STOCK_COLS.map((key) => {
-          const width = colWidths[key] || (key === "descripcion" ? 260 : key === "almacen" ? 220 : 140);
+              return (
+                <tr key={item.id_articulo ?? codKey}>
+                  {STOCK_COLS.map((key) => {
+                    const width =
+                      colWidths[key] ||
+                      (key === "descripcion"
+                        ? 260
+                        : key === "almacen"
+                          ? 220
+                          : 140);
 
-          if (key === "ubicacion") {
-            return (
-              <td
-                key={key}
-                style={{
-                  minWidth: 0,
-                  width: `${width}px`,
-                  maxWidth: `${width}px`,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  boxSizing: "border-box",
-                }}
-              >
-                <UbicacionAutocomplete
-                  value={item.ubicacion ?? ""}
-                  ubicaciones={ubicaciones}
-                  disabled={savingUbicacionId === item.id_articulo}
-                  onChange={(value) => actualizarUbicacionLocal(item.id_articulo, value)}
-                  onValidSave={(value) => guardarUbicacion(item, value)}
-                  onCancel={refreshAll}
-                />
-              </td>
-            );
-          }
+                    if (key === "almacen") {
+                      return (
+                        <td
+                          key={key}
+                          className="almacen-cell"
+                          style={{
+                            minWidth: 0,
+                            width: `${width}px`,
+                            maxWidth: `${width}px`,
+                            overflow: "hidden",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <span title={item.almacen_label || ""}>
+                            {item.almacen_label || ""}
+                          </span>
 
-          if (key === "almacen") {
-            return (
-              <td
-                key={key}
-                className="almacen-cell"
-                style={{
-                  minWidth: 0,
-                  width: `${width}px`,
-                  maxWidth: `${width}px`,
-                  overflow: "hidden",
-                  boxSizing: "border-box",
-                }}
-              >
-                <span title={item.almacen_label || ""}>
-                  {item.almacen_label || ""}
-                </span>
+                          <button
+                            className="btn-detalle-stock"
+                            title="Ver depósitos"
+                            onClick={() =>
+                              abrirDetalle(item.codigo, item.descripcion)
+                            }
+                          >
+                            ▶
+                          </button>
+                        </td>
+                      );
+                    }
 
-                <button
-                  className="btn-detalle-stock"
-                  title="Ver depósitos"
-                  onClick={() => abrirDetalle(item.codigo, item.descripcion)}
-                >
-                  ▶
-                </button>
-              </td>
-            );
-          }
+                    const value =
+                      key === "cantidad_total"
+                        ? (item.cantidad_total ?? 0)
+                        : (item[key] ?? "");
 
-          const value =
-            key === "cantidad_total"
-              ? item.cantidad_total ?? 0
-              : item[key] ?? "";
-
-          return (
-            <td
-              key={key}
-              className={key === "cantidad_total" || key === "punto_pedido" ? "num" : ""}
-              style={{
-                minWidth: 0,
-                width: `${width}px`,
-                maxWidth: `${width}px`,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                boxSizing: "border-box",
-              }}
-              title={String(value ?? "")}
-            >
-              {value}
-            </td>
-          );
-        })}
-      </tr>
-    );
-  })}
-</tbody>
+                    return (
+                      <td
+                        key={key}
+                        className={
+                          key === "cantidad_total" || key === "punto_pedido"
+                            ? "num"
+                            : ""
+                        }
+                        style={{
+                          minWidth: 0,
+                          width: `${width}px`,
+                          maxWidth: `${width}px`,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          boxSizing: "border-box",
+                        }}
+                        title={String(value ?? "")}
+                      >
+                        {value}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
         </table>
       </div>
 
@@ -1042,7 +1045,7 @@ const agrupado = useMemo(() => {
               >
                 {p}
               </button>
-            )
+            ),
           )}
 
           <button
@@ -1063,111 +1066,124 @@ const agrupado = useMemo(() => {
       </div>
 
       {panelOpen && (
-  <>
-    <div className="stock-panel-overlay" onClick={cerrarPanel} />
+        <>
+          <div className="stock-panel-overlay" onClick={cerrarPanel} />
 
-    <div className="stock-panel" style={{width: "400px", maxWidth: "95vw"}}>
-      <div className="stock-panel-header">
-        <div>
-          <div className="stock-panel-title">Depósitos</div>
-          <div className="stock-panel-sub">
-            <b>{panelCodigo}</b>
-            {panelDesc ? ` — ${panelDesc}` : ""}
-          </div>
-        </div>
+          <div
+            className="stock-panel"
+            style={{ width: "400px", maxWidth: "95vw" }}
+          >
+            <div className="stock-panel-header">
+              <div>
+                <div className="stock-panel-title">Depósitos</div>
+                <div className="stock-panel-sub">
+                  <b>{panelCodigo}</b>
+                  {panelDesc ? ` — ${panelDesc}` : ""}
+                </div>
+              </div>
 
-        <button className="stock-panel-close" onClick={cerrarPanel}>
-          ✕
-        </button>
-      </div>
-
-      {panelLoading && <div className="stock-panel-info">Cargando…</div>}
-
-      {panelError && <div className="stock-panel-error">{panelError}</div>}
-
-      {!panelLoading && !panelError && (
-        <div className="stock-panel-body">
-          {agrupado.length === 0 ? (
-            <div className="stock-panel-info">Sin depósitos para mostrar.</div>
-          ) : (
-            <div className="stock-acc">
-              <div
-  className="stock-acc-head"
-  style={{
-    display: "grid",
-    gridTemplateColumns: "1fr 90px",
-    gap: "12px",
-    alignItems: "center",
-    width: "100%",
-    boxSizing: "border-box",
-  }}
->
-  <div>Depósito</div>
-  <div
-    className="num"
-    style={{
-      textAlign: "right",
-      paddingRight: "8px",
-      boxSizing: "border-box",
-    }}
-  >
-    Total
-  </div>
-</div>
-
-{agrupado.map((dep) => (
-  <div
-    key={dep.id_deposito ?? dep.almacen}
-    className="stock-acc-item"
-    style={{
-      width: "100%",
-      boxSizing: "border-box",
-    }}
-  >
-    <div
-      className="stock-acc-row open"
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 90px",
-        gap: "12px",
-        alignItems: "center",
-        width: "100%",
-        boxSizing: "border-box",
-      }}
-    >
-      <div
-        className="stock-acc-left"
-        style={{
-          overflow: "hidden",
-          whiteSpace: "nowrap",
-          textOverflow: "ellipsis",
-        }}
-      >
-        <span className="label">{dep.almacen}</span>
-      </div>
-
-      <div
-        className="num"
-        style={{
-          textAlign: "right",
-          paddingRight: "8px",
-          minWidth: "80px",
-          overflow: "visible",
-          boxSizing: "border-box",
-        }}
-      >
-        {Number(dep.total || 0).toLocaleString("es-AR")}
-      </div>
-    </div>
-  </div>
-))}
+              <button className="stock-panel-close" onClick={cerrarPanel}>
+                ✕
+              </button>
             </div>
-          )}
-        </div>
+
+            {panelLoading && <div className="stock-panel-info">Cargando…</div>}
+
+            {panelError && (
+              <div className="stock-panel-error">{panelError}</div>
+            )}
+
+            {!panelLoading && !panelError && (
+              <div className="stock-panel-body">
+                {agrupado.length === 0 ? (
+                  <div className="stock-panel-info">
+                    Sin depósitos para mostrar.
+                  </div>
+                ) : (
+                  <div className="stock-acc">
+                    <div style={{ marginBottom: 14 }}>
+                      <label style={{ display: "block", marginBottom: 6 }}>
+                        Seleccionar depósito
+                      </label>
+
+                      <select
+                        value={panelDepositoId}
+                        onChange={(e) => setPanelDepositoId(e.target.value)}
+                        style={{ width: "100%", padding: 6 }}
+                      >
+                        {agrupado.map((dep) => (
+                          <option key={dep.id_deposito} value={dep.id_deposito}>
+                            {dep.almacen} - Total:{" "}
+                            {Number(dep.total || 0).toLocaleString("es-AR")}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {depositoPanelSeleccionado ? (
+                      <>
+                        <div
+                          className="stock-acc-head"
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "1fr 90px",
+                            gap: "12px",
+                            alignItems: "center",
+                            width: "100%",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div>Ubicación</div>
+
+                          <div
+                            className="num"
+                            style={{
+                              textAlign: "right",
+                              paddingRight: "8px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            Stock
+                          </div>
+                        </div>
+
+                        {depositoPanelSeleccionado.ubicaciones.map((ubicacion) => (
+                          <div
+                            key={ubicacion.id_ubicacion ?? ubicacion.ubicacion}
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "1fr 90px",
+                              gap: 12,
+                              padding: "8px 0",
+                              borderBottom: "1px solid #eee",
+                            }}
+                          >
+                            <div>{ubicacion.ubicacion}</div>
+
+                            <div
+                              style={{
+                                textAlign: "right",
+                                paddingRight: 8,
+                                fontWeight: 600,
+                              }}
+                            >
+                              {Number(ubicacion.cantidad || 0).toLocaleString("es-AR")}
+                            </div>
+                          </div>
+                        ))}
+                      </>
+                    ) : (
+                      <div className="stock-panel-info">
+                        Seleccioná un depósito para ver sus ubicaciones.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </>
       )}
-    </div>
-  </>
-)}
     </div>
   );
 }

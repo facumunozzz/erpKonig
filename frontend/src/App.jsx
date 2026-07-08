@@ -8,6 +8,7 @@ import "./App.css";
 
 import Articulos from "./pages/Articulos";
 import Stock from "./pages/Stock";
+import StockRecortes from "./pages/StockRecortes";
 import Transferencias from "./pages/Transferencias";
 import Produccion from "./pages/Produccion";
 import Ajustes from "./pages/Ajustes";
@@ -74,6 +75,7 @@ function AppRoutes() {
           <Route element={<ProtectedRoute />}>
             <Route path="/articulos" element={<Articulos />} />
             <Route path="/stock" element={<Stock />} />
+            <Route path="/stock-recortes" element={<StockRecortes />} />
             <Route path="/transferencias" element={<Transferencias />} />
             <Route path="/transferencias/nueva" element={<NuevaTransferencia />} />
             <Route path="/produccion" element={<Produccion />} />

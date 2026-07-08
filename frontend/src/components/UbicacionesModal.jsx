@@ -3,9 +3,12 @@ import api from "../api/axiosConfig";
 import "./../styles/ubicaciones.css";
 
 export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
-  const [ubicaciones, setUbicaciones] = useState([]);
-  const [depositoDefaultId, setDepositoDefaultId] = useState(null);
+  const [depositos, setDepositos] = useState([]);
+  const [depositoId, setDepositoId] = useState("");
 
+  const [ubicaciones, setUbicaciones] = useState([]);
+
+  const [crearOpen, setCrearOpen] = useState(false);
   const [nuevoNombre, setNuevoNombre] = useState("");
 
   const [editId, setEditId] = useState(null);
@@ -13,48 +16,103 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
   const [editActiva, setEditActiva] = useState(true);
 
   useEffect(() => {
-    if (isOpen) {
-      cargarDatos();
-    }
+    if (isOpen) cargarDepositos();
   }, [isOpen]);
 
-  const cargarDatos = async () => {
+  useEffect(() => {
+    if (depositoId) {
+      cargarUbicaciones(depositoId);
+    } else {
+      setUbicaciones([]);
+    }
+  }, [depositoId]);
+
+  const cargarDepositos = async () => {
     try {
-      const [resUbicaciones, resDepositos] = await Promise.all([
-        api.get("/ubicaciones"),
-        api.get("/depositos"),
-      ]);
+      const res = await api.get("/depositos");
+      const lista = Array.isArray(res.data) ? res.data : [];
 
-      setUbicaciones(resUbicaciones.data || []);
+      setDepositos(lista);
 
-      const depositos = resDepositos.data || [];
-      if (depositos.length) {
-        setDepositoDefaultId(depositos[0].id_deposito);
+      if (lista.length) {
+        setDepositoId(String(lista[0].id_deposito));
       } else {
-        setDepositoDefaultId(null);
+        setDepositoId("");
       }
+    } catch (err) {
+      console.error("Error cargando depósitos:", err);
+      alert("No se pudieron cargar los depósitos.");
+    }
+  };
+
+  const cargarUbicaciones = async (idDep) => {
+    try {
+      const res = await api.get("/ubicaciones", {
+        params: { deposito_id: Number(idDep) },
+      });
+
+      setUbicaciones(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
       console.error("Error cargando ubicaciones:", err);
       alert("No se pudieron cargar las ubicaciones.");
     }
   };
 
+  const depositoSeleccionado = useMemo(() => {
+    return depositos.find((d) => Number(d.id_deposito) === Number(depositoId));
+  }, [depositos, depositoId]);
+
   const ubicacionesOrdenadas = useMemo(() => {
-    return [...(ubicaciones || [])].sort((a, b) =>
-      String(a.nombre || "").localeCompare(String(b.nombre || ""))
-    );
+    return [...ubicaciones].sort((a, b) => {
+      const aNombre = String(a.nombre || "")
+        .trim()
+        .toUpperCase();
+      const bNombre = String(b.nombre || "")
+        .trim()
+        .toUpperCase();
+
+      if (aNombre === "GENERAL" && bNombre !== "GENERAL") return -1;
+      if (bNombre === "GENERAL" && aNombre !== "GENERAL") return 1;
+
+      return aNombre.localeCompare(bNombre, "es", {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
   }, [ubicaciones]);
 
   const existeUbicacion = (nombre) => {
-    const buscado = String(nombre || "").trim().toUpperCase();
+    const buscado = String(nombre || "")
+      .trim()
+      .toUpperCase();
 
-    return (ubicaciones || []).some(
-      (u) => String(u.nombre || "").trim().toUpperCase() === buscado
+    return ubicaciones.some(
+      (u) =>
+        String(u.nombre || "")
+          .trim()
+          .toUpperCase() === buscado,
     );
   };
 
+  const abrirCrear = () => {
+    if (!depositoId) {
+      alert("Primero seleccioná un depósito.");
+      return;
+    }
+
+    setNuevoNombre("");
+    setCrearOpen(true);
+  };
+
   const crearUbicacion = async () => {
-    const nombre = String(nuevoNombre || "").trim().toUpperCase();
+    const nombre = String(nuevoNombre || "")
+      .trim()
+      .toUpperCase();
+
+    if (!depositoId) {
+      alert("Debe seleccionar un depósito.");
+      return;
+    }
 
     if (!nombre) {
       alert("El nombre de la ubicación no puede estar vacío.");
@@ -62,25 +120,20 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
     }
 
     if (existeUbicacion(nombre)) {
-      alert("La ubicación ya existe.");
-      return;
-    }
-
-    if (!depositoDefaultId) {
-      alert(
-        "No hay depósitos cargados. Para crear ubicaciones, primero debe existir al menos un depósito."
-      );
+      alert("La ubicación ya existe dentro de este depósito.");
       return;
     }
 
     try {
       await api.post("/ubicaciones", {
-        deposito_id: Number(depositoDefaultId),
+        deposito_id: Number(depositoId),
         nombre,
       });
 
       setNuevoNombre("");
-      await cargarDatos();
+      setCrearOpen(false);
+
+      await cargarUbicaciones(depositoId);
 
       if (onSaved) onSaved();
     } catch (err) {
@@ -88,7 +141,7 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "No se pudo crear la ubicación."
+          "No se pudo crear la ubicación.",
       );
     }
   };
@@ -106,7 +159,9 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
   };
 
   const guardarEdicion = async (id) => {
-    const nombre = String(editNombre || "").trim().toUpperCase();
+    const nombre = String(editNombre || "")
+      .trim()
+      .toUpperCase();
 
     if (!nombre) {
       alert("El nombre no puede estar vacío.");
@@ -120,7 +175,7 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
       });
 
       cancelarEdicion();
-      await cargarDatos();
+      await cargarUbicaciones(depositoId);
 
       if (onSaved) onSaved();
     } catch (err) {
@@ -128,14 +183,14 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "No se pudo editar la ubicación."
+          "No se pudo editar la ubicación.",
       );
     }
   };
 
   const eliminarUbicacion = async (u) => {
     const ok = window.confirm(
-      `Vas a eliminar la ubicación "${u.nombre}".\n\n¿Seguro que querés continuar?`
+      `Vas a eliminar la ubicación "${u.nombre}" del depósito "${depositoSeleccionado?.nombre || ""}".\n\n¿Seguro que querés continuar?`,
     );
 
     if (!ok) return;
@@ -145,7 +200,7 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
         timeout: 180000,
       });
 
-      await cargarDatos();
+      await cargarUbicaciones(depositoId);
 
       if (onSaved) onSaved();
     } catch (err) {
@@ -153,7 +208,7 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "No se pudo eliminar la ubicación."
+          "No se pudo eliminar la ubicación.",
       );
     }
   };
@@ -165,26 +220,38 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
       <div className="ubi-modal">
         <div className="ubi-modal-header">
           <h3>Administrar ubicaciones</h3>
-
           <button className="ubi-close" onClick={onClose}>
             ×
           </button>
         </div>
 
         <div className="ubi-new-row-simple">
-          <input
-            value={nuevoNombre}
-            onChange={(e) => setNuevoNombre(e.target.value.toUpperCase())}
-            placeholder="Nueva ubicación"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") crearUbicacion();
+          <select
+            value={depositoId}
+            onChange={(e) => {
+              setDepositoId(e.target.value);
+              cancelarEdicion();
             }}
-          />
+          >
+            <option value="">Seleccionar depósito</option>
 
-          <button className="ubi-btn-primary" onClick={crearUbicacion}>
-            Agregar
+            {depositos.map((dep) => (
+              <option key={dep.id_deposito} value={dep.id_deposito}>
+                {dep.nombre}
+              </option>
+            ))}
+          </select>
+
+          <button className="ubi-btn-primary" onClick={abrirCrear}>
+            Nueva ubicación
           </button>
         </div>
+
+        {depositoSeleccionado && (
+          <div style={{ marginBottom: "10px", fontWeight: "600" }}>
+            Depósito seleccionado: {depositoSeleccionado.nombre}
+          </div>
+        )}
 
         <div className="ubi-table-wrap">
           <table className="ubi-table">
@@ -257,9 +324,17 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
                 </tr>
               ))}
 
-              {!ubicacionesOrdenadas.length && (
+              {!depositoId && (
                 <tr>
-                  <td colSpan="3">No hay ubicaciones cargadas.</td>
+                  <td colSpan="3">Seleccioná un depósito.</td>
+                </tr>
+              )}
+
+              {depositoId && !ubicacionesOrdenadas.length && (
+                <tr>
+                  <td colSpan="3">
+                    No hay ubicaciones cargadas en este depósito.
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -270,6 +345,44 @@ export default function UbicacionesModal({ isOpen, onClose, onSaved }) {
           <button onClick={onClose}>Cerrar</button>
         </div>
       </div>
+
+      {crearOpen && (
+        <div className="ubi-modal-overlay">
+          <div className="ubi-modal" style={{ maxWidth: "420px" }}>
+            <div className="ubi-modal-header">
+              <h3>Nueva ubicación</h3>
+
+              <button className="ubi-close" onClick={() => setCrearOpen(false)}>
+                ×
+              </button>
+            </div>
+
+            <div style={{ marginBottom: "10px" }}>
+              Depósito: <b>{depositoSeleccionado?.nombre}</b>
+            </div>
+
+            <div className="ubi-new-row-simple">
+              <input
+                value={nuevoNombre}
+                onChange={(e) => setNuevoNombre(e.target.value.toUpperCase())}
+                placeholder="Nombre de la ubicación"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") crearUbicacion();
+                }}
+              />
+            </div>
+
+            <div className="ubi-footer">
+              <button className="ubi-btn-primary" onClick={crearUbicacion}>
+                Crear
+              </button>
+
+              <button onClick={() => setCrearOpen(false)}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

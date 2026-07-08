@@ -37,7 +37,9 @@ const ALLOWED_SORT_COLUMNS = new Set([
   "descripcion",
   "cantidad",
   "deposito_origen",
+  "ubicacion_origen",
   "deposito_destino",
+  "ubicacion_destino",
   "tipo_transaccion",
   "motivo",
   "remito_referencia",
@@ -51,41 +53,25 @@ const ALLOWED_SORT_COLUMNS = new Set([
 
 const FILTER_COLUMNS = {
   orden_movimiento: "movimientos.orden_movimiento",
-
   id_movimiento: "movimientos.id_movimiento",
-
   numero_transaccion: "movimientos.numero_transaccion",
-
   fecha: "movimientos.fecha",
-
   fecha_real: "movimientos.fecha_real",
-
   codigo: "movimientos.codigo",
-
   descripcion: "movimientos.descripcion",
-
   cantidad: "movimientos.cantidad",
-
   deposito_origen: "movimientos.deposito_origen",
-
+  ubicacion_origen: "movimientos.ubicacion_origen",
   deposito_destino: "movimientos.deposito_destino",
-
+  ubicacion_destino: "movimientos.ubicacion_destino",
   tipo_transaccion: "movimientos.tipo_transaccion",
-
   motivo: "movimientos.motivo",
-
   remito_referencia: "movimientos.remito_referencia",
-
   obra: "movimientos.obra",
-
   version: "movimientos.version",
-
   referente: "movimientos.referente",
-
   proveedor: "movimientos.proveedor",
-
   ingreso_egreso: "movimientos.ingreso_egreso",
-
   usuario: "movimientos.usuario",
 };
 
@@ -391,11 +377,22 @@ function buildMovimientosBase() {
         AS deposito_origen,
 
       CAST(
+        uo.nombre
+        AS VARCHAR(255)
+      )
+        AS ubicacion_origen,
+
+      CAST(
         t.destino
         AS VARCHAR(255)
       )
         AS deposito_destino,
 
+      CAST(
+        ud.nombre
+        AS VARCHAR(255)
+      )
+  AS ubicacion_destino,
       CAST(
         'TRANSFERENCIA'
         AS VARCHAR(50)
@@ -464,6 +461,14 @@ function buildMovimientosBase() {
     LEFT JOIN dbo.referentes ref
       ON ref.id_referente =
          t.id_referente
+
+    LEFT JOIN dbo.ubicaciones uo
+      ON uo.id_ubicacion =
+        t.id_ubicacion_origen
+
+    LEFT JOIN dbo.ubicaciones ud
+      ON ud.id_ubicacion =
+        t.id_ubicacion_destino
   `);
 
   // =====================================================
@@ -547,6 +552,12 @@ function buildMovimientosBase() {
         AS deposito_origen,
 
       CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS ubicacion_origen,
+
+      CAST(
         CASE
           WHEN
             CAST(
@@ -559,6 +570,12 @@ function buildMovimientosBase() {
         AS VARCHAR(255)
       )
         AS deposito_destino,
+
+      CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS ubicacion_destino,
 
       CAST(
         'AJUSTE'
@@ -718,26 +735,37 @@ function buildMovimientosBase() {
       )
         AS cantidad,
 
-      CAST(
-        CASE
-          WHEN r.tipo = 'SALIDA'
-          THEN r.deposito_nombre
-          ELSE NULL
-        END
-        AS VARCHAR(255)
-      )
-        AS deposito_origen,
+        CAST(
+          CASE
+            WHEN r.tipo = 'SALIDA'
+            THEN r.deposito_nombre
+            ELSE NULL
+          END
+          AS VARCHAR(255)
+        )
+          AS deposito_origen,
 
-      CAST(
-        CASE
-          WHEN r.tipo <> 'SALIDA'
-          THEN r.deposito_nombre
-          ELSE NULL
-        END
-        AS VARCHAR(255)
-      )
-        AS deposito_destino,
+        CAST(
+          NULL
+          AS VARCHAR(255)
+        )
+          AS ubicacion_origen,
 
+        CAST(
+          CASE
+            WHEN r.tipo <> 'SALIDA'
+            THEN r.deposito_nombre
+            ELSE NULL
+          END
+          AS VARCHAR(255)
+        )
+          AS deposito_destino,
+
+        CAST(
+          NULL
+          AS VARCHAR(255)
+        )
+  AS ubicacion_destino,
       CAST(
         'REMITO'
         AS VARCHAR(50)
@@ -882,12 +910,24 @@ function buildMovimientosBase() {
         AS VARCHAR(255)
       )
         AS deposito_origen,
+      
+      CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS ubicacion_origen,
 
       CAST(
         NULL
         AS VARCHAR(255)
       )
         AS deposito_destino,
+
+      CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS ubicacion_destino,
 
       CAST(
         'PRODUCCION'
@@ -1029,12 +1069,24 @@ function buildMovimientosBase() {
         AS VARCHAR(255)
       )
         AS deposito_origen,
+      
+      CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS ubicacion_origen,
 
       CAST(
         d.nombre
         AS VARCHAR(255)
       )
         AS deposito_destino,
+      
+      CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS ubicacion_destino,
 
       CAST(
         'PRODUCCION'
@@ -1154,12 +1206,6 @@ exports.getAll = async (req, res) => {
 
     const orderBy = getOrderBy(sortKey, sortDir);
 
-    /*
-     * Se ejecuta una sola consulta.
-     *
-     * COUNT(*) OVER() devuelve el total junto
-     * a los registros de la página.
-     */
     const sqlFinal = `
       SELECT
         COUNT(*) OVER()
@@ -1577,13 +1623,6 @@ exports.getByNumeroTransaccion = async (req, res) => {
 
     const selects = [];
 
-    /*
-     * Se consulta cada tabla con su tipo real.
-     *
-     * Esto evita CAST sobre las columnas usadas
-     * en el WHERE.
-     */
-
     const numeroAjuste = Number(numeroRaw);
 
     if (Number.isFinite(numeroAjuste)) {
@@ -1657,7 +1696,13 @@ exports.getByNumeroTransaccion = async (req, res) => {
               END
               AS VARCHAR(255)
             )
-              AS deposito_origen,
+            AS deposito_origen,
+
+            CAST(
+              NULL
+              AS VARCHAR(255)
+            )
+              AS ubicacion_origen,
 
             CAST(
               CASE
@@ -1668,6 +1713,12 @@ exports.getByNumeroTransaccion = async (req, res) => {
               AS VARCHAR(255)
             )
               AS deposito_destino,
+
+            CAST(
+              NULL
+              AS VARCHAR(255)
+            )
+              AS ubicacion_destino,
 
             CAST(
               'AJUSTE'
@@ -1825,11 +1876,22 @@ exports.getByNumeroTransaccion = async (req, res) => {
             AS deposito_origen,
 
           CAST(
+            uo.nombre
+            AS VARCHAR(255)
+          )
+            AS ubicacion_origen,
+
+          CAST(
             t.destino
             AS VARCHAR(255)
           )
             AS deposito_destino,
 
+          CAST(
+            ud.nombre
+            AS VARCHAR(255)
+          )
+            AS ubicacion_destino,
           CAST(
             'TRANSFERENCIA'
             AS VARCHAR(50)
@@ -1891,15 +1953,23 @@ exports.getByNumeroTransaccion = async (req, res) => {
 
         JOIN dbo.transferencias_detalle td
           ON td.transferencia_id =
-             t.id
+            t.id
 
         JOIN dbo.articulos art
           ON art.id_articulo =
-             td.articulo_id
+            td.articulo_id
 
         LEFT JOIN dbo.referentes ref
           ON ref.id_referente =
-             t.id_referente
+            t.id_referente
+        
+        LEFT JOIN dbo.ubicaciones uo
+          ON uo.id_ubicacion =
+            t.id_ubicacion_origen
+
+        LEFT JOIN dbo.ubicaciones ud
+          ON ud.id_ubicacion =
+            t.id_ubicacion_destino
 
         WHERE t.numero_transferencia =
           @numeroTexto
@@ -1979,17 +2049,29 @@ exports.getByNumeroTransaccion = async (req, res) => {
             )
               AS deposito_origen,
 
-            CAST(
-              CASE
-                WHEN r.tipo <>
-                     'SALIDA'
-                  THEN
-                    r.deposito_nombre
-                ELSE NULL
-              END
-              AS VARCHAR(255)
-            )
-              AS deposito_destino,
+              CAST(
+                NULL
+                AS VARCHAR(255)
+              )
+                AS ubicacion_origen,
+
+              CAST(
+                CASE
+                  WHEN r.tipo <>
+                      'SALIDA'
+                    THEN
+                      r.deposito_nombre
+                  ELSE NULL
+                END
+                AS VARCHAR(255)
+              )
+                AS deposito_destino,
+
+              CAST(
+                NULL
+                AS VARCHAR(255)
+              )
+                AS ubicacion_destino,
 
             CAST(
               'REMITO'
