@@ -25,6 +25,7 @@ exports.getAll = async (_req, res) => {
         r.codigo,
         r.descripcion,
         r.medida,
+        r.obra_version,
         ISNULL(SUM(sr.cantidad), 0) AS cantidad_total
       FROM dbo.recortes r WITH (NOLOCK)
       LEFT JOIN dbo.stock_recortes sr WITH (NOLOCK)
@@ -34,7 +35,8 @@ exports.getAll = async (_req, res) => {
         r.id_recorte,
         r.codigo,
         r.descripcion,
-        r.medida
+        r.medida,
+        r.obra_version
       ORDER BY
         r.codigo,
         r.medida;
@@ -95,6 +97,7 @@ exports.getAll = async (_req, res) => {
         ubicaciones_label: ubicaciones
           .map((item) => item.ubicacion)
           .join(" / "),
+        obra_version: recorte.obra_version ?? "",
       };
     });
 
@@ -193,13 +196,15 @@ exports.getById = async (req, res) => {
 // Crea un recorte con su ubicación inicial
 // =====================================================
 exports.create = async (req, res) => {
-  const codigo = normalizarCodigo(req.body.codigo);
-  const descripcion = limpiarTexto(req.body.descripcion);
+  const codigoBase = normalizarCodigo(req.body.codigo);
   const medida = limpiarTexto(req.body.medida);
+  const codigo = medida ? `${codigoBase}_${medida}` : codigoBase;
+  const descripcion = limpiarTexto(req.body.descripcion);
+  const obraVersion = limpiarTexto(req.body.obra_version);
   const ubicacion = normalizarUbicacion(req.body.ubicacion);
   const cantidad = Number(req.body.cantidad);
 
-  if (!codigo) {
+  if (!codigoBase) {
     return res.status(400).json({
       error: "Debe indicar el código.",
     });
@@ -257,17 +262,20 @@ exports.create = async (req, res) => {
         .input("codigo", sql.VarChar(80), codigo)
         .input("descripcion", sql.VarChar(250), descripcion)
         .input("medida", sql.VarChar(100), medida)
+        .input("obraVersion", sql.VarChar(150), obraVersion)
         .query(`
           INSERT INTO dbo.recortes (
             codigo,
             descripcion,
-            medida
+            medida,
+            obra_version
           )
           OUTPUT INSERTED.id_recorte
           VALUES (
             @codigo,
             @descripcion,
-            @medida
+            @medida,
+            @obraVersion
           );
         `);
 
@@ -624,6 +632,47 @@ exports.remove = async (req, res) => {
 
     return res.status(500).json({
       error: "Error al eliminar el recorte.",
+      detalle: err.message,
+    });
+  }
+};
+
+exports.getArticuloByCodigo = async (req, res) => {
+  const codigo = normalizarCodigo(req.params.codigo);
+
+  if (!codigo) {
+    return res.status(400).json({
+      error: "Debe indicar el código.",
+    });
+  }
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input("codigo", sql.VarChar(100), codigo)
+      .query(`
+        SELECT TOP 1
+          codigo,
+          descripcion
+        FROM dbo.articulos WITH (NOLOCK)
+        WHERE UPPER(LTRIM(RTRIM(codigo))) = @codigo;
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({
+        error: "Artículo no encontrado.",
+      });
+    }
+
+    return res.json(result.recordset[0]);
+  } catch (err) {
+    console.error("Error en stockRecortes.getArticuloByCodigo:", err);
+
+    return res.status(500).json({
+      error: "Error al buscar el artículo.",
       detalle: err.message,
     });
   }

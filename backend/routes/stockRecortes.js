@@ -3,6 +3,7 @@ const router = express.Router();
 const controller = require("../controllers/stockRecortes");
 
 router.get("/", controller.getAll);
+router.get("/articulo/:codigo", controller.getArticuloByCodigo);
 router.get("/:id", controller.getById);
 
 router.post("/", controller.create);

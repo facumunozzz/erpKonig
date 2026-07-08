@@ -6,6 +6,7 @@ const FORM_INICIAL = {
   codigo: "",
   descripcion: "",
   medida: "",
+  obra_version: "",
   cantidad: "",
   ubicacion: "",
 };
@@ -90,12 +91,53 @@ function StockRecortes() {
     setForm(FORM_INICIAL);
   };
 
+  const buscarDescripcionPorCodigo = async (codigoIngresado) => {
+  const codigo = String(codigoIngresado || "")
+    .trim()
+    .toUpperCase();
+
+  if (!codigo) {
+    setForm((prev) => ({
+      ...prev,
+      codigo: "",
+      descripcion: "",
+    }));
+
+    return;
+  }
+
+  try {
+    const response = await api.get(
+      `/articulos/codigo/${encodeURIComponent(codigo)}`
+    );
+
+    const articulo = response.data || {};
+
+    setForm((prev) => ({
+      ...prev,
+      codigo: String(articulo.codigo || codigo)
+        .trim()
+        .toUpperCase(),
+      descripcion: articulo.descripcion || "",
+    }));
+  } catch (err) {
+    console.error("No se encontró el artículo:", err);
+
+    setForm((prev) => ({
+      ...prev,
+      codigo,
+      descripcion: "Artículo no encontrado",
+    }));
+  }
+};
+
   const guardarNuevo = async () => {
     const codigo = form.codigo.trim();
     const descripcion = form.descripcion.trim();
     const medida = form.medida.trim();
     const ubicacion = form.ubicacion.trim();
     const cantidad = Number(form.cantidad);
+    const obra_version = form.obra_version.trim();
 
     if (!codigo) {
       alert("Debe ingresar el código.");
@@ -129,6 +171,7 @@ function StockRecortes() {
         codigo,
         descripcion,
         medida,
+        obra_version,
         ubicacion,
         cantidad,
       });
@@ -364,7 +407,16 @@ function StockRecortes() {
                 onChange={(e) =>
                   cambiarForm("codigo", e.target.value)
                 }
-                placeholder="Ejemplo: REC-001"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    buscarDescripcionPorCodigo(e.target.value);
+                  }
+                }}
+                onBlur={(e) =>
+                  buscarDescripcionPorCodigo(e.target.value)
+                }
+                placeholder="Ejemplo: 1011"
                 autoFocus
               />
             </label>
@@ -380,6 +432,17 @@ function StockRecortes() {
                   )
                 }
                 placeholder="Descripción del recorte"
+              />
+            </label>
+
+            <label>
+              Obra / Versión
+              <input
+                value={form.obra_version}
+                onChange={(e) =>
+                  cambiarForm("obra_version", e.target.value)
+                }
+                placeholder="Ejemplo: Obra A / Versión 2"
               />
             </label>
 
