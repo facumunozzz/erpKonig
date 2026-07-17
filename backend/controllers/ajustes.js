@@ -16,6 +16,8 @@ const toDb = (value) =>
 
 const up = (value) => toDb(value)?.toUpperCase() ?? null;
 
+const DEPOSITO_RECORTES_ID = -1;
+
 function asInt(value) {
   const number = Number(value);
 
@@ -1111,19 +1113,25 @@ exports.getById = async (req, res) => {
     const detalle = await pool.request().input("numero", sql.Int, numero)
       .query(`
         SELECT
-          ajuste_id,
-          cod_articulo,
-          descripcion,
-          cantidad,
-          cantidad_requerida,
-          cantidad_faltante,
-          observacion
+          ad.ajuste_id,
+          ad.cod_articulo,
+          ad.descripcion,
+          ad.cantidad,
+          ad.cantidad_requerida,
+          ad.cantidad_faltante,
+          ad.observacion,
+          ad.id_recorte,
+          ad.id_ubicacion_recorte,
+          ru.nombre AS ubicacion_recorte
 
-        FROM dbo.ajustes_detalles
+        FROM dbo.ajustes_detalles ad
 
-        WHERE ajuste_id = @numero
+        LEFT JOIN dbo.recortes_ubicaciones ru
+          ON ru.id_ubicacion_recorte = ad.id_ubicacion_recorte
 
-        ORDER BY cod_articulo;
+        WHERE ad.ajuste_id = @numero
+
+        ORDER BY ad.cod_articulo;
       `);
 
     return res.json({
@@ -1144,10 +1152,325 @@ exports.getById = async (req, res) => {
 // CREAR AJUSTE
 // ========================================================
 
+async function crearAjusteRecortes(req, res) {
+  const usuario = getUsuarioReq(req);
+  const motivoId = asInt(req.body?.motivo_id);
+  const remitoReferencia = toDb(req.body?.remito_referencia);
+  const fechaReal = toDb(req.body?.fecha_real);
+  const obra = toDb(req.body?.obra);
+  const version = toDb(req.body?.version);
+
+  const referenteRaw = req.body?.id_referente;
+  const referenteId =
+    referenteRaw === null ||
+    referenteRaw === undefined ||
+    String(referenteRaw).trim() === ""
+      ? null
+      : asInt(referenteRaw);
+
+  const itemsRaw = Array.isArray(req.body?.items) ? req.body.items : [];
+
+  if (!Number.isInteger(motivoId) || motivoId <= 0) {
+    return res.status(400).json({
+      error: "Debe seleccionar un motivo.",
+    });
+  }
+
+  if (
+    referenteId !== null &&
+    (!Number.isInteger(referenteId) || referenteId <= 0)
+  ) {
+    return res.status(400).json({
+      error: "Referente inválido.",
+    });
+  }
+
+  const agrupados = new Map();
+
+  for (const itemRaw of itemsRaw) {
+    const item = {
+      codigo: up(itemRaw?.cod_articulo ?? itemRaw?.codigo),
+      id_recorte: asInt(itemRaw?.id_recorte),
+      cantidad: Number(itemRaw?.cantidad),
+      id_ubicacion_recorte: asInt(itemRaw?.id_ubicacion),
+    };
+
+    if (
+      !item.codigo ||
+      !Number.isInteger(item.id_recorte) ||
+      item.id_recorte <= 0 ||
+      !Number.isFinite(item.cantidad) ||
+      item.cantidad === 0 ||
+      !Number.isInteger(item.id_ubicacion_recorte) ||
+      item.id_ubicacion_recorte <= 0
+    ) {
+      continue;
+    }
+
+    const clave = `${item.id_recorte}|${item.id_ubicacion_recorte}`;
+    const actual = agrupados.get(clave) || {
+      ...item,
+      cantidad: 0,
+    };
+
+    actual.cantidad += item.cantidad;
+    agrupados.set(clave, actual);
+  }
+
+  const items = Array.from(agrupados.values()).filter(
+    (item) => item.cantidad !== 0,
+  );
+
+  if (!items.length) {
+    return res.status(400).json({
+      error: "Debe incluir al menos un recorte válido.",
+    });
+  }
+
+  let transaction;
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    const motivo = await requireMotivoActivo(transaction, motivoId);
+
+    if (referenteId !== null) {
+      const referenteResult = await new sql.Request(transaction)
+        .input("referenteId", sql.Int, referenteId)
+        .query(`
+          SELECT id_referente, activo
+          FROM dbo.referentes
+          WHERE id_referente = @referenteId;
+        `);
+
+      if (!referenteResult.recordset.length) {
+        throw new Error("El referente no existe.");
+      }
+
+      if (!referenteResult.recordset[0].activo) {
+        throw new Error("El referente está inactivo.");
+      }
+    }
+
+    const numeroResult = await new sql.Request(transaction).query(`
+      SELECT ISNULL(MAX(numero_ajuste), 0) + 1 AS numero
+      FROM dbo.ajustes WITH (UPDLOCK, HOLDLOCK);
+    `);
+
+    const numeroAjuste = Number(numeroResult.recordset[0].numero);
+
+    await new sql.Request(transaction)
+      .input("numeroAjuste", sql.Int, numeroAjuste)
+      .input("motivoId", sql.Int, motivoId)
+      .input("motivo", sql.VarChar(255), motivo.nombre)
+      .input("usuario", sql.VarChar(255), usuario)
+      .input("remito", sql.VarChar(255), remitoReferencia)
+      .input("fechaReal", sql.Date, fechaReal)
+      .input("obra", sql.VarChar(255), obra)
+      .input("version", sql.VarChar(255), version)
+      .input("referenteId", sql.Int, referenteId)
+      .query(`
+        INSERT INTO dbo.ajustes
+        (
+          numero_ajuste,
+          deposito,
+          motivo_id,
+          motivo,
+          fecha,
+          fecha_real,
+          remito_referencia,
+          obra,
+          version,
+          id_referente,
+          usuario,
+          es_recortes
+        )
+        VALUES
+        (
+          @numeroAjuste,
+          'Recortes',
+          @motivoId,
+          @motivo,
+          GETDATE(),
+          COALESCE(@fechaReal, CONVERT(date, GETDATE())),
+          @remito,
+          @obra,
+          @version,
+          @referenteId,
+          @usuario,
+          1
+        );
+      `);
+
+    for (const item of items) {
+      const recorteResult = await new sql.Request(transaction)
+        .input("idRecorte", sql.Int, item.id_recorte)
+        .input("codigo", sql.VarChar(150), item.codigo)
+        .query(`
+          SELECT id_recorte, codigo, descripcion
+          FROM dbo.recortes WITH (UPDLOCK, HOLDLOCK)
+          WHERE id_recorte = @idRecorte
+            AND UPPER(LTRIM(RTRIM(codigo))) = @codigo
+            AND activo = 1;
+        `);
+
+      if (!recorteResult.recordset.length) {
+        throw new Error(
+          `El recorte ${item.codigo} no existe o está inactivo.`,
+        );
+      }
+
+      const ubicacionResult = await new sql.Request(transaction)
+        .input("id", sql.Int, item.id_ubicacion_recorte)
+        .query(`
+          SELECT id_ubicacion_recorte, nombre
+          FROM dbo.recortes_ubicaciones WITH (UPDLOCK, HOLDLOCK)
+          WHERE id_ubicacion_recorte = @id
+            AND activo = 1;
+        `);
+
+      if (!ubicacionResult.recordset.length) {
+        throw new Error(
+          `La ubicación de ${item.codigo} no existe o está inactiva.`,
+        );
+      }
+
+      const nombreUbicacion = String(
+        ubicacionResult.recordset[0].nombre || "",
+      );
+
+      if (item.cantidad < 0) {
+        const descuento = await new sql.Request(transaction)
+          .input("idRecorte", sql.Int, item.id_recorte)
+          .input("idUbicacion", sql.Int, item.id_ubicacion_recorte)
+          .input("cantidad", sql.Decimal(18, 3), Math.abs(item.cantidad))
+          .query(`
+            UPDATE dbo.stock_recortes
+            SET
+              cantidad = cantidad - @cantidad,
+              fecha_actualizacion = SYSDATETIME()
+            WHERE id_recorte = @idRecorte
+              AND id_ubicacion_recorte = @idUbicacion
+              AND cantidad >= @cantidad;
+
+            SELECT @@ROWCOUNT AS afectados;
+          `);
+
+        if (Number(descuento.recordset[0]?.afectados || 0) !== 1) {
+          throw new Error(`Stock insuficiente para ${item.codigo}.`);
+        }
+      } else {
+        await new sql.Request(transaction)
+          .input("idRecorte", sql.Int, item.id_recorte)
+          .input("idUbicacion", sql.Int, item.id_ubicacion_recorte)
+          .input("ubicacion", sql.VarChar(150), nombreUbicacion)
+          .input("cantidad", sql.Decimal(18, 3), item.cantidad)
+          .query(`
+            UPDATE dbo.stock_recortes
+            SET
+              cantidad = cantidad + @cantidad,
+              ubicacion = @ubicacion,
+              fecha_actualizacion = SYSDATETIME()
+            WHERE id_recorte = @idRecorte
+              AND id_ubicacion_recorte = @idUbicacion;
+
+            IF @@ROWCOUNT = 0
+            BEGIN
+              INSERT INTO dbo.stock_recortes
+              (
+                id_recorte,
+                id_ubicacion_recorte,
+                ubicacion,
+                cantidad
+              )
+              VALUES
+              (
+                @idRecorte,
+                @idUbicacion,
+                @ubicacion,
+                @cantidad
+              );
+            END;
+          `);
+      }
+
+      await new sql.Request(transaction)
+        .input("ajusteId", sql.Int, numeroAjuste)
+        .input("codigo", sql.VarChar(150), item.codigo)
+        .input(
+          "descripcion",
+          sql.VarChar(500),
+          recorteResult.recordset[0].descripcion || "",
+        )
+        .input("cantidad", sql.Decimal(18, 3), item.cantidad)
+        .input("idRecorte", sql.Int, item.id_recorte)
+        .input(
+          "idUbicacionRecorte",
+          sql.Int,
+          item.id_ubicacion_recorte,
+        )
+        .input("usuario", sql.VarChar(255), usuario)
+        .query(`
+          INSERT INTO dbo.ajustes_detalles
+          (
+            ajuste_id,
+            cod_articulo,
+            descripcion,
+            cantidad,
+            id_recorte,
+            id_ubicacion_recorte,
+            usuario
+          )
+          VALUES
+          (
+            @ajusteId,
+            @codigo,
+            @descripcion,
+            @cantidad,
+            @idRecorte,
+            @idUbicacionRecorte,
+            @usuario
+          );
+        `);
+    }
+
+    await transaction.commit();
+
+    return res.status(201).json({
+      ok: true,
+      ajuste: {
+        numero_ajuste: numeroAjuste,
+      },
+    });
+  } catch (error) {
+    if (transaction && transaction._aborted !== true) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error("Error haciendo rollback:", rollbackError);
+      }
+    }
+
+    console.error("crearAjusteRecortes:", error);
+
+    return res.status(400).json({
+      error: error.message || "Error al ajustar recortes.",
+    });
+  }
+}
+
 exports.create = async (req, res) => {
   const usuario = getUsuarioReq(req);
 
   const depositoId = asInt(req.body?.deposito_id);
+
+  if (depositoId === DEPOSITO_RECORTES_ID) {
+    return crearAjusteRecortes(req, res);
+  }
 
   const motivoId = asInt(req.body?.motivo_id);
 

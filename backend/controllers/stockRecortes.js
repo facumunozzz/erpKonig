@@ -54,16 +54,48 @@ exports.getAll = async (_req, res) => {
       SELECT
         sr.id_stock_recorte,
         sr.id_recorte,
-        sr.ubicacion,
+        sr.id_ubicacion_recorte,
+
+        COALESCE(
+          ru.nombre,
+          sr.ubicacion,
+          'SIN UBICACION'
+        ) AS ubicacion,
+
         sr.cantidad
+
       FROM dbo.stock_recortes sr WITH (NOLOCK)
+
       INNER JOIN dbo.recortes r WITH (NOLOCK)
         ON r.id_recorte = sr.id_recorte
+
+      LEFT JOIN dbo.recortes_ubicaciones ru WITH (NOLOCK)
+        ON ru.id_ubicacion_recorte =
+          sr.id_ubicacion_recorte
+
       WHERE r.activo = 1
         AND sr.cantidad <> 0
+
       ORDER BY
         sr.id_recorte,
-        sr.ubicacion;
+
+        CASE
+          WHEN UPPER(
+            LTRIM(
+              RTRIM(
+                COALESCE(
+                  ru.nombre,
+                  sr.ubicacion,
+                  ''
+                )
+              )
+            )
+          ) = 'GENERAL'
+          THEN 0
+          ELSE 1
+        END,
+
+        ubicacion;
     `);
 
     const ubicacionesPorRecorte = new Map();
@@ -76,8 +108,16 @@ exports.getAll = async (_req, res) => {
       }
 
       ubicacionesPorRecorte.get(idRecorte).push({
-        id_stock_recorte: Number(fila.id_stock_recorte),
+        id_stock_recorte: Number(
+          fila.id_stock_recorte
+        ),
+
+        id_ubicacion_recorte: fila.id_ubicacion_recorte
+          ? Number(fila.id_ubicacion_recorte)
+          : null,
+
         ubicacion: fila.ubicacion ?? "",
+
         cantidad: Number(fila.cantidad || 0),
       });
     }
@@ -160,24 +200,66 @@ exports.getById = async (req, res) => {
     }
 
     const ubicacionesResult = await pool
-      .request()
-      .input("idRecorte", sql.Int, idRecorte)
-      .query(`
-        SELECT
-          id_stock_recorte,
-          ubicacion,
-          cantidad
-        FROM dbo.stock_recortes WITH (NOLOCK)
-        WHERE id_recorte = @idRecorte
-        ORDER BY ubicacion;
-      `);
+  .request()
+  .input("idRecorte", sql.Int, idRecorte)
+  .query(`
+    SELECT
+      sr.id_stock_recorte,
+      sr.id_ubicacion_recorte,
+
+      COALESCE(
+        ru.nombre,
+        sr.ubicacion,
+        'SIN UBICACION'
+      ) AS ubicacion,
+
+      sr.cantidad
+
+    FROM dbo.stock_recortes sr WITH (NOLOCK)
+
+    LEFT JOIN dbo.recortes_ubicaciones ru WITH (NOLOCK)
+      ON ru.id_ubicacion_recorte =
+         sr.id_ubicacion_recorte
+
+    WHERE sr.id_recorte = @idRecorte
+
+    ORDER BY
+      CASE
+        WHEN UPPER(
+          LTRIM(
+            RTRIM(
+              COALESCE(
+                ru.nombre,
+                sr.ubicacion,
+                ''
+              )
+            )
+          )
+        ) = 'GENERAL'
+        THEN 0
+        ELSE 1
+      END,
+
+      ubicacion;
+  `);
 
     return res.json({
       ...result.recordset[0],
       cantidad: Number(result.recordset[0].cantidad || 0),
-      ubicaciones: (ubicacionesResult.recordset || []).map((item) => ({
-        id_stock_recorte: Number(item.id_stock_recorte),
+      ubicaciones: (
+        ubicacionesResult.recordset || []
+      ).map((item) => ({
+        id_stock_recorte: Number(
+          item.id_stock_recorte
+        ),
+
+        id_ubicacion_recorte:
+          item.id_ubicacion_recorte
+            ? Number(item.id_ubicacion_recorte)
+            : null,
+
         ubicacion: item.ubicacion,
+
         cantidad: Number(item.cantidad || 0),
       })),
     });
@@ -198,10 +280,22 @@ exports.getById = async (req, res) => {
 exports.create = async (req, res) => {
   const codigoBase = normalizarCodigo(req.body.codigo);
   const medida = limpiarTexto(req.body.medida);
-  const codigo = medida ? `${codigoBase}_${medida}` : codigoBase;
-  const descripcion = limpiarTexto(req.body.descripcion);
-  const obraVersion = limpiarTexto(req.body.obra_version);
-  const ubicacion = normalizarUbicacion(req.body.ubicacion);
+  const codigo = medida
+    ? `${codigoBase}_${medida}`
+    : codigoBase;
+
+  const descripcion = limpiarTexto(
+    req.body.descripcion
+  );
+
+  const obraVersion = limpiarTexto(
+    req.body.obra_version
+  );
+
+  const idUbicacionRecorte = Number(
+    req.body.id_ubicacion_recorte
+  );
+
   const cantidad = Number(req.body.cantidad);
 
   if (!codigoBase) {
@@ -222,9 +316,12 @@ exports.create = async (req, res) => {
     });
   }
 
-  if (!ubicacion) {
+  if (
+    !Number.isInteger(idUbicacionRecorte) ||
+    idUbicacionRecorte <= 0
+  ) {
     return res.status(400).json({
-      error: "Debe indicar la ubicación.",
+      error: "Debe seleccionar una ubicación válida.",
     });
   }
 
@@ -258,6 +355,32 @@ exports.create = async (req, res) => {
         });
       }
 
+      const ubicacionResult = await new sql.Request(transaction)
+        .input(
+          "idUbicacionRecorte",
+          sql.Int,
+          idUbicacionRecorte
+        )
+        .query(`
+          SELECT TOP 1
+            nombre
+          FROM dbo.recortes_ubicaciones WITH (UPDLOCK, HOLDLOCK)
+          WHERE id_ubicacion_recorte = @idUbicacionRecorte
+            AND activo = 1;
+        `);
+
+      if (!ubicacionResult.recordset.length) {
+        await transaction.rollback();
+
+        return res.status(400).json({
+          error: "La ubicación seleccionada no existe.",
+        });
+      }
+
+      const nombreUbicacion = normalizarUbicacion(
+        ubicacionResult.recordset[0].nombre
+      );
+
       const recorteResult = await new sql.Request(transaction)
         .input("codigo", sql.VarChar(80), codigo)
         .input("descripcion", sql.VarChar(250), descripcion)
@@ -284,21 +407,35 @@ exports.create = async (req, res) => {
 
       await new sql.Request(transaction)
         .input("idRecorte", sql.Int, idRecorte)
-        .input("ubicacion", sql.VarChar(150), ubicacion)
-        .input("cantidad", sql.Decimal(18, 3), cantidad)
+        .input(
+          "idUbicacionRecorte",
+          sql.Int,
+          idUbicacionRecorte
+        )
+        .input(
+          "ubicacion",
+          sql.VarChar(150),
+          nombreUbicacion
+        )
+        .input(
+          "cantidad",
+          sql.Decimal(18, 3),
+          cantidad
+        )
         .query(`
           INSERT INTO dbo.stock_recortes (
             id_recorte,
+            id_ubicacion_recorte,
             ubicacion,
             cantidad
           )
           VALUES (
             @idRecorte,
+            @idUbicacionRecorte,
             @ubicacion,
             @cantidad
           );
         `);
-
       await transaction.commit();
 
       return res.status(201).json({
@@ -400,7 +537,9 @@ exports.update = async (req, res) => {
 // =====================================================
 exports.agregarUbicacion = async (req, res) => {
   const idRecorte = Number(req.params.id);
-  const ubicacion = normalizarUbicacion(req.body.ubicacion);
+  const idUbicacionRecorte = Number(
+    req.body.id_ubicacion_recorte
+  );
   const cantidad = Number(req.body.cantidad);
 
   if (!Number.isInteger(idRecorte) || idRecorte <= 0) {
@@ -409,9 +548,12 @@ exports.agregarUbicacion = async (req, res) => {
     });
   }
 
-  if (!ubicacion) {
+  if (
+    !Number.isInteger(idUbicacionRecorte) ||
+    idUbicacionRecorte <= 0
+  ) {
     return res.status(400).json({
-      error: "Debe indicar la ubicación.",
+      error: "Debe seleccionar una ubicación válida.",
     });
   }
 
@@ -452,7 +594,7 @@ exports.agregarUbicacion = async (req, res) => {
           cantidad = cantidad + @cantidad,
           fecha_actualizacion = SYSDATETIME()
         WHERE id_recorte = @idRecorte
-          AND UPPER(LTRIM(RTRIM(ubicacion))) = @ubicacion;
+          AND id_ubicacion_recorte = @idUbicacionRecorte;
 
         IF @@ROWCOUNT = 0
         BEGIN
@@ -508,7 +650,9 @@ exports.agregarUbicacion = async (req, res) => {
 // =====================================================
 exports.consumir = async (req, res) => {
   const idRecorte = Number(req.params.id);
-  const ubicacion = normalizarUbicacion(req.body.ubicacion);
+  const idUbicacionRecorte = Number(
+    req.body.id_ubicacion_recorte
+  );
   const cantidad = Number(req.body.cantidad);
 
   if (!Number.isInteger(idRecorte) || idRecorte <= 0) {
@@ -549,7 +693,8 @@ exports.consumir = async (req, res) => {
           cantidad = cantidad - @cantidad,
           fecha_actualizacion = SYSDATETIME()
         WHERE id_recorte = @idRecorte
-          AND UPPER(LTRIM(RTRIM(ubicacion))) = @ubicacion
+          AND id_ubicacion_recorte =
+              @idUbicacionRecorte
           AND cantidad >= @cantidad;
 
         IF @@ROWCOUNT = 0
@@ -674,6 +819,469 @@ exports.getArticuloByCodigo = async (req, res) => {
     return res.status(500).json({
       error: "Error al buscar el artículo.",
       detalle: err.message,
+    });
+  }
+};
+
+exports.getUbicaciones = async (_req, res) => {
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool.request().query(`
+      SELECT
+        id_ubicacion_recorte,
+        nombre,
+        activo
+      FROM dbo.recortes_ubicaciones WITH (NOLOCK)
+      WHERE activo = 1
+      ORDER BY
+        CASE
+          WHEN UPPER(LTRIM(RTRIM(nombre))) = 'GENERAL'
+          THEN 0
+          ELSE 1
+        END,
+        nombre;
+    `);
+
+    return res.json(result.recordset || []);
+  } catch (err) {
+    console.error(
+      "Error en stockRecortes.getUbicaciones:",
+      err
+    );
+
+    return res.status(500).json({
+      error: "Error al obtener las ubicaciones.",
+      detalle: err.message,
+    });
+  }
+};
+
+exports.crearUbicacion = async (req, res) => {
+  const nombre = normalizarUbicacion(req.body.nombre);
+
+  if (!nombre) {
+    return res.status(400).json({
+      error: "Debe indicar el nombre de la ubicación.",
+    });
+  }
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const existente = await pool
+      .request()
+      .input("nombre", sql.VarChar(150), nombre)
+      .query(`
+        SELECT TOP 1
+          id_ubicacion_recorte,
+          activo
+        FROM dbo.recortes_ubicaciones
+        WHERE UPPER(LTRIM(RTRIM(nombre))) = @nombre;
+      `);
+
+    if (existente.recordset.length) {
+      const ubicacion = existente.recordset[0];
+
+      if (ubicacion.activo) {
+        return res.status(409).json({
+          error: "Ya existe una ubicación con ese nombre.",
+        });
+      }
+
+      await pool
+        .request()
+        .input(
+          "id",
+          sql.Int,
+          Number(ubicacion.id_ubicacion_recorte)
+        )
+        .query(`
+          UPDATE dbo.recortes_ubicaciones
+          SET activo = 1
+          WHERE id_ubicacion_recorte = @id;
+        `);
+
+      return res.status(201).json({
+        mensaje: "Ubicación reactivada correctamente.",
+      });
+    }
+
+    const result = await pool
+      .request()
+      .input("nombre", sql.VarChar(150), nombre)
+      .query(`
+        INSERT INTO dbo.recortes_ubicaciones (
+          nombre
+        )
+        OUTPUT
+          INSERTED.id_ubicacion_recorte,
+          INSERTED.nombre
+        VALUES (
+          @nombre
+        );
+      `);
+
+    return res.status(201).json({
+      mensaje: "Ubicación creada correctamente.",
+      ubicacion: result.recordset[0],
+    });
+  } catch (err) {
+    console.error(
+      "Error en stockRecortes.crearUbicacion:",
+      err
+    );
+
+    return res.status(500).json({
+      error: "Error al crear la ubicación.",
+      detalle: err.message,
+    });
+  }
+};
+
+exports.actualizarUbicacion = async (req, res) => {
+  const id = Number(req.params.id);
+  const nombre = normalizarUbicacion(req.body.nombre);
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({
+      error: "El ID de ubicación no es válido.",
+    });
+  }
+
+  if (!nombre) {
+    return res.status(400).json({
+      error: "Debe indicar el nombre.",
+    });
+  }
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .input("nombre", sql.VarChar(150), nombre)
+      .query(`
+        IF EXISTS (
+          SELECT 1
+          FROM dbo.recortes_ubicaciones
+          WHERE UPPER(LTRIM(RTRIM(nombre))) = @nombre
+            AND id_ubicacion_recorte <> @id
+        )
+        BEGIN
+          THROW 50003, 'Ya existe una ubicación con ese nombre.', 1;
+        END;
+
+        UPDATE dbo.recortes_ubicaciones
+        SET nombre = @nombre
+        WHERE id_ubicacion_recorte = @id
+          AND activo = 1;
+
+        SELECT @@ROWCOUNT AS afectados;
+      `);
+
+    if (!Number(result.recordset[0]?.afectados || 0)) {
+      return res.status(404).json({
+        error: "La ubicación no existe.",
+      });
+    }
+
+    // Mantener sincronizada la columna vieja.
+    await pool
+      .request()
+      .input("id", sql.Int, id)
+      .input("nombre", sql.VarChar(150), nombre)
+      .query(`
+        UPDATE dbo.stock_recortes
+        SET ubicacion = @nombre
+        WHERE id_ubicacion_recorte = @id;
+      `);
+
+    return res.json({
+      mensaje: "Ubicación actualizada correctamente.",
+    });
+  } catch (err) {
+    console.error(
+      "Error en stockRecortes.actualizarUbicacion:",
+      err
+    );
+
+    return res.status(
+      err.number === 50003 ? 409 : 500
+    ).json({
+      error:
+        err.number === 50003
+          ? "Ya existe una ubicación con ese nombre."
+          : "Error al modificar la ubicación.",
+      detalle: err.message,
+    });
+  }
+};
+
+exports.eliminarUbicacion = async (req, res) => {
+  const id = Number(req.params.id);
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({
+      error: "El ID de ubicación no es válido.",
+    });
+  }
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const ubicacionResult = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT TOP 1
+          nombre
+        FROM dbo.recortes_ubicaciones
+        WHERE id_ubicacion_recorte = @id
+          AND activo = 1;
+      `);
+
+    if (!ubicacionResult.recordset.length) {
+      return res.status(404).json({
+        error: "La ubicación no existe.",
+      });
+    }
+
+    const nombre = normalizarUbicacion(
+      ubicacionResult.recordset[0].nombre
+    );
+
+    if (nombre === "GENERAL") {
+      return res.status(409).json({
+        error: "La ubicación GENERAL no puede eliminarse.",
+      });
+    }
+
+    const stockResult = await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT
+          COUNT(*) AS registros,
+          ISNULL(SUM(ABS(cantidad)), 0) AS cantidad
+        FROM dbo.stock_recortes
+        WHERE id_ubicacion_recorte = @id;
+      `);
+
+    const registros = Number(
+      stockResult.recordset[0]?.registros || 0
+    );
+
+    const cantidad = Number(
+      stockResult.recordset[0]?.cantidad || 0
+    );
+
+    if (registros > 0 && cantidad !== 0) {
+      return res.status(409).json({
+        error:
+          "No puede eliminarse porque tiene stock asociado.",
+      });
+    }
+
+    await pool
+      .request()
+      .input("id", sql.Int, id)
+      .query(`
+        UPDATE dbo.recortes_ubicaciones
+        SET activo = 0
+        WHERE id_ubicacion_recorte = @id;
+      `);
+
+    return res.json({
+      mensaje: "Ubicación eliminada correctamente.",
+    });
+  } catch (err) {
+    console.error(
+      "Error en stockRecortes.eliminarUbicacion:",
+      err
+    );
+
+    return res.status(500).json({
+      error: "Error al eliminar la ubicación.",
+      detalle: err.message,
+    });
+  }
+};
+
+exports.getRecorteByCodigo = async (req, res) => {
+  const codigo = normalizarCodigo(
+    req.params.codigo
+  );
+
+  if (!codigo) {
+    return res.status(400).json({
+      error:
+        "Debe ingresar el código completo del recorte.",
+    });
+  }
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input(
+        "codigo",
+        sql.VarChar(150),
+        codigo
+      )
+      .query(`
+        SELECT TOP 1
+          id_recorte,
+          codigo,
+          descripcion,
+          medida,
+          obra_version
+        FROM dbo.recortes WITH (NOLOCK)
+        WHERE
+          UPPER(LTRIM(RTRIM(codigo))) = @codigo
+          AND activo = 1;
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({
+        error:
+          "El recorte no existe. Debe crearlo previamente desde Stock Recortes.",
+      });
+    }
+
+    return res.json(result.recordset[0]);
+  } catch (error) {
+    console.error(
+      "stockRecortes.getRecorteByCodigo:",
+      error
+    );
+
+    return res.status(500).json({
+      error: "Error al buscar el recorte.",
+      detalle: error.message,
+    });
+  }
+};
+
+exports.getStockByCodigoUbicacion = async (
+  req,
+  res
+) => {
+  const codigo = normalizarCodigo(
+    req.query.codigo
+  );
+
+  const idUbicacionRecorte = Number(
+    req.query.id_ubicacion_recorte
+  );
+
+  if (!codigo) {
+    return res.status(400).json({
+      error:
+        "Debe ingresar el código completo del recorte.",
+    });
+  }
+
+  if (
+    !Number.isInteger(idUbicacionRecorte) ||
+    idUbicacionRecorte <= 0
+  ) {
+    return res.status(400).json({
+      error:
+        "Debe seleccionar una ubicación válida.",
+    });
+  }
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input(
+        "codigo",
+        sql.VarChar(150),
+        codigo
+      )
+      .input(
+        "idUbicacionRecorte",
+        sql.Int,
+        idUbicacionRecorte
+      )
+      .query(`
+        SELECT
+          r.id_recorte,
+          r.codigo,
+          r.descripcion,
+          r.medida,
+
+          ISNULL(
+            SUM(
+              CASE
+                WHEN sr.id_ubicacion_recorte =
+                     @idUbicacionRecorte
+                THEN sr.cantidad
+                ELSE 0
+              END
+            ),
+            0
+          ) AS stock_ubicacion,
+
+          ISNULL(
+            SUM(sr.cantidad),
+            0
+          ) AS stock_total
+
+        FROM dbo.recortes r
+
+        LEFT JOIN dbo.stock_recortes sr
+          ON sr.id_recorte = r.id_recorte
+
+        WHERE
+          UPPER(LTRIM(RTRIM(r.codigo))) =
+          @codigo
+          AND r.activo = 1
+
+        GROUP BY
+          r.id_recorte,
+          r.codigo,
+          r.descripcion,
+          r.medida;
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({
+        error:
+          "El recorte no existe.",
+      });
+    }
+
+    return res.json({
+      ...result.recordset[0],
+      stock_ubicacion: Number(
+        result.recordset[0].stock_ubicacion || 0
+      ),
+      stock_total: Number(
+        result.recordset[0].stock_total || 0
+      ),
+    });
+  } catch (error) {
+    console.error(
+      "stockRecortes.getStockByCodigoUbicacion:",
+      error
+    );
+
+    return res.status(500).json({
+      error:
+        "Error al consultar el stock del recorte.",
+      detalle: error.message,
     });
   }
 };

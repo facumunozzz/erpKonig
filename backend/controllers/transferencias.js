@@ -6,6 +6,8 @@ function asInt(v) {
   return Number.isFinite(n) ? Math.trunc(n) : NaN;
 }
 
+const DEPOSITO_RECORTES_ID = -1;
+
 const toUpperTrim = (v) =>
   String(v ?? "")
     .trim()
@@ -90,14 +92,17 @@ exports.getById = async (req, res) => {
     }
 
     const det = await pool.request().input("id", sql.Int, id).query(`
-        SELECT 
-          a.codigo,
-          a.descripcion,
+        SELECT
+          COALESCE(a.codigo, r.codigo) AS codigo,
+          COALESCE(a.descripcion, r.descripcion) AS descripcion,
           d.cantidad
         FROM dbo.transferencias_detalle d
-        JOIN dbo.articulos a ON a.id_articulo = d.articulo_id
+        LEFT JOIN dbo.articulos a
+          ON a.id_articulo = d.articulo_id
+        LEFT JOIN dbo.recortes r
+          ON r.id_recorte = d.id_recorte
         WHERE d.transferencia_id = @id
-        ORDER BY a.codigo
+        ORDER BY COALESCE(a.codigo, r.codigo)
       `);
 
     res.json({
@@ -219,6 +224,353 @@ exports.getArticuloByCodigo = async (req, res) => {
   }
 };
 
+async function crearTransferenciaRecortes(req, res) {
+  const usuario =
+    req.user?.username ??
+    req.user?.email ??
+    req.user?.name ??
+    null;
+
+  const ubicacionDestinoId = asInt(req.body?.id_ubicacion_destino);
+  const remitoReferencia = cleanTextOrNull(req.body?.remito_referencia);
+  const fechaReal = cleanTextOrNull(req.body?.fecha_real);
+
+  const referenteRaw = req.body?.id_referente;
+  const referenteId =
+    referenteRaw === null ||
+    referenteRaw === undefined ||
+    String(referenteRaw).trim() === ""
+      ? null
+      : asInt(referenteRaw);
+
+  const itemsRaw = Array.isArray(req.body?.items) ? req.body.items : [];
+
+  if (!Number.isInteger(ubicacionDestinoId) || ubicacionDestinoId <= 0) {
+    return res.status(400).json({
+      error: "Debe seleccionar la ubicación destino.",
+    });
+  }
+
+  if (
+    referenteId !== null &&
+    (!Number.isInteger(referenteId) || referenteId <= 0)
+  ) {
+    return res.status(400).json({
+      error: "Referente inválido.",
+    });
+  }
+
+  const agrupados = new Map();
+
+  for (const itemRaw of itemsRaw) {
+    const item = {
+      codigo: toUpperTrim(itemRaw?.codigo),
+      id_recorte: asInt(itemRaw?.id_recorte),
+      cantidad: Number(itemRaw?.cantidad),
+      id_ubicacion_origen: asInt(itemRaw?.id_ubicacion_origen),
+    };
+
+    if (
+      !item.codigo ||
+      !Number.isInteger(item.id_recorte) ||
+      item.id_recorte <= 0 ||
+      !Number.isFinite(item.cantidad) ||
+      item.cantidad <= 0 ||
+      !Number.isInteger(item.id_ubicacion_origen) ||
+      item.id_ubicacion_origen <= 0
+    ) {
+      continue;
+    }
+
+    const clave = `${item.id_recorte}|${item.id_ubicacion_origen}`;
+    const actual = agrupados.get(clave) || {
+      ...item,
+      cantidad: 0,
+    };
+
+    actual.cantidad += item.cantidad;
+    agrupados.set(clave, actual);
+  }
+
+  const items = Array.from(agrupados.values());
+
+  if (!items.length) {
+    return res.status(400).json({
+      error: "Debe incluir al menos un recorte válido.",
+    });
+  }
+
+  if (
+    items.some(
+      (item) => item.id_ubicacion_origen === ubicacionDestinoId,
+    )
+  ) {
+    return res.status(400).json({
+      error: "La ubicación origen y destino no pueden ser iguales.",
+    });
+  }
+
+  let transaction;
+
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    if (referenteId !== null) {
+      const referenteResult = await new sql.Request(transaction)
+        .input("referenteId", sql.Int, referenteId)
+        .query(`
+          SELECT id_referente, activo
+          FROM dbo.referentes
+          WHERE id_referente = @referenteId;
+        `);
+
+      if (!referenteResult.recordset.length) {
+        throw new Error("El referente no existe.");
+      }
+
+      if (!referenteResult.recordset[0].activo) {
+        throw new Error("El referente está inactivo.");
+      }
+    }
+
+    const ubicacionDestinoResult = await new sql.Request(transaction)
+      .input("id", sql.Int, ubicacionDestinoId)
+      .query(`
+        SELECT id_ubicacion_recorte, nombre
+        FROM dbo.recortes_ubicaciones WITH (UPDLOCK, HOLDLOCK)
+        WHERE id_ubicacion_recorte = @id
+          AND activo = 1;
+      `);
+
+    if (!ubicacionDestinoResult.recordset.length) {
+      throw new Error("La ubicación destino no existe o está inactiva.");
+    }
+
+    const ubicacionDestino = ubicacionDestinoResult.recordset[0];
+
+    const primeraUbicacionOrigenResult = await new sql.Request(transaction)
+      .input("id", sql.Int, items[0].id_ubicacion_origen)
+      .query(`
+        SELECT id_ubicacion_recorte, nombre
+        FROM dbo.recortes_ubicaciones WITH (UPDLOCK, HOLDLOCK)
+        WHERE id_ubicacion_recorte = @id
+          AND activo = 1;
+      `);
+
+    if (!primeraUbicacionOrigenResult.recordset.length) {
+      throw new Error("La ubicación origen no existe o está inactiva.");
+    }
+
+    const primeraUbicacionOrigen =
+      primeraUbicacionOrigenResult.recordset[0];
+
+    const cabeceraResult = await new sql.Request(transaction)
+      .input(
+        "origen",
+        sql.VarChar(100),
+        `Recortes - ${primeraUbicacionOrigen.nombre}`,
+      )
+      .input(
+        "destino",
+        sql.VarChar(100),
+        `Recortes - ${ubicacionDestino.nombre}`,
+      )
+      .input("fechaReal", sql.Date, fechaReal)
+      .input("remitoReferencia", sql.NVarChar(100), remitoReferencia)
+      .input("referenteId", sql.Int, referenteId)
+      .input(
+        "ubicacionOrigenId",
+        sql.Int,
+        items[0].id_ubicacion_origen,
+      )
+      .input("ubicacionDestinoId", sql.Int, ubicacionDestinoId)
+      .input("usuario", sql.VarChar(120), usuario)
+      .query(`
+        INSERT INTO dbo.transferencias
+        (
+          origen,
+          destino,
+          fecha,
+          fecha_real,
+          remito_referencia,
+          id_referente,
+          id_ubicacion_origen,
+          id_ubicacion_destino,
+          usuario,
+          es_recortes
+        )
+        OUTPUT INSERTED.id
+        VALUES
+        (
+          @origen,
+          @destino,
+          GETDATE(),
+          COALESCE(@fechaReal, CONVERT(date, GETDATE())),
+          @remitoReferencia,
+          @referenteId,
+          @ubicacionOrigenId,
+          @ubicacionDestinoId,
+          @usuario,
+          1
+        );
+      `);
+
+    const transferenciaId = Number(cabeceraResult.recordset[0].id);
+
+    await new sql.Request(transaction)
+      .input("transferenciaId", sql.Int, transferenciaId)
+      .query(`
+        UPDATE dbo.transferencias
+        SET numero_transferencia = CAST(id AS VARCHAR(20))
+        WHERE id = @transferenciaId;
+      `);
+
+    for (const item of items) {
+      const recorteResult = await new sql.Request(transaction)
+        .input("idRecorte", sql.Int, item.id_recorte)
+        .input("codigo", sql.VarChar(150), item.codigo)
+        .query(`
+          SELECT id_recorte, codigo, descripcion
+          FROM dbo.recortes WITH (UPDLOCK, HOLDLOCK)
+          WHERE id_recorte = @idRecorte
+            AND UPPER(LTRIM(RTRIM(codigo))) = @codigo
+            AND activo = 1;
+        `);
+
+      if (!recorteResult.recordset.length) {
+        throw new Error(
+          `El recorte ${item.codigo} no existe o está inactivo.`,
+        );
+      }
+
+      const ubicacionOrigenResult = await new sql.Request(transaction)
+        .input("id", sql.Int, item.id_ubicacion_origen)
+        .query(`
+          SELECT id_ubicacion_recorte, nombre
+          FROM dbo.recortes_ubicaciones WITH (UPDLOCK, HOLDLOCK)
+          WHERE id_ubicacion_recorte = @id
+            AND activo = 1;
+        `);
+
+      if (!ubicacionOrigenResult.recordset.length) {
+        throw new Error(
+          `La ubicación origen de ${item.codigo} no existe o está inactiva.`,
+        );
+      }
+
+      const descuento = await new sql.Request(transaction)
+        .input("idRecorte", sql.Int, item.id_recorte)
+        .input("idUbicacion", sql.Int, item.id_ubicacion_origen)
+        .input("cantidad", sql.Decimal(18, 3), item.cantidad)
+        .query(`
+          UPDATE dbo.stock_recortes
+          SET
+            cantidad = cantidad - @cantidad,
+            fecha_actualizacion = SYSDATETIME()
+          WHERE id_recorte = @idRecorte
+            AND id_ubicacion_recorte = @idUbicacion
+            AND cantidad >= @cantidad;
+
+          SELECT @@ROWCOUNT AS afectados;
+        `);
+
+      if (Number(descuento.recordset[0]?.afectados || 0) !== 1) {
+        throw new Error(`Stock insuficiente para ${item.codigo}.`);
+      }
+
+      await new sql.Request(transaction)
+        .input("idRecorte", sql.Int, item.id_recorte)
+        .input("idUbicacion", sql.Int, ubicacionDestinoId)
+        .input("ubicacion", sql.VarChar(150), ubicacionDestino.nombre)
+        .input("cantidad", sql.Decimal(18, 3), item.cantidad)
+        .query(`
+          UPDATE dbo.stock_recortes
+          SET
+            cantidad = cantidad + @cantidad,
+            ubicacion = @ubicacion,
+            fecha_actualizacion = SYSDATETIME()
+          WHERE id_recorte = @idRecorte
+            AND id_ubicacion_recorte = @idUbicacion;
+
+          IF @@ROWCOUNT = 0
+          BEGIN
+            INSERT INTO dbo.stock_recortes
+            (
+              id_recorte,
+              id_ubicacion_recorte,
+              ubicacion,
+              cantidad
+            )
+            VALUES
+            (
+              @idRecorte,
+              @idUbicacion,
+              @ubicacion,
+              @cantidad
+            );
+          END;
+        `);
+
+      await new sql.Request(transaction)
+        .input("transferenciaId", sql.Int, transferenciaId)
+        .input("idRecorte", sql.Int, item.id_recorte)
+        .input("cantidad", sql.Decimal(18, 3), item.cantidad)
+        .input(
+          "ubicacionOrigenId",
+          sql.Int,
+          item.id_ubicacion_origen,
+        )
+        .query(`
+          INSERT INTO dbo.transferencias_detalle
+          (
+            transferencia_id,
+            articulo_id,
+            id_recorte,
+            cantidad,
+            id_ubicacion_origen
+          )
+          VALUES
+          (
+            @transferenciaId,
+            NULL,
+            @idRecorte,
+            @cantidad,
+            @ubicacionOrigenId
+          );
+        `);
+    }
+
+    await transaction.commit();
+
+    return res.status(201).json({
+      ok: true,
+      cabecera: {
+        id: transferenciaId,
+        numero_transferencia: String(transferenciaId),
+      },
+      message: "Transferencia de recortes creada correctamente.",
+    });
+  } catch (error) {
+    if (transaction && transaction._aborted !== true) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error("Error haciendo rollback:", rollbackError);
+      }
+    }
+
+    console.error("crearTransferenciaRecortes:", error);
+
+    return res.status(400).json({
+      error: error.message || "Error al transferir recortes.",
+    });
+  }
+}
+
 exports.create = async (req, res) => {
   const usuario =
     req.user?.username ??
@@ -228,6 +580,26 @@ exports.create = async (req, res) => {
 
   const origenId = asInt(req.body?.origen_id);
   const destinoId = asInt(req.body?.destino_id);
+
+  const origenEsRecortes =
+  origenId === DEPOSITO_RECORTES_ID;
+
+const destinoEsRecortes =
+  destinoId === DEPOSITO_RECORTES_ID;
+
+if (origenEsRecortes !== destinoEsRecortes) {
+  return res.status(400).json({
+    error:
+      "Recortes solo puede transferirse entre ubicaciones del depósito Recortes.",
+  });
+}
+
+if (origenEsRecortes && destinoEsRecortes) {
+  return crearTransferenciaRecortes(
+    req,
+    res
+  );
+}
 
   const ubicacionDestinoId = asInt(
     req.body?.id_ubicacion_destino,

@@ -10,6 +10,11 @@ const normalizarMotivo = (value) =>
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase();
 
+const DEPOSITO_RECORTES_ID = -1;
+
+const esDepositoRecortes = (valor) =>
+  Number(valor) === DEPOSITO_RECORTES_ID;
+
 const MOTIVOS_OCULTOS = new Set([
   "CONSUMO PRODUCCION (DROPBOX)",
   "IMPORTACION EXCEL",
@@ -21,6 +26,7 @@ const esMotivoOculto = (nombre) =>
 const crearItemVacio = () => ({
   codigo: "",
   descripcion: "",
+  id_recorte:"",
   proveedor: "",
   stock: "",
   stockTotal: "",
@@ -102,6 +108,21 @@ export default function NuevoAjuste() {
   const codigoRefs = useRef([]);
   const cantidadRefs = useRef([]);
 
+  const crearItemConUbicacionGeneral = () => {
+    const ubicacionGeneral = ubicaciones.find(
+      (ubicacion) =>
+        normalizarMotivo(ubicacion.nombre) === "GENERAL",
+    );
+
+    return {
+      ...crearItemVacio(),
+      id_ubicacion: ubicacionGeneral
+        ? String(ubicacionGeneral.id_ubicacion)
+        : "",
+      ubicacion_nombre: ubicacionGeneral?.nombre || "",
+    };
+  };
+
   const getPanolId = (lista) => {
     const panol = (lista || []).find(
       (deposito) =>
@@ -155,7 +176,14 @@ export default function NuevoAjuste() {
           ? responseDepositios.data
           : [];
 
-        setDepositos(listaDepositos);
+        setDepositos([
+          ...listaDepositos,
+          {
+            id_deposito: DEPOSITO_RECORTES_ID,
+            nombre: "Recortes",
+            es_recortes: true,
+          },
+        ]);
 
         const panolId = getPanolId(listaDepositos);
 
@@ -208,22 +236,40 @@ export default function NuevoAjuste() {
     try {
       setLoadingUbicaciones(true);
 
-      const response = await api.get(
-        "/ubicaciones/by-deposito",
-        {
-          params: {
-            deposito_id: Number(depositoId),
-          },
-        },
-      );
+      let response;
+
+if (esDepositoRecortes(depositoId)) {
+  response = await api.get(
+    "/api/stock-recortes/ubicaciones"
+  );
+} else {
+  response = await api.get(
+    "/ubicaciones/by-deposito",
+    {
+      params: {
+        deposito_id:
+          Number(depositoId),
+      },
+    }
+  );
+}
 
       if (!activo) return;
 
-      const lista = Array.isArray(response.data)
-        ? response.data.filter(
-            (ubicacion) => ubicacion.activa,
-          )
+      const original = Array.isArray(response.data)
+        ? response.data
         : [];
+
+      const lista = esDepositoRecortes(depositoId)
+        ? original.map((ubicacion) => ({
+            id_ubicacion:
+              ubicacion.id_ubicacion_recorte,
+            nombre: ubicacion.nombre,
+            activa: ubicacion.activo,
+          }))
+        : original.filter(
+            (ubicacion) => ubicacion.activa
+          );
 
       setUbicaciones(lista);
 
@@ -428,26 +474,35 @@ export default function NuevoAjuste() {
         }
 
         try {
-          const response = await api.get(
-            "/transferencias/stock-articulo",
-            {
+          let response;
+
+          if (esDepositoRecortes(depositoId)) {
+            response = await api.get("/api/stock-recortes/stock", {
+              params: {
+                codigo,
+                id_ubicacion_recorte: Number(item.id_ubicacion),
+              },
+            });
+          } else {
+            response = await api.get("/transferencias/stock-articulo", {
               params: {
                 codigo,
                 deposito_id: Number(depositoId),
                 id_ubicacion: Number(item.id_ubicacion),
               },
-            },
-          );
+            });
+          }
 
           return {
             ...item,
             codigo: response.data?.codigo || codigo,
-            stock:
-              response.data?.stock_deposito ??
-              response.data?.stock ??
-              0,
-            stockTotal:
-              response.data?.stock_total ?? 0,
+            stock: esDepositoRecortes(depositoId)
+              ? response.data?.stock_ubicacion ?? 0
+              : response.data?.stock_ubicacion ??
+                response.data?.stock_deposito ??
+                response.data?.stock ??
+                0,
+            stockTotal: response.data?.stock_total ?? 0,
             id_ubicacion: item.id_ubicacion,
             ubicacion_nombre: item.ubicacion_nombre,
           };
@@ -480,7 +535,6 @@ export default function NuevoAjuste() {
       .toUpperCase();
 
     const item = items[index];
-
     const ubicacionNumero = Number(item?.id_ubicacion);
 
     if (
@@ -498,23 +552,33 @@ export default function NuevoAjuste() {
     }
 
     try {
-      const response = await api.get("/transferencias/stock-articulo", {
-        params: {
-          codigo: codigoNormalizado,
-          deposito_id: Number(depositoId),
-          id_ubicacion: ubicacionNumero,
-        },
-      });
+      let response;
+
+      if (esDepositoRecortes(depositoId)) {
+        response = await api.get("/api/stock-recortes/stock", {
+          params: {
+            codigo: codigoNormalizado,
+            id_ubicacion_recorte: ubicacionNumero,
+          },
+        });
+      } else {
+        response = await api.get("/transferencias/stock-articulo", {
+          params: {
+            codigo: codigoNormalizado,
+            deposito_id: Number(depositoId),
+            id_ubicacion: ubicacionNumero,
+          },
+        });
+      }
 
       actualizarItem(index, {
         codigo: response.data?.codigo || codigoNormalizado,
-
-        stock:
-          response.data?.stock_ubicacion ??
-          response.data?.stock_deposito ??
-          response.data?.stock ??
-          0,
-
+        stock: esDepositoRecortes(depositoId)
+          ? response.data?.stock_ubicacion ?? 0
+          : response.data?.stock_ubicacion ??
+            response.data?.stock_deposito ??
+            response.data?.stock ??
+            0,
         stockTotal: response.data?.stock_total ?? 0,
       });
 
@@ -549,6 +613,53 @@ export default function NuevoAjuste() {
       return false;
     }
 
+    if (esDepositoRecortes(depositoId)) {
+      try {
+        const response = await api.get(
+          `/api/stock-recortes/buscar/codigo/${encodeURIComponent(
+            codigoNormalizado,
+          )}`,
+        );
+
+        const recorte = response.data || {};
+        const codigoRecorte = String(
+          recorte.codigo || codigoNormalizado,
+        )
+          .trim()
+          .toUpperCase();
+
+        actualizarItem(index, {
+          id_recorte: Number(recorte.id_recorte),
+          codigo: codigoRecorte,
+          descripcion: [recorte.descripcion, recorte.medida]
+            .filter(Boolean)
+            .join(" - "),
+          proveedor: "",
+          stock: "",
+          stockTotal: "",
+          ubicacion: "",
+        });
+
+        await consultarStock(codigoRecorte, index);
+        return true;
+      } catch (error) {
+        console.error("No se encontró el recorte:", error);
+
+        actualizarItem(index, {
+          id_recorte: "",
+          codigo: codigoNormalizado,
+          descripcion:
+            "Recorte no encontrado. Debe existir previamente en Stock Recortes.",
+          proveedor: "",
+          stock: "",
+          stockTotal: "",
+          ubicacion: "",
+        });
+
+        return false;
+      }
+    }
+
     try {
       const response = await api.get(
         `/articulos/codigo/${encodeURIComponent(codigoNormalizado)}`,
@@ -576,6 +687,7 @@ export default function NuevoAjuste() {
       }
 
       actualizarItem(index, {
+        id_recorte: "",
         codigo: codigoArticulo,
         descripcion,
         proveedor: articulo.proveedor || "",
@@ -606,7 +718,7 @@ export default function NuevoAjuste() {
         return itemsActuales;
       }
 
-      return [...itemsActuales, crearItemVacio()];
+      return [...itemsActuales, crearItemConUbicacionGeneral()];
     });
 
     setTimeout(() => {
@@ -636,7 +748,7 @@ export default function NuevoAjuste() {
     const encontrado = await buscarArticulo(codigo, index);
 
     if (encontrado) {
-      cantidadRefs.current[index]?.focus();
+      asegurarFilaSiguiente(index, "codigo");
     }
   };
 
@@ -647,7 +759,11 @@ export default function NuevoAjuste() {
 
     event.preventDefault();
 
-    asegurarFilaSiguiente(index, "codigo");
+    const siguienteIndex = index + 1;
+
+    if (siguienteIndex < items.length) {
+      cantidadRefs.current[siguienteIndex]?.focus();
+    }
   };
 
   const quitarItem = (index) => {
@@ -661,7 +777,10 @@ export default function NuevoAjuste() {
   };
 
   const agregarFila = () => {
-    setItems((itemsActuales) => [...itemsActuales, crearItemVacio()]);
+    setItems((itemsActuales) => [
+    ...itemsActuales,
+    crearItemConUbicacionGeneral(),
+  ]);
 
     setTimeout(() => {
       codigoRefs.current[items.length]?.focus();
@@ -745,7 +864,11 @@ export default function NuevoAjuste() {
 
           stock_total: item.stockTotal ?? "",
 
-          ubicacion: item.ubicacion || "",
+          id_recorte: item.id_recorte || null,
+
+          id_ubicacion: item.id_ubicacion || null,
+
+          ubicacion: item.ubicacion_nombre || "",
 
           cantidad: item.cantidad ?? "",
         })),
@@ -880,7 +1003,10 @@ export default function NuevoAjuste() {
 
       const motivoNumero = Number(motivoId);
 
-      if (!Number.isInteger(depositoNumero) || depositoNumero <= 0) {
+      if (
+        !Number.isInteger(depositoNumero) ||
+        (depositoNumero <= 0 && depositoNumero !== DEPOSITO_RECORTES_ID)
+      ) {
         setErrorMsg("Seleccioná un depósito.");
 
         return;
@@ -899,6 +1025,8 @@ export default function NuevoAjuste() {
             .toUpperCase(),
 
           descripcion: String(item.descripcion || "").trim(),
+
+          id_recorte: Number(item.id_recorte),
 
           cantidad: Number(item.cantidad),
 
@@ -946,6 +1074,19 @@ export default function NuevoAjuste() {
         return;
       }
 
+      if (
+        esDepositoRecortes(depositoNumero) &&
+        itemsConCodigo.some(
+          (item) =>
+            !Number.isInteger(item.id_recorte) || item.id_recorte <= 0,
+        )
+      ) {
+        setErrorMsg(
+          "Uno o más recortes no existen. Ingresá el código completo junto con la medida.",
+        );
+        return;
+      }
+
       const body = {
         deposito_id: Number(depositoId),
 
@@ -969,6 +1110,10 @@ export default function NuevoAjuste() {
 
         items: itemsConCodigo.map((item) => ({
           cod_articulo: item.cod_articulo,
+
+          id_recorte: esDepositoRecortes(depositoNumero)
+            ? item.id_recorte
+            : null,
 
           cantidad:
             tipoAjuste === "EGRESO"
@@ -1111,7 +1256,18 @@ export default function NuevoAjuste() {
             <select
               id="ajuste-deposito"
               value={depositoId}
-              onChange={(event) => setDepositoId(event.target.value)}
+              onChange={(event) => {
+                setDepositoId(event.target.value);
+                setItems((actuales) =>
+                  actuales.map((item) => ({
+                    ...item,
+                    id_recorte: "",
+                    descripcion: "",
+                    stock: "",
+                    stockTotal: "",
+                  })),
+                );
+              }}
             >
               <option value="">-- Seleccioná depósito --</option>
 
@@ -1437,45 +1593,81 @@ export default function NuevoAjuste() {
 
                         const ubicacionSeleccionada = ubicaciones.find(
                           (ubicacion) =>
-                            String(ubicacion.id_ubicacion) === String(idUbicacion)
+                            String(ubicacion.id_ubicacion) ===
+                            String(idUbicacion),
                         );
 
                         actualizarItem(index, {
                           id_ubicacion: idUbicacion,
-                          ubicacion_nombre: ubicacionSeleccionada?.nombre || "",
+                          ubicacion_nombre:
+                            ubicacionSeleccionada?.nombre || "",
                           stock: "",
+                          stockTotal: "",
                         });
 
-                        if (item.codigo && idUbicacion) {
-                          try {
-                            const response = await api.get("/transferencias/stock-articulo", {
-                              params: {
-                                codigo: String(item.codigo || "").trim().toUpperCase(),
-                                deposito_id: Number(depositoId),
-                                id_ubicacion: Number(idUbicacion),
+                        if (!item.codigo || !idUbicacion) {
+                          return;
+                        }
+
+                        try {
+                          const codigoNormalizado = String(
+                            item.codigo || "",
+                          )
+                            .trim()
+                            .toUpperCase();
+
+                          let response;
+
+                          if (esDepositoRecortes(depositoId)) {
+                            response = await api.get(
+                              "/api/stock-recortes/stock",
+                              {
+                                params: {
+                                  codigo: codigoNormalizado,
+                                  id_ubicacion_recorte:
+                                    Number(idUbicacion),
+                                },
                               },
-                            });
+                            );
+                          } else {
+                            response = await api.get(
+                              "/transferencias/stock-articulo",
+                              {
+                                params: {
+                                  codigo: codigoNormalizado,
+                                  deposito_id: Number(depositoId),
+                                  id_ubicacion: Number(idUbicacion),
+                                },
+                              },
+                            );
+                          }
 
-                            actualizarItem(index, {
-                              id_ubicacion: idUbicacion,
-                              ubicacion_nombre: ubicacionSeleccionada?.nombre || "",
-
-                              stock:
-                                response.data?.stock_ubicacion ??
+                          actualizarItem(index, {
+                            id_ubicacion: idUbicacion,
+                            ubicacion_nombre:
+                              ubicacionSeleccionada?.nombre || "",
+                            codigo:
+                              response.data?.codigo ||
+                              codigoNormalizado,
+                            stock: esDepositoRecortes(depositoId)
+                              ? response.data?.stock_ubicacion ?? 0
+                              : response.data?.stock_ubicacion ??
                                 response.data?.stock_deposito ??
                                 response.data?.stock ??
                                 0,
+                            stockTotal:
+                              response.data?.stock_total ?? 0,
+                          });
+                        } catch (error) {
+                          console.error(
+                            "Error consultando stock por ubicación:",
+                            error,
+                          );
 
-                              stockTotal: response.data?.stock_total ?? 0,
-                            });
-                          } catch (error) {
-                            console.error("Error consultando stock por ubicación:", error);
-
-                            actualizarItem(index, {
-                              stock: "Error",
-                              stockTotal: "Error",
-                            });
-                          }
+                          actualizarItem(index, {
+                            stock: "Error",
+                            stockTotal: "Error",
+                          });
                         }
                       }}
                       disabled={!depositoId || loadingUbicaciones}

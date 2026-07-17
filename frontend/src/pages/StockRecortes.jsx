@@ -1,6 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/axiosConfig";
 import "./../styles/stockRecortes.css";
+import {useExcelFilters, ExcelFilterButton} from "../components/ExcelColumnFilter";
+
+const RECORTES_HEADERS = [
+  ["codigo", "Código"],
+  ["descripcion", "Descripción"],
+  ["medida", "Medida"],
+  ["obra_version", "Obra / Versión"],
+  ["cantidad", "Cantidad"],
+  ["ubicaciones_label", "Ubicaciones"],
+];
 
 const FORM_INICIAL = {
   codigo: "",
@@ -8,7 +18,7 @@ const FORM_INICIAL = {
   medida: "",
   obra_version: "",
   cantidad: "",
-  ubicacion: "",
+  id_ubicacion_recorte: "",
 };
 
 function StockRecortes() {
@@ -16,19 +26,27 @@ function StockRecortes() {
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
 
-  const [busqueda, setBusqueda] = useState("");
   const [modalNuevo, setModalNuevo] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [form, setForm] = useState(FORM_INICIAL);
 
   const [detalleAbierto, setDetalleAbierto] = useState(null);
+  const [ubicaciones, setUbicaciones] = useState([]);
+  const [modalUbicaciones, setModalUbicaciones] =
+    useState(false);
+  const [nuevaUbicacion, setNuevaUbicacion] =
+    useState("");
+  const [editandoUbicacionId, setEditandoUbicacionId] =
+    useState(null);
+  const [editandoUbicacionNombre, setEditandoUbicacionNombre] =
+    useState("");
 
   const cargarRecortes = async () => {
     try {
       setCargando(true);
       setError("");
 
-      const response = await api.get("/stock-recortes");
+      const response = await api.get("/api/stock-recortes");
 
       setRecortes(
         Array.isArray(response.data)
@@ -52,25 +70,59 @@ function StockRecortes() {
     cargarRecortes();
   }, []);
 
-  const recortesFiltrados = useMemo(() => {
-    const texto = busqueda.trim().toLowerCase();
+  const cargarUbicaciones = async () => {
+    try {
+      const response = await api.get(
+        "/api/stock-recortes/ubicaciones"
+      );
 
-    if (!texto) return recortes;
+      const lista = Array.isArray(response.data)
+        ? response.data
+        : [];
 
-    return recortes.filter((item) => {
-      const contenido = [
-        item.codigo,
-        item.descripcion,
-        item.medida,
-        item.cantidad,
-        item.ubicaciones_label,
-      ]
-        .join(" ")
-        .toLowerCase();
+      setUbicaciones(lista);
 
-      return contenido.includes(texto);
-    });
-  }, [recortes, busqueda]);
+      return lista;
+    } catch (err) {
+      console.error(
+        "Error cargando ubicaciones de recortes:",
+        err
+      );
+
+      alert("No se pudieron cargar las ubicaciones.");
+      return [];
+    }
+  };
+
+  const getRecorteFilterValue = (item, key) => {
+    const valores = {
+      codigo: item.codigo ?? "",
+      descripcion: item.descripcion ?? "",
+      medida: item.medida ?? "",
+      obra_version: item.obra_version ?? "",
+      cantidad: item.cantidad ?? 0,
+      ubicaciones_label:
+        item.ubicaciones_label ?? "",
+    };
+
+    return valores[key] ?? "";
+  };
+
+  const excelColumns = useMemo(
+    () =>
+      RECORTES_HEADERS.map(([key, label]) => ({
+        key,
+        label,
+        getValue: (row) =>
+          getRecorteFilterValue(row, key),
+      })),
+    []
+  );
+
+  const excel = useExcelFilters(
+    recortes,
+    excelColumns
+  );
 
   const cambiarForm = (campo, valor) => {
     setForm((prev) => ({
@@ -79,10 +131,25 @@ function StockRecortes() {
     }));
   };
 
-  const abrirNuevo = () => {
-    setForm(FORM_INICIAL);
-    setModalNuevo(true);
-  };
+  const abrirNuevo = async () => {
+  const lista = await cargarUbicaciones();
+
+  const general = lista.find(
+    (ubicacion) =>
+      String(ubicacion.nombre || "")
+        .trim()
+        .toUpperCase() === "GENERAL"
+  );
+
+  setForm({
+    ...FORM_INICIAL,
+    id_ubicacion_recorte: general
+      ? String(general.id_ubicacion_recorte)
+      : "",
+  });
+
+  setModalNuevo(true);
+};
 
   const cerrarNuevo = () => {
     if (guardando) return;
@@ -135,7 +202,9 @@ function StockRecortes() {
     const codigo = form.codigo.trim();
     const descripcion = form.descripcion.trim();
     const medida = form.medida.trim();
-    const ubicacion = form.ubicacion.trim();
+    const id_ubicacion_recorte = Number(
+      form.id_ubicacion_recorte
+    );
     const cantidad = Number(form.cantidad);
     const obra_version = form.obra_version.trim();
 
@@ -154,8 +223,11 @@ function StockRecortes() {
       return;
     }
 
-    if (!ubicacion) {
-      alert("Debe ingresar la ubicación.");
+    if (
+      !Number.isInteger(id_ubicacion_recorte) ||
+      id_ubicacion_recorte <= 0
+    ) {
+      alert("Debe seleccionar una ubicación.");
       return;
     }
 
@@ -167,12 +239,12 @@ function StockRecortes() {
     try {
       setGuardando(true);
 
-      await api.post("/stock-recortes", {
+      await api.post("/api/stock-recortes", {
         codigo,
         descripcion,
         medida,
         obra_version,
-        ubicacion,
+        id_ubicacion_recorte,
         cantidad,
       });
 
@@ -200,7 +272,7 @@ function StockRecortes() {
     if (!confirmar) return;
 
     try {
-      await api.delete(`/stock-recortes/${item.id_recorte}`);
+      await api.delete(`/api/stock-recortes/${item.id_recorte}`);
       await cargarRecortes();
     } catch (err) {
       console.error("Error eliminando recorte:", err);
@@ -216,27 +288,40 @@ function StockRecortes() {
   return (
     <div className="stock-recortes-container">
       <div className="stock-recortes-header">
-          <h2 className="module-title">Stock Recortes</h2>    
+        <h2 className="module-title">
+          Stock Recortes
+        </h2>
 
-        <button
-          className="btn-recorte-principal"
-          onClick={abrirNuevo}
-        >
-          Nuevo recorte
-        </button>
-      </div>
+        <div className="stock-recortes-botones">
+          <button
+            className="btn-recorte-principal"
+            onClick={abrirNuevo}
+          >
+            Nuevo recorte
+          </button>
 
-      <div className="stock-recortes-toolbar">
-        <input
-          type="text"
-          value={busqueda}
-          onChange={(e) => setBusqueda(e.target.value)}
-          placeholder="Buscar código, descripción, medida o ubicación..."
-        />
+          <button
+            className="btn-recorte-principal"
+            onClick={async () => {
+              await cargarUbicaciones();
+              setModalUbicaciones(true);
+            }}
+          >
+            Administrar ubicaciones
+          </button>
 
-        <button onClick={cargarRecortes}>
-          Actualizar
-        </button>
+          <button className="btn-recorte-principal" onClick={cargarRecortes}> Actualizar </button>
+
+          <button
+            className="btn-recorte-principal"
+            onClick={() => {
+              setBusqueda("");
+              excel.clearAllFilters?.();
+            }}
+          >
+            Limpiar filtros
+          </button>
+        </div>
       </div>
 
       {cargando && (
@@ -256,24 +341,49 @@ function StockRecortes() {
           <table className="stock-recortes-tabla">
             <thead>
               <tr>
-                <th>Código</th>
-                <th>Descripción</th>
-                <th>Medida</th>
-                <th className="numero">Cantidad</th>
-                <th>Ubicaciones</th>
-                <th className="acciones-columna">Acciones</th>
+                {RECORTES_HEADERS.map(([key, label]) => (
+                  <th
+                    key={key}
+                    className={
+                      key === "cantidad"
+                        ? "numero"
+                        : ""
+                    }
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 6,
+                      }}
+                    >
+                      <span>{label}</span>
+
+                      <ExcelFilterButton
+                        columnKey={key}
+                        label={label}
+                        excel={excel}
+                      />
+                    </div>
+                  </th>
+                ))}
+
+                <th className="acciones-columna">
+                  Acciones
+                </th>
               </tr>
             </thead>
 
             <tbody>
-              {recortesFiltrados.length === 0 ? (
+              {excel.rows.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="sin-resultados">
+                  <td colSpan="7" className="sin-resultados">
                     No hay recortes para mostrar.
                   </td>
                 </tr>
               ) : (
-                recortesFiltrados.map((item) => {
+                excel.rows.map((item) => {
                   const abierto =
                     detalleAbierto === item.id_recorte;
 
@@ -283,6 +393,7 @@ function StockRecortes() {
                         <td>{item.codigo}</td>
                         <td>{item.descripcion}</td>
                         <td>{item.medida}</td>
+                        <td>{item.obra_version || ""}</td>
 
                         <td className="numero">
                           {Number(item.cantidad || 0).toLocaleString(
@@ -295,7 +406,8 @@ function StockRecortes() {
                         </td>
 
                         <td>
-                          {item.ubicaciones_label || "Sin ubicación"}
+                          {item.ubicaciones_label ||
+                            "Sin ubicación"}
                         </td>
 
                         <td className="acciones-celda">
@@ -312,21 +424,12 @@ function StockRecortes() {
                               ? "Ocultar"
                               : "Ver ubicaciones"}
                           </button>
-
-                          <button
-                            className="btn-eliminar-recorte"
-                            onClick={() =>
-                              eliminarRecorte(item)
-                            }
-                          >
-                            Eliminar
-                          </button>
                         </td>
                       </tr>
 
                       {abierto && (
                         <tr className="fila-detalle-recorte">
-                          <td colSpan="6">
+                          <td colSpan="7">
                             <div className="detalle-recorte">
                               <strong>
                                 Ubicaciones de {item.codigo}
@@ -388,6 +491,243 @@ function StockRecortes() {
           </table>
         </div>
       )}
+
+      {modalUbicaciones && (
+  <div
+    className="recorte-modal-overlay"
+    onMouseDown={() =>
+      setModalUbicaciones(false)
+    }
+  >
+    <div
+      className="recorte-modal"
+      onMouseDown={(e) =>
+        e.stopPropagation()
+      }
+    >
+      <h3>Ubicaciones de recortes</h3>
+
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginBottom: 16,
+        }}
+      >
+        <input
+          value={nuevaUbicacion}
+          onChange={(e) =>
+            setNuevaUbicacion(e.target.value)
+          }
+          placeholder="Nueva ubicación"
+        />
+
+        <button
+          className="btn-recorte-principal"
+          onClick={async () => {
+            const nombre =
+              nuevaUbicacion.trim();
+
+            if (!nombre) {
+              alert(
+                "Debe indicar el nombre."
+              );
+              return;
+            }
+
+            try {
+              await api.post(
+                "/api/stock-recortes/ubicaciones",
+                { nombre }
+              );
+
+              setNuevaUbicacion("");
+              await cargarUbicaciones();
+            } catch (err) {
+              alert(
+                err.response?.data?.error ||
+                  "No se pudo crear la ubicación."
+              );
+            }
+          }}
+        >
+          Crear
+        </button>
+      </div>
+
+      <div
+        style={{
+          maxHeight: 350,
+          overflowY: "auto",
+        }}
+      >
+        <table className="tabla-ubicaciones-recorte">
+          <thead>
+            <tr>
+              <th>Ubicación</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {ubicaciones.map((ubicacion) => {
+              const editando =
+                editandoUbicacionId ===
+                ubicacion.id_ubicacion_recorte;
+
+              return (
+                <tr
+                  key={
+                    ubicacion.id_ubicacion_recorte
+                  }
+                >
+                  <td>
+                    {editando ? (
+                      <input
+                        value={
+                          editandoUbicacionNombre
+                        }
+                        onChange={(e) =>
+                          setEditandoUbicacionNombre(
+                            e.target.value
+                          )
+                        }
+                        autoFocus
+                      />
+                    ) : (
+                      ubicacion.nombre
+                    )}
+                  </td>
+
+                  <td>
+                    {editando ? (
+                      <>
+                        <button
+                          onClick={async () => {
+                            const nombre =
+                              editandoUbicacionNombre.trim();
+
+                            if (!nombre) {
+                              alert(
+                                "El nombre no puede estar vacío."
+                              );
+                              return;
+                            }
+
+                            try {
+                              await api.put(
+                                `/api/stock-recortes/ubicaciones/${ubicacion.id_ubicacion_recorte}`,
+                                { nombre }
+                              );
+
+                              setEditandoUbicacionId(
+                                null
+                              );
+
+                              setEditandoUbicacionNombre(
+                                ""
+                              );
+
+                              await cargarUbicaciones();
+                              await cargarRecortes();
+                            } catch (err) {
+                              alert(
+                                err.response?.data
+                                  ?.error ||
+                                  "No se pudo modificar."
+                              );
+                            }
+                          }}
+                        >
+                          Guardar
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setEditandoUbicacionId(
+                              null
+                            );
+
+                            setEditandoUbicacionNombre(
+                              ""
+                            );
+                          }}
+                        >
+                          Cancelar
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => {
+                            setEditandoUbicacionId(
+                              ubicacion.id_ubicacion_recorte
+                            );
+
+                            setEditandoUbicacionNombre(
+                              ubicacion.nombre
+                            );
+                          }}
+                        >
+                          Editar
+                        </button>
+
+                        <button
+                          disabled={
+                            String(
+                              ubicacion.nombre
+                            )
+                              .trim()
+                              .toUpperCase() ===
+                            "GENERAL"
+                          }
+                          onClick={async () => {
+                            const ok =
+                              window.confirm(
+                                `¿Eliminar la ubicación "${ubicacion.nombre}"?`
+                              );
+
+                            if (!ok) return;
+
+                            try {
+                              await api.delete(
+                                `/api/stock-recortes/ubicaciones/${ubicacion.id_ubicacion_recorte}`
+                              );
+
+                              await cargarUbicaciones();
+                            } catch (err) {
+                              alert(
+                                err.response?.data
+                                  ?.error ||
+                                  "No se pudo eliminar."
+                              );
+                            }
+                          }}
+                        >
+                          Eliminar
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="recorte-modal-acciones">
+        <button
+          onClick={() =>
+            setModalUbicaciones(false)
+          }
+        >
+          Cerrar
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
       {modalNuevo && (
         <div
@@ -475,16 +815,29 @@ function StockRecortes() {
 
             <label>
               Ubicación inicial
-              <input
-                value={form.ubicacion}
+
+              <select
+                value={form.id_ubicacion_recorte}
                 onChange={(e) =>
                   cambiarForm(
-                    "ubicacion",
+                    "id_ubicacion_recorte",
                     e.target.value
                   )
                 }
-                placeholder="Ejemplo: ESTANTE A1"
-              />
+              >
+                <option value="">
+                  Seleccionar ubicación
+                </option>
+
+                {ubicaciones.map((ubicacion) => (
+                  <option
+                    key={ubicacion.id_ubicacion_recorte}
+                    value={ubicacion.id_ubicacion_recorte}
+                  >
+                    {ubicacion.nombre}
+                  </option>
+                ))}
+              </select>
             </label>
 
             <div className="recorte-modal-acciones">

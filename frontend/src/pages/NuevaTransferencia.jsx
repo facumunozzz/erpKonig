@@ -6,6 +6,7 @@ import "./../styles/transferencias.css";
 const crearItemVacio = () => ({
   codigo: "",
   descripcion: "",
+  id_recorte: "",
   stock: "",
   stockTotal: "",
   id_ubicacion_origen: "",
@@ -17,6 +18,10 @@ const normalizarTexto = (valor) =>
   String(valor ?? "")
     .trim()
     .toUpperCase();
+
+const DEPOSITO_RECORTES_ID = -1;
+const esDepositoRecortes = (valor) =>
+  Number(valor) === DEPOSITO_RECORTES_ID;
 
 const normalizarFecha = (valor) => {
   if (!valor) {
@@ -76,6 +81,20 @@ export default function NuevaTransferencia() {
 
   const codigoRefs = useRef([]);
   const cantidadRefs = useRef([]);
+  const crearItemConUbicacionGeneral = () => {
+    const ubicacionGeneral = ubicacionesOrigen.find(
+      (ubicacion) => normalizarTexto(ubicacion.nombre) === "GENERAL",
+    );
+
+    return {
+      ...crearItemVacio(),
+      id_ubicacion_origen: ubicacionGeneral
+        ? String(ubicacionGeneral.id_ubicacion)
+        : "",
+      ubicacion_origen: ubicacionGeneral?.nombre || "",
+    };
+  };
+
   const referenciaInputRef = useRef(null);
 
   const getPanolId = (lista) => {
@@ -102,47 +121,79 @@ export default function NuevaTransferencia() {
     depositoId,
     setLista,
     setSeleccionada,
-    setLoading,
+    setLoading
   ) => {
     const id = Number(depositoId);
 
     setLista([]);
     setSeleccionada("");
 
-    if (!Number.isInteger(id) || id <= 0) {
+    if (
+      !Number.isInteger(id) ||
+      (id <= 0 && id !== DEPOSITO_RECORTES_ID)
+    ) {
       return;
     }
 
     try {
       setLoading(true);
 
-      const response = await api.get("/ubicaciones/by-deposito", {
-        params: {
-          deposito_id: id,
-        },
-      });
+      let response;
 
-      const lista = Array.isArray(response.data)
-        ? response.data.filter((ubicacion) => ubicacion.activa)
+      if (esDepositoRecortes(id)) {
+        response = await api.get(
+          "/api/stock-recortes/ubicaciones"
+        );
+      } else {
+        response = await api.get(
+          "/ubicaciones/by-deposito",
+          {
+            params: {
+              deposito_id: id,
+            },
+          }
+        );
+      }
+
+      const original = Array.isArray(response.data)
+        ? response.data
         : [];
+
+      const lista = esDepositoRecortes(id)
+        ? original.map((ubicacion) => ({
+            id_ubicacion:
+              ubicacion.id_ubicacion_recorte,
+            nombre: ubicacion.nombre,
+            activa: ubicacion.activo,
+          }))
+        : original.filter(
+            (ubicacion) => ubicacion.activa
+          );
 
       setLista(lista);
 
       const general = lista.find(
-        (ubicacion) => normalizarTexto(ubicacion.nombre) === "GENERAL",
+        (ubicacion) =>
+          normalizarTexto(ubicacion.nombre) ===
+          "GENERAL"
       );
 
       if (general) {
-        setSeleccionada(String(general.id_ubicacion));
+        setSeleccionada(
+          String(general.id_ubicacion)
+        );
       }
     } catch (error) {
-      console.error("Error cargando ubicaciones:", error);
+      console.error(
+        "Error cargando ubicaciones:",
+        error
+      );
 
       setLista([]);
       setSeleccionada("");
 
       setErrorMsg(
-        "No se pudieron cargar las ubicaciones del depósito seleccionado.",
+        "No se pudieron cargar las ubicaciones del depósito seleccionado."
       );
     } finally {
       setLoading(false);
@@ -175,7 +226,14 @@ export default function NuevaTransferencia() {
 
         const lista = Array.isArray(response.data) ? response.data : [];
 
-        setDepositos(lista);
+        setDepositos([
+          ...lista,
+          {
+            id_deposito: DEPOSITO_RECORTES_ID,
+            nombre: "Recortes",
+            es_recortes: true,
+          },
+        ]);
         setErrorDepositos("");
 
         const panolId = getPanolId(lista);
@@ -216,33 +274,61 @@ export default function NuevaTransferencia() {
       }
 
       try {
-        const response = await api.get("/ubicaciones/by-deposito", {
-          params: {
-            deposito_id: Number(origenId),
-          },
-        });
+        let response;
+
+        if (esDepositoRecortes(origenId)) {
+          response = await api.get(
+            "/api/stock-recortes/ubicaciones"
+          );
+        } else {
+          response = await api.get(
+            "/ubicaciones/by-deposito",
+            {
+              params: {
+                deposito_id: Number(origenId),
+              },
+            }
+          );
+        }
 
         if (!activo) return;
 
-        const lista = Array.isArray(response.data)
-          ? response.data.filter((ubicacion) => ubicacion.activa)
+        const original = Array.isArray(response.data)
+          ? response.data
           : [];
+
+        const lista = esDepositoRecortes(origenId)
+          ? original.map((ubicacion) => ({
+              id_ubicacion:
+                ubicacion.id_ubicacion_recorte,
+              nombre: ubicacion.nombre,
+              activa: ubicacion.activo,
+            }))
+          : original.filter(
+              (ubicacion) => ubicacion.activa
+            );
 
         setUbicacionesOrigen(lista);
 
         const general = lista.find(
-          (ubicacion) => normalizarTexto(ubicacion.nombre) === "GENERAL",
+          (ubicacion) =>
+            normalizarTexto(ubicacion.nombre) ===
+            "GENERAL"
         );
 
-        const generalId = general ? String(general.id_ubicacion) : "";
+        const generalId = general
+          ? String(general.id_ubicacion)
+          : "";
 
         setItems((actuales) =>
           actuales.map((item) => ({
             ...item,
             id_ubicacion_origen: generalId,
-            ubicacion_origen: general?.nombre || "",
+            ubicacion_origen:
+              general?.nombre || "",
             stock: "",
-          })),
+            stockTotal: "",
+          }))
         );
       } catch (error) {
         console.error("Error cargando ubicaciones origen:", error);
@@ -376,7 +462,7 @@ export default function NuevaTransferencia() {
     if (
       !codigoNormalizado ||
       !Number.isInteger(depositoNumero) ||
-      depositoNumero <= 0 ||
+      (depositoNumero <= 0 && depositoNumero !== DEPOSITO_RECORTES_ID) ||
       !Number.isInteger(ubicacionNumero) ||
       ubicacionNumero <= 0
     ) {
@@ -389,6 +475,22 @@ export default function NuevaTransferencia() {
     }
 
     try {
+      if (esDepositoRecortes(depositoNumero)) {
+        const response = await api.get("/api/stock-recortes/stock", {
+          params: {
+            codigo: codigoNormalizado,
+            id_ubicacion_recorte: ubicacionNumero,
+          },
+        });
+
+        return {
+          codigo: response.data?.codigo || codigoNormalizado,
+          stock: response.data?.stock_ubicacion ?? 0,
+          stockTotal: response.data?.stock_total ?? 0,
+          ubicacion: "",
+        };
+      }
+
       const response = await api.get("/transferencias/stock-articulo", {
         params: {
           codigo: codigoNormalizado,
@@ -399,15 +501,12 @@ export default function NuevaTransferencia() {
 
       return {
         codigo: response.data?.codigo || codigoNormalizado,
-
         stock:
           response.data?.stock_ubicacion ??
           response.data?.stock_deposito ??
           response.data?.stock ??
           0,
-
         stockTotal: response.data?.stock_total ?? 0,
-
         ubicacion: response.data?.ubicacion ?? "",
       };
     } catch (error) {
@@ -450,6 +549,49 @@ export default function NuevaTransferencia() {
       return false;
     }
 
+    if (esDepositoRecortes(origenId)) {
+      try {
+        const response = await api.get(
+          `/api/stock-recortes/buscar/codigo/${encodeURIComponent(
+            codigoNormalizado,
+          )}`,
+        );
+
+        const recorte = response.data || {};
+        const codigoRecorte = normalizarTexto(
+          recorte.codigo || codigoNormalizado,
+        );
+
+        actualizarItem(index, {
+          id_recorte: Number(recorte.id_recorte),
+          codigo: codigoRecorte,
+          descripcion: [recorte.descripcion, recorte.medida]
+            .filter(Boolean)
+            .join(" - "),
+          stock: "",
+          stockTotal: "",
+          ubicacion: "",
+        });
+
+        await consultarStock(codigoRecorte, index);
+        return true;
+      } catch (error) {
+        console.error("No se encontró el recorte:", error);
+
+        actualizarItem(index, {
+          id_recorte: "",
+          codigo: codigoNormalizado,
+          descripcion:
+            "Recorte no encontrado. Debe existir previamente en Stock Recortes.",
+          stock: "",
+          stockTotal: "",
+          ubicacion: "",
+        });
+
+        return false;
+      }
+    }
+
     try {
       let response;
 
@@ -484,6 +626,7 @@ export default function NuevaTransferencia() {
       }
 
       actualizarItem(index, {
+        id_recorte: "",
         codigo: codigoArticulo,
         descripcion: articulo.descripcion || "",
       });
@@ -506,17 +649,21 @@ export default function NuevaTransferencia() {
     }
   };
 
-  const asegurarFilaSiguiente = (index) => {
+  const asegurarFilaSiguiente = (index, columnaFoco = "codigo") => {
     setItems((itemsActuales) => {
       if (index !== itemsActuales.length - 1) {
         return itemsActuales;
       }
 
-      return [...itemsActuales, crearItemVacio()];
+      return [...itemsActuales, crearItemConUbicacionGeneral()];
     });
 
     setTimeout(() => {
-      codigoRefs.current[index + 1]?.focus();
+      if (columnaFoco === "cantidad") {
+        cantidadRefs.current[index + 1]?.focus();
+      } else {
+        codigoRefs.current[index + 1]?.focus();
+      }
     }, 80);
   };
 
@@ -536,7 +683,7 @@ export default function NuevaTransferencia() {
     const encontrado = await buscarArticulo(codigo, index);
 
     if (encontrado) {
-      cantidadRefs.current[index]?.focus();
+      asegurarFilaSiguiente(index, "codigo");
     }
   };
 
@@ -544,10 +691,12 @@ export default function NuevaTransferencia() {
     if (event.key !== "Enter") {
       return;
     }
-
     event.preventDefault();
-
-    asegurarFilaSiguiente(index);
+    
+    const siguienteIndex = index + 1;
+    if (siguienteIndex < items.length) {
+      cantidadRefs.current[siguienteIndex]?.focus();
+    }
   };
 
   const quitarItem = (index) => {
@@ -561,7 +710,10 @@ export default function NuevaTransferencia() {
   };
 
   const agregarFila = () => {
-    setItems((itemsActuales) => [...itemsActuales, crearItemVacio()]);
+    setItems((itemsActuales) => [
+    ...itemsActuales,
+    crearItemConUbicacionGeneral(),
+  ]);
 
     setTimeout(() => {
       codigoRefs.current[items.length]?.focus();
@@ -992,13 +1144,31 @@ export default function NuevaTransferencia() {
       const depositoOrigenId = Number(origenId);
       const depositoDestinoId = Number(destinoId);
 
-      if (!Number.isInteger(depositoOrigenId) || depositoOrigenId <= 0) {
+      if (
+        !Number.isInteger(depositoOrigenId) ||
+        (depositoOrigenId <= 0 &&
+          depositoOrigenId !== DEPOSITO_RECORTES_ID)
+      ) {
         setErrorMsg("Seleccioná el depósito origen.");
         return;
       }
 
-      if (!Number.isInteger(depositoDestinoId) || depositoDestinoId <= 0) {
+      if (
+        !Number.isInteger(depositoDestinoId) ||
+        (depositoDestinoId <= 0 &&
+          depositoDestinoId !== DEPOSITO_RECORTES_ID)
+      ) {
         setErrorMsg("Seleccioná el depósito destino.");
+        return;
+      }
+
+      const origenEsRecortes = esDepositoRecortes(depositoOrigenId);
+      const destinoEsRecortes = esDepositoRecortes(depositoDestinoId);
+
+      if (origenEsRecortes !== destinoEsRecortes) {
+        setErrorMsg(
+          "Recortes solo puede transferirse entre ubicaciones del depósito Recortes.",
+        );
         return;
       }
 
@@ -1016,6 +1186,7 @@ export default function NuevaTransferencia() {
         .map((item) => ({
           codigo: normalizarTexto(item.codigo),
           descripcion: String(item.descripcion || "").trim(),
+          id_recorte: Number(item.id_recorte),
           ubicacion: String(item.ubicacion || "").trim(),
           cantidad: Number(item.cantidad),
           id_ubicacion_origen: Number(item.id_ubicacion_origen),
@@ -1053,6 +1224,19 @@ export default function NuevaTransferencia() {
         return;
       }
 
+      if (
+        origenEsRecortes &&
+        itemsConCodigo.some(
+          (item) =>
+            !Number.isInteger(item.id_recorte) || item.id_recorte <= 0,
+        )
+      ) {
+        setErrorMsg(
+          "Uno o más recortes no existen. Ingresá el código completo junto con la medida.",
+        );
+        return;
+      }
+
       const body = {
         origen_id: depositoOrigenId,
         destino_id: depositoDestinoId,
@@ -1073,7 +1257,8 @@ export default function NuevaTransferencia() {
 
         items: itemsConCodigo.map((item) => ({
           codigo: item.codigo,
-          cantidad: Math.trunc(item.cantidad),
+          id_recorte: origenEsRecortes ? item.id_recorte : null,
+          cantidad: Number(item.cantidad),
           id_ubicacion_origen:
             Number(item.id_ubicacion_origen),
         })),
@@ -1211,7 +1396,22 @@ export default function NuevaTransferencia() {
             <select
               id="transferencia-origen"
               value={origenId}
-              onChange={(event) => setOrigenId(event.target.value)}
+              onChange={(event) => {
+  const nuevoOrigen =
+    event.target.value;
+
+  setOrigenId(nuevoOrigen);
+
+  if (esDepositoRecortes(nuevoOrigen)) {
+    setDestinoId(
+      String(DEPOSITO_RECORTES_ID)
+    );
+  } else if (
+    esDepositoRecortes(destinoId)
+  ) {
+    setDestinoId("");
+  }
+}}
             >
               <option value="">-- Seleccioná depósito origen --</option>
 
@@ -1234,7 +1434,10 @@ export default function NuevaTransferencia() {
               <option value="">-- Seleccioná depósito destino --</option>
 
               {depositos.map((deposito) => (
-                <option key={deposito.id_deposito} value={deposito.id_deposito}>
+                <option
+                  key={deposito.id_deposito}
+                  value={deposito.id_deposito}
+                >
                   {deposito.nombre}
                 </option>
               ))}
