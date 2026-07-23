@@ -2,15 +2,23 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/transferencias");
-const {authRequired} = require("../middleware/auth");
+const { authRequired } = require("../middleware/auth");
 
-router.get("/ubicaciones/:depositoId", authRequired, controller.getUbicacionesByDeposito);
+router.get(
+  "/ubicaciones/:depositoId",
+  authRequired,
+  controller.getUbicacionesByDeposito,
+);
 router.get("/articulo", authRequired, controller.getArticuloByCodigo);
+router.get(
+  "/recortes-opciones/:codigoBase",
+  authRequired,
+  controller.getOpcionesRecortes,
+);
+router.get("/stock-articulo", authRequired, controller.getStockArticulo);
 
 router.get("/", authRequired, controller.getAll);
 router.post("/", authRequired, controller.create);
-
-router.get("/stock-articulo", authRequired, controller.getStockArticulo);
 router.get("/:id", authRequired, controller.getById);
 
-module.exports = router; 
+module.exports = router;

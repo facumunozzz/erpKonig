@@ -83,7 +83,6 @@ export default function NuevoAjuste() {
 
   const [depositoId, setDepositoId] = useState("");
   const [ubicaciones, setUbicaciones] = useState([]);
-  const [ubicacionId, setUbicacionId] = useState("");
   const [loadingUbicaciones, setLoadingUbicaciones] = useState(false);
   const [motivoId, setMotivoId] = useState("");
   const [referenteId, setReferenteId] = useState("");
@@ -100,6 +99,7 @@ export default function NuevoAjuste() {
   const [tipoAjuste, setTipoAjuste] = useState("INGRESO");
 
   const [items, setItems] = useState([crearItemVacio()]);
+  const [opcionesRecortes, setOpcionesRecortes] = useState({});
 
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -109,18 +109,7 @@ export default function NuevoAjuste() {
   const cantidadRefs = useRef([]);
 
   const crearItemConUbicacionGeneral = () => {
-    const ubicacionGeneral = ubicaciones.find(
-      (ubicacion) =>
-        normalizarMotivo(ubicacion.nombre) === "GENERAL",
-    );
-
-    return {
-      ...crearItemVacio(),
-      id_ubicacion: ubicacionGeneral
-        ? String(ubicacionGeneral.id_ubicacion)
-        : "",
-      ubicacion_nombre: ubicacionGeneral?.nombre || "",
-    };
+    return crearItemVacio();
   };
 
   const getPanolId = (lista) => {
@@ -229,7 +218,6 @@ export default function NuevoAjuste() {
 
   const cargar = async () => {
     setUbicaciones([]);
-    setUbicacionId("");
 
     if (!depositoId) return;
 
@@ -273,27 +261,15 @@ if (esDepositoRecortes(depositoId)) {
 
       setUbicaciones(lista);
 
-      const general = lista.find(
-        (ubicacion) =>
-          normalizarMotivo(
-            ubicacion.nombre,
-          ) === "GENERAL",
-      );
-
-      if (general) {
-        const generalId = String(general.id_ubicacion);
-
-        setUbicacionId(generalId);
-
         setItems((itemsActuales) =>
-          itemsActuales.map((item) => ({
-            ...item,
-            id_ubicacion: item.id_ubicacion || generalId,
-            ubicacion_nombre: item.ubicacion_nombre || general.nombre || "",
-            stock: "",
-          }))
-        );
-      }
+        itemsActuales.map((item) => ({
+          ...item,
+          id_ubicacion: "",
+          ubicacion_nombre: "",
+          stock: "",
+          stockTotal: "",
+        }))
+      );
     } catch (error) {
       console.error(
         "Error cargando ubicaciones:",
@@ -432,154 +408,230 @@ if (esDepositoRecortes(depositoId)) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desdeAlerta]);
 
-  /*
-   * Cuando cambia el depósito se limpia el stock
-   * correspondiente al depósito anterior.
-   *
-   * La ubicación no se borra porque el usuario puede
-   * haberla editado manualmente.
-   */
-  useEffect(() => {
-  if (cargandoBorradorRef.current) {
-    return;
-  }
-
-  if (!depositoId) {
-    setItems((itemsActuales) =>
-      itemsActuales.map((item) => ({
-        ...item,
-        stock: "",
-        stockTotal: "",
-      })),
-    );
-
-    return;
-  }
-
-  const actualizarStocks = async () => {
-    const itemsActuales = [...items];
-
-    const nuevosItems = await Promise.all(
-      itemsActuales.map(async (item) => {
-        const codigo = String(item.codigo || "")
-          .trim()
-          .toUpperCase();
-
-        if (!codigo) {
-          return {
-            ...item,
-            stock: "",
-            stockTotal: "",
-          };
-        }
-
-        try {
-          let response;
-
-          if (esDepositoRecortes(depositoId)) {
-            response = await api.get("/api/stock-recortes/stock", {
-              params: {
-                codigo,
-                id_ubicacion_recorte: Number(item.id_ubicacion),
-              },
-            });
-          } else {
-            response = await api.get("/transferencias/stock-articulo", {
-              params: {
-                codigo,
-                deposito_id: Number(depositoId),
-                id_ubicacion: Number(item.id_ubicacion),
-              },
-            });
-          }
-
-          return {
-            ...item,
-            codigo: response.data?.codigo || codigo,
-            stock: esDepositoRecortes(depositoId)
-              ? response.data?.stock_ubicacion ?? 0
-              : response.data?.stock_ubicacion ??
-                response.data?.stock_deposito ??
-                response.data?.stock ??
-                0,
-            stockTotal: response.data?.stock_total ?? 0,
-            id_ubicacion: item.id_ubicacion,
-            ubicacion_nombre: item.ubicacion_nombre,
-          };
-        } catch (error) {
-          console.error(
-            `Error consultando stock de ${codigo}:`,
-            error,
-          );
-
-          return {
-            ...item,
-            stock: "Error",
-            stockTotal: "Error",
-          };
-        }
-      }),
-    );
-
-    setItems(nuevosItems);
-  };
-
-  actualizarStocks();
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [depositoId]);
-
-  const consultarStock = async (codigo, index) => {
+  const consultarStock = async (
+    codigo,
+    index,
+    idUbicacionForzada = null,
+  ) => {
     const codigoNormalizado = String(codigo || "")
       .trim()
       .toUpperCase();
 
-    const item = items[index];
-    const ubicacionNumero = Number(item?.id_ubicacion);
-
-    if (
-      !codigoNormalizado ||
-      !depositoId ||
-      !Number.isInteger(ubicacionNumero) ||
-      ubicacionNumero <= 0
-    ) {
+    if (!codigoNormalizado || !depositoId) {
       actualizarItem(index, {
         stock: "",
         stockTotal: "",
+        id_ubicacion: "",
+        ubicacion_nombre: "",
       });
 
       return false;
     }
 
     try {
-      let response;
-
+      /*
+       * RECORTES:
+       * El endpoint actual consulta una ubicación por vez.
+       * Si no se fuerza una ubicación, se consultan todas y se elige
+       * automáticamente la de mayor stock.
+       */
       if (esDepositoRecortes(depositoId)) {
-        response = await api.get("/api/stock-recortes/stock", {
-          params: {
-            codigo: codigoNormalizado,
-            id_ubicacion_recorte: ubicacionNumero,
-          },
+        const ubicacionForzadaNumero = Number(idUbicacionForzada);
+
+        if (
+          Number.isInteger(ubicacionForzadaNumero) &&
+          ubicacionForzadaNumero > 0
+        ) {
+          const response = await api.get("/api/stock-recortes/stock", {
+            params: {
+              codigo: codigoNormalizado,
+              id_ubicacion_recorte: ubicacionForzadaNumero,
+            },
+          });
+
+          const ubicacionSeleccionada = ubicaciones.find(
+            (ubicacion) =>
+              Number(ubicacion.id_ubicacion) === ubicacionForzadaNumero,
+          );
+
+          actualizarItem(index, {
+            codigo: response.data?.codigo || codigoNormalizado,
+            id_ubicacion: String(ubicacionForzadaNumero),
+            ubicacion_nombre: ubicacionSeleccionada?.nombre || "",
+            stock: response.data?.stock_ubicacion ?? 0,
+            stockTotal: response.data?.stock_total ?? 0,
+          });
+
+          return true;
+        }
+
+        if (!ubicaciones.length) {
+          actualizarItem(index, {
+            stock: "",
+            stockTotal: "",
+            id_ubicacion: "",
+            ubicacion_nombre: "",
+          });
+
+          return false;
+        }
+
+        const resultados = await Promise.all(
+          ubicaciones.map(async (ubicacion) => {
+            try {
+              const response = await api.get("/api/stock-recortes/stock", {
+                params: {
+                  codigo: codigoNormalizado,
+                  id_ubicacion_recorte: Number(ubicacion.id_ubicacion),
+                },
+              });
+
+              return {
+                id_ubicacion: Number(ubicacion.id_ubicacion),
+                nombre: ubicacion.nombre || "",
+                stock_ubicacion: Number(
+                  response.data?.stock_ubicacion ?? 0,
+                ),
+                stock_total: Number(response.data?.stock_total ?? 0),
+                codigo: response.data?.codigo || codigoNormalizado,
+              };
+            } catch (error) {
+              console.error(
+                `Error consultando recorte ${codigoNormalizado} en ubicación ${ubicacion.id_ubicacion}:`,
+                error,
+              );
+
+              return {
+                id_ubicacion: Number(ubicacion.id_ubicacion),
+                nombre: ubicacion.nombre || "",
+                stock_ubicacion: 0,
+                stock_total: 0,
+                codigo: codigoNormalizado,
+              };
+            }
+          }),
+        );
+
+        const stockMaximo = Math.max(
+          ...resultados.map((resultado) => resultado.stock_ubicacion),
+        );
+
+        const ubicacionesConMaximo = resultados.filter(
+          (resultado) => resultado.stock_ubicacion === stockMaximo,
+        );
+
+        if (stockMaximo > 0 && ubicacionesConMaximo.length > 1) {
+          actualizarItem(index, {
+            codigo: resultados[0]?.codigo || codigoNormalizado,
+            stock: "",
+            stockTotal: resultados[0]?.stock_total ?? 0,
+            id_ubicacion: "",
+            ubicacion_nombre: "",
+          });
+
+          const detalle = ubicacionesConMaximo
+            .map(
+              (ubicacion) =>
+                `${ubicacion.nombre}: ${ubicacion.stock_ubicacion}`,
+            )
+            .join("\n");
+
+          window.alert(
+            `El artículo ${codigoNormalizado} tiene el mismo stock máximo en más de una ubicación.\n\n` +
+              `${detalle}\n\n` +
+              "Seleccioná manualmente la ubicación que querés utilizar.",
+          );
+
+          return true;
+        }
+
+        let seleccionada;
+
+        if (stockMaximo > 0) {
+          seleccionada = ubicacionesConMaximo[0];
+        } else {
+          seleccionada =
+            resultados.find(
+              (ubicacion) =>
+                normalizarMotivo(ubicacion.nombre) === "GENERAL",
+            ) || resultados[0];
+        }
+
+        actualizarItem(index, {
+          codigo: seleccionada?.codigo || codigoNormalizado,
+          id_ubicacion: seleccionada
+            ? String(seleccionada.id_ubicacion)
+            : "",
+          ubicacion_nombre: seleccionada?.nombre || "",
+          stock: seleccionada?.stock_ubicacion ?? 0,
+          stockTotal: seleccionada?.stock_total ?? 0,
         });
-      } else {
-        response = await api.get("/transferencias/stock-articulo", {
-          params: {
-            codigo: codigoNormalizado,
-            deposito_id: Number(depositoId),
-            id_ubicacion: ubicacionNumero,
-          },
+
+        return true;
+      }
+
+      /*
+       * ARTÍCULOS NORMALES:
+       * Sin id_ubicacion, el backend selecciona automáticamente la
+       * ubicación con mayor stock. Con id_ubicacion, devuelve únicamente
+       * el stock de esa ubicación dentro del depósito.
+       */
+      const params = {
+        codigo: codigoNormalizado,
+        deposito_id: Number(depositoId),
+      };
+
+      if (
+        idUbicacionForzada !== null &&
+        idUbicacionForzada !== undefined &&
+        String(idUbicacionForzada).trim() !== ""
+      ) {
+        params.id_ubicacion = Number(idUbicacionForzada);
+      }
+
+      const response = await api.get("/ajustes/stock-articulo", {
+        params,
+      });
+
+      const data = response.data || {};
+
+      if (data.empate) {
+        actualizarItem(index, {
+          codigo: data.codigo || codigoNormalizado,
+          stock: "",
+          stockTotal: data.stock_total ?? 0,
+          id_ubicacion: "",
+          ubicacion_nombre: "",
         });
+
+        const detalleEmpate = Array.isArray(data.ubicaciones_empatadas)
+          ? data.ubicaciones_empatadas
+              .map(
+                (ubicacion) =>
+                  `${ubicacion.nombre}: ${ubicacion.stock_ubicacion}`,
+              )
+              .join("\n")
+          : "";
+
+        window.alert(
+          `El artículo ${data.codigo || codigoNormalizado} tiene el mismo stock máximo en más de una ubicación.\n\n` +
+            `${detalleEmpate}\n\n` +
+            "Seleccioná manualmente la ubicación que querés utilizar.",
+        );
+
+        return true;
       }
 
       actualizarItem(index, {
-        codigo: response.data?.codigo || codigoNormalizado,
-        stock: esDepositoRecortes(depositoId)
-          ? response.data?.stock_ubicacion ?? 0
-          : response.data?.stock_ubicacion ??
-            response.data?.stock_deposito ??
-            response.data?.stock ??
-            0,
-        stockTotal: response.data?.stock_total ?? 0,
+        codigo: data.codigo || codigoNormalizado,
+        id_ubicacion:
+          data.id_ubicacion !== null &&
+          data.id_ubicacion !== undefined
+            ? String(data.id_ubicacion)
+            : "",
+        ubicacion_nombre: data.ubicacion_nombre || "",
+        stock: data.stock_ubicacion ?? 0,
+        stockTotal: data.stock_total ?? 0,
       });
 
       return true;
@@ -589,9 +641,55 @@ if (esDepositoRecortes(depositoId)) {
       actualizarItem(index, {
         stock: "Error",
         stockTotal: "Error",
+        id_ubicacion: "",
+        ubicacion_nombre: "",
       });
 
+      setErrorMsg(
+        error.response?.data?.error ||
+          error.response?.data?.detalle ||
+          "No se pudo consultar el stock del artículo.",
+      );
+
       return false;
+    }
+  };
+
+  const buscarOpcionesRecortes = async (codigo, index) => {
+    const codigoNormalizado = String(codigo || "")
+      .trim()
+      .toUpperCase();
+
+    if (!codigoNormalizado) {
+      setOpcionesRecortes((actuales) => ({
+        ...actuales,
+        [index]: [],
+      }));
+      return [];
+    }
+
+    try {
+      const response = await api.get(
+        "/ajustes/recortes-opciones/" + encodeURIComponent(codigoNormalizado),
+      );
+
+      const opciones = Array.isArray(response.data) ? response.data : [];
+
+      setOpcionesRecortes((actuales) => ({
+        ...actuales,
+        [index]: opciones,
+      }));
+
+      return opciones;
+    } catch (error) {
+      console.error("Error buscando códigos concatenados de recortes:", error);
+
+      setOpcionesRecortes((actuales) => ({
+        ...actuales,
+        [index]: [],
+      }));
+
+      return [];
     }
   };
 
@@ -607,7 +705,8 @@ if (esDepositoRecortes(depositoId)) {
         proveedor: "",
         stock: "",
         stockTotal: "",
-        ubicacion: "",
+        id_ubicacion: "",
+        ubicacion_nombre: "",
       });
 
       return false;
@@ -637,7 +736,8 @@ if (esDepositoRecortes(depositoId)) {
           proveedor: "",
           stock: "",
           stockTotal: "",
-          ubicacion: "",
+          id_ubicacion: "",
+          ubicacion_nombre: "",
         });
 
         await consultarStock(codigoRecorte, index);
@@ -653,7 +753,8 @@ if (esDepositoRecortes(depositoId)) {
           proveedor: "",
           stock: "",
           stockTotal: "",
-          ubicacion: "",
+          id_ubicacion: "",
+          ubicacion_nombre: "",
         });
 
         return false;
@@ -680,7 +781,8 @@ if (esDepositoRecortes(depositoId)) {
           proveedor: "",
           stock: "",
           stockTotal: "",
-          ubicacion: "",
+          id_ubicacion: "",
+          ubicacion_nombre: "",
         });
 
         return false;
@@ -691,6 +793,10 @@ if (esDepositoRecortes(depositoId)) {
         codigo: codigoArticulo,
         descripcion,
         proveedor: articulo.proveedor || "",
+        stock: "",
+        stockTotal: "",
+        id_ubicacion: "",
+        ubicacion_nombre: "",
       });
 
       await consultarStock(codigoArticulo, index);
@@ -705,7 +811,8 @@ if (esDepositoRecortes(depositoId)) {
         proveedor: "",
         stock: "",
         stockTotal: "",
-        ubicacion: "",
+        id_ubicacion: "",
+        ubicacion_nombre: "",
       });
 
       return false;
@@ -959,7 +1066,13 @@ if (esDepositoRecortes(depositoId)) {
 
             stockTotal: item.stock_total ?? "",
 
-            ubicacion: item.ubicacion || "",
+            id_recorte: item.id_recorte || "",
+
+            id_ubicacion: item.id_ubicacion
+              ? String(item.id_ubicacion)
+              : "",
+
+            ubicacion_nombre: item.ubicacion || "",
 
             cantidad: item.cantidad ?? "",
           })),
@@ -1265,6 +1378,8 @@ if (esDepositoRecortes(depositoId)) {
                     descripcion: "",
                     stock: "",
                     stockTotal: "",
+                    id_ubicacion: "",
+                    ubicacion_nombre: "",
                   })),
                 );
               }}
@@ -1471,7 +1586,7 @@ if (esDepositoRecortes(depositoId)) {
                     textAlign: "right",
                   }}
                 >
-                  Stock depósito
+                  Stock ubicación
                 </th>
 
                 <th
@@ -1520,29 +1635,61 @@ if (esDepositoRecortes(depositoId)) {
                         codigoRefs.current[index] = elemento;
                       }}
                       type="text"
+                      list={
+                        esDepositoRecortes(depositoId)
+                          ? `recortes-opciones-${index}`
+                          : undefined
+                      }
+                      autoComplete="off"
                       value={item.codigo}
                       placeholder="Código..."
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const nuevoCodigo = event.target.value.toUpperCase();
+
                         actualizarItem(index, {
-                          codigo: event.target.value.toUpperCase(),
-
+                          codigo: nuevoCodigo,
+                          id_recorte: "",
                           descripcion: "",
-
                           proveedor: "",
-
                           stock: "",
-
                           stockTotal: "",
+                          id_ubicacion: "",
+                          ubicacion_nombre: "",
+                        });
 
-                          ubicacion: "",
-                        })
+                        if (esDepositoRecortes(depositoId)) {
+                          buscarOpcionesRecortes(nuevoCodigo, index);
+                        }
+                      }}
+                      onBlur={(event) =>
+                        buscarArticulo(event.currentTarget.value, index)
                       }
-                      onBlur={() => buscarArticulo(item.codigo, index)}
                       onKeyDown={(event) => handleCodigoKeyDown(event, index)}
                       style={{
                         width: "100%",
                       }}
                     />
+
+                    {esDepositoRecortes(depositoId) && (
+                      <datalist id={`recortes-opciones-${index}`}>
+                        {(opcionesRecortes[index] || []).map((recorte) => (
+                          <option
+                            key={recorte.id_recorte}
+                            value={recorte.codigo}
+                          >
+                            {[
+                              recorte.descripcion,
+                              recorte.medida,
+                              recorte.stock_total !== undefined
+                                ? `Stock total: ${recorte.stock_total}`
+                                : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" - ")}
+                          </option>
+                        ))}
+                      </datalist>
+                    )}
                   </td>
 
                   <td>
@@ -1586,7 +1733,7 @@ if (esDepositoRecortes(depositoId)) {
                   </td>
 
                   <td>
-                    <select 
+                    <select
                       value={item.id_ubicacion || ""}
                       onChange={async (event) => {
                         const idUbicacion = event.target.value;
@@ -1602,85 +1749,38 @@ if (esDepositoRecortes(depositoId)) {
                           ubicacion_nombre:
                             ubicacionSeleccionada?.nombre || "",
                           stock: "",
-                          stockTotal: "",
                         });
 
                         if (!item.codigo || !idUbicacion) {
                           return;
                         }
 
-                        try {
-                          const codigoNormalizado = String(
-                            item.codigo || "",
-                          )
-                            .trim()
-                            .toUpperCase();
-
-                          let response;
-
-                          if (esDepositoRecortes(depositoId)) {
-                            response = await api.get(
-                              "/api/stock-recortes/stock",
-                              {
-                                params: {
-                                  codigo: codigoNormalizado,
-                                  id_ubicacion_recorte:
-                                    Number(idUbicacion),
-                                },
-                              },
-                            );
-                          } else {
-                            response = await api.get(
-                              "/transferencias/stock-articulo",
-                              {
-                                params: {
-                                  codigo: codigoNormalizado,
-                                  deposito_id: Number(depositoId),
-                                  id_ubicacion: Number(idUbicacion),
-                                },
-                              },
-                            );
-                          }
-
-                          actualizarItem(index, {
-                            id_ubicacion: idUbicacion,
-                            ubicacion_nombre:
-                              ubicacionSeleccionada?.nombre || "",
-                            codigo:
-                              response.data?.codigo ||
-                              codigoNormalizado,
-                            stock: esDepositoRecortes(depositoId)
-                              ? response.data?.stock_ubicacion ?? 0
-                              : response.data?.stock_ubicacion ??
-                                response.data?.stock_deposito ??
-                                response.data?.stock ??
-                                0,
-                            stockTotal:
-                              response.data?.stock_total ?? 0,
-                          });
-                        } catch (error) {
-                          console.error(
-                            "Error consultando stock por ubicación:",
-                            error,
-                          );
-
-                          actualizarItem(index, {
-                            stock: "Error",
-                            stockTotal: "Error",
-                          });
-                        }
+                        await consultarStock(
+                          item.codigo,
+                          index,
+                          idUbicacion,
+                        );
                       }}
-                      disabled={!depositoId || loadingUbicaciones}
+                      disabled={
+                        !depositoId ||
+                        !String(item.codigo || "").trim() ||
+                        loadingUbicaciones
+                      }
                       style={{ width: "100%" }}
                     >
                       <option value="">
                         {loadingUbicaciones
                           ? "Cargando ubicaciones..."
-                          : "-- Seleccioná ubicación --"}
+                          : item.codigo
+                            ? "-- Seleccioná ubicación --"
+                            : "Se asigna al ingresar código"}
                       </option>
 
                       {ubicaciones.map((ubicacion) => (
-                        <option key={ubicacion.id_ubicacion} value={ubicacion.id_ubicacion}>
+                        <option
+                          key={ubicacion.id_ubicacion}
+                          value={ubicacion.id_ubicacion}
+                        >
                           {ubicacion.nombre}
                         </option>
                       ))}

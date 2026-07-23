@@ -5294,4 +5294,323 @@ if (revertidosResult.recordset.length) {
   }
 };
 
+// STOCK DE ARTÍCULO POR UBICACIÓN
+
+exports.getStockArticuloUbicaciones = async (req, res) => {
+  try {
+    const codigo = String(req.query?.codigo || "").trim().toUpperCase();
+
+    const depositoId = asInt(req.query?.deposito_id);
+
+    const ubicacionRaw = req.query?.id_ubicacion;
+
+    const ubicacionSolicitada =
+      ubicacionRaw === undefined ||
+      ubicacionRaw === null ||
+      String(ubicacionRaw).trim() === ""
+        ? null
+        : asInt(ubicacionRaw);
+
+    if (!codigo) {
+      return res.status(400).json({
+        error: "Debe indicar el código del artículo.",
+      });
+    }
+
+    if (!Number.isInteger(depositoId) || depositoId <= 0) {
+      return res.status(400).json({
+        error: "Debe indicar un depósito válido.",
+      });
+    }
+
+    if (
+      ubicacionSolicitada !== null &&
+      (!Number.isInteger(ubicacionSolicitada) ||
+        ubicacionSolicitada <= 0)
+    ) {
+      return res.status(400).json({
+        error: "La ubicación indicada no es válida.",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    // Buscar artículo
+    const articuloResult = await pool
+      .request()
+      .input("codigo", sql.VarChar(100), codigo)
+      .query(`
+        SELECT TOP 1
+          id_articulo,
+          codigo,
+          descripcion
+        FROM dbo.articulos
+        WHERE UPPER(LTRIM(RTRIM(codigo))) = @codigo;
+      `);
+
+    if (!articuloResult.recordset.length) {
+      return res.status(404).json({
+        error: "Artículo no encontrado.",
+      });
+    }
+
+    const articulo = articuloResult.recordset[0];
+    const articuloId = Number(articulo.id_articulo);
+
+    // Verificar depósito
+    const depositoResult = await pool
+      .request()
+      .input("depositoId", sql.Int, depositoId)
+      .query(`
+        SELECT TOP 1
+          id_deposito,
+          nombre
+        FROM dbo.depositos
+        WHERE id_deposito = @depositoId;
+      `);
+
+    if (!depositoResult.recordset.length) {
+      return res.status(404).json({
+        error: "Depósito no encontrado.",
+      });
+    }
+
+    // Traer todas las ubicaciones activas del depósito, incluyendo aquellas donde el artículo tiene stock 0
+
+    const ubicacionesResult = await pool
+      .request()
+      .input("depositoId", sql.Int, depositoId)
+      .input("articuloId", sql.Int, articuloId)
+      .query(`
+        SELECT
+          u.id_ubicacion,
+          u.nombre,
+          CAST(
+            ISNULL(
+              SUM(
+                CASE
+                  WHEN s.id_articulo = @articuloId
+                    THEN s.cantidad
+                  ELSE 0
+                END
+              ),
+              0
+            )
+            AS DECIMAL(18, 2)
+          ) AS stock_ubicacion
+        FROM dbo.ubicaciones u
+
+        LEFT JOIN dbo.stock s
+          ON s.id_ubicacion = u.id_ubicacion
+          AND s.id_deposito = u.id_deposito
+          AND s.id_articulo = @articuloId
+
+        WHERE u.id_deposito = @depositoId
+          AND u.activa = 1
+
+        GROUP BY
+          u.id_ubicacion,
+          u.nombre
+
+        ORDER BY
+          stock_ubicacion DESC,
+          u.nombre ASC,
+          u.id_ubicacion ASC;
+      `);
+
+    const ubicaciones = (ubicacionesResult.recordset || []).map(
+      (ubicacion) => ({
+        id_ubicacion: Number(ubicacion.id_ubicacion),
+        nombre: String(ubicacion.nombre || ""),
+        stock_ubicacion: Number(ubicacion.stock_ubicacion || 0),
+      })
+    );
+
+    if (!ubicaciones.length) {
+      return res.status(400).json({
+        error: "El depósito no tiene ubicaciones activas.",
+      });
+    }
+
+    // Stock total del artículo dentro del depósito
+    const stockDepositoResult = await pool
+      .request()
+      .input("depositoId", sql.Int, depositoId)
+      .input("articuloId", sql.Int, articuloId)
+      .query(`
+        SELECT
+          CAST(ISNULL(SUM(cantidad), 0) AS DECIMAL(18, 2))
+            AS stock_deposito
+        FROM dbo.stock
+        WHERE id_deposito = @depositoId
+          AND id_articulo = @articuloId;
+      `);
+
+    const stockDeposito = Number(
+      stockDepositoResult.recordset?.[0]?.stock_deposito || 0
+    );
+
+    // Stock total del artículo en todos los depósitos
+    const stockTotalResult = await pool
+      .request()
+      .input("articuloId", sql.Int, articuloId)
+      .query(`
+        SELECT
+          CAST(ISNULL(SUM(cantidad), 0) AS DECIMAL(18, 2))
+            AS stock_total
+        FROM dbo.stock
+        WHERE id_articulo = @articuloId;
+      `);
+
+    const stockTotal = Number(
+      stockTotalResult.recordset?.[0]?.stock_total || 0
+    );
+
+    let ubicacionSeleccionada = null;
+    let empate = false;
+    let ubicacionesEmpatadas = [];
+
+    // Si el usuario cambió manualmente la ubicación, devolver exactamente el stock de esa ubicación
+    if (ubicacionSolicitada !== null) {
+      ubicacionSeleccionada = ubicaciones.find(
+        (ubicacion) =>
+          ubicacion.id_ubicacion === ubicacionSolicitada
+      );
+
+      if (!ubicacionSeleccionada) {
+        return res.status(400).json({
+          error: "La ubicación no pertenece al depósito seleccionado.",
+        });
+      }
+    } else {
+      const stockMaximo = Math.max(
+        ...ubicaciones.map(
+          (ubicacion) => Number(ubicacion.stock_ubicacion || 0)
+        )
+      );
+
+      const ubicacionesConMaximo = ubicaciones.filter(
+        (ubicacion) =>
+          Number(ubicacion.stock_ubicacion || 0) === stockMaximo
+      );
+
+      /*
+       * Solo se considera empate cuando existe stock real.
+       * Si todas las ubicaciones tienen stock 0, se utiliza
+       * GENERAL o la primera ubicación activa.
+       */
+      if (
+        stockMaximo > 0 &&
+        ubicacionesConMaximo.length > 1
+      ) {
+        empate = true;
+        ubicacionesEmpatadas = ubicacionesConMaximo;
+      } else if (stockMaximo > 0) {
+        ubicacionSeleccionada = ubicacionesConMaximo[0];
+      } else {
+        ubicacionSeleccionada =
+          ubicaciones.find(
+            (ubicacion) =>
+              String(ubicacion.nombre || "")
+                .trim()
+                .toUpperCase() === "GENERAL"
+          ) || ubicaciones[0];
+      }
+    }
+
+    return res.json({
+      codigo: articulo.codigo,
+      descripcion: articulo.descripcion,
+
+      stock_deposito: stockDeposito,
+      stock_total: stockTotal,
+
+      id_ubicacion:
+        ubicacionSeleccionada?.id_ubicacion ?? null,
+
+      ubicacion_nombre:
+        ubicacionSeleccionada?.nombre ?? "",
+
+      stock_ubicacion:
+        ubicacionSeleccionada?.stock_ubicacion ?? null,
+
+      empate,
+      ubicaciones_empatadas: ubicacionesEmpatadas,
+      ubicaciones,
+    });
+  } catch (error) {
+    console.error(
+      "ajustes.getStockArticuloUbicaciones:",
+      error
+    );
+
+    return res.status(500).json({
+      error: "Error al consultar el stock por ubicación.",
+      detalle: error.message,
+    });
+  }
+};
+
+
+// ========================================================
+// OPCIONES DE CÓDIGOS CONCATENADOS DE STOCK RECORTES
+// ========================================================
+exports.getOpcionesRecortes = async (req, res) => {
+  try {
+    const codigoBase = String(req.params?.codigoBase || "")
+      .trim()
+      .toUpperCase();
+
+    if (!codigoBase) {
+      return res.status(400).json({
+        error: "Debe indicar un código base.",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input("codigoBase", sql.VarChar(150), codigoBase)
+      .query(`
+        SELECT
+          r.id_recorte,
+          UPPER(LTRIM(RTRIM(r.codigo))) AS codigo,
+          r.descripcion,
+          r.medida,
+          ISNULL(SUM(sr.cantidad), 0) AS stock_total
+        FROM dbo.recortes r
+        LEFT JOIN dbo.stock_recortes sr
+          ON sr.id_recorte = r.id_recorte
+        WHERE r.activo = 1
+          AND (
+            UPPER(LTRIM(RTRIM(r.codigo))) = @codigoBase
+            OR UPPER(LTRIM(RTRIM(r.codigo))) LIKE @codigoBase + '[_]%'
+          )
+        GROUP BY
+          r.id_recorte,
+          r.codigo,
+          r.descripcion,
+          r.medida
+        ORDER BY
+          CASE
+            WHEN UPPER(LTRIM(RTRIM(r.codigo))) = @codigoBase THEN 0
+            ELSE 1
+          END,
+          r.codigo;
+      `);
+
+    return res.json(result.recordset || []);
+  } catch (error) {
+    console.error("getOpcionesRecortes:", error);
+
+    return res.status(500).json({
+      error: "No se pudieron buscar los códigos concatenados de Stock Recortes.",
+      detalle: error.message,
+    });
+  }
+};
+
 exports._runConsumoProduccion = runConsumoProduccion;
