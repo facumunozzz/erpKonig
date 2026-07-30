@@ -31,6 +31,7 @@ const normalizarMotivo = (value) =>
 const MOTIVOS_OCULTOS = new Set([
   "CONSUMO PRODUCCION (DROPBOX)",
   "IMPORTACION EXCEL",
+  "CONSUMO RECORTES (DROPBOX)",
 ]);
 
 const esMotivoOculto = (nombre) =>
@@ -38,12 +39,10 @@ const esMotivoOculto = (nombre) =>
 
 export default function Ajustes() {
   const navigate = useNavigate();
-  const [showRevisionesDropbox, setShowRevisionesDropbox] =
-    useState(false);
-  const [mostrarConsumosDropbox, setMostrarConsumosDropbox] =
-    useState(false);
-  const [cantidadRevisiones, setCantidadRevisiones] =
-    useState(0);
+  const [showRevisionesDropbox, setShowRevisionesDropbox] = useState(false);
+  const [mostrarConsumosDropbox, setMostrarConsumosDropbox] = useState(false);
+  const [cantidadRevisiones, setCantidadRevisiones] = useState(0);
+  const [procesandoRecortes, setProcesandoRecortes] = useState(false);
 
   // LISTADO DE AJUSTES
   const [ajustes, setAjustes] = useState([]);
@@ -66,22 +65,11 @@ export default function Ajustes() {
   const [nuevoMotivo, setNuevoMotivo] = useState("");
   const [nuevoTipoMovimiento, setNuevoTipoMovimiento] = useState("");
   const [motivosError, setMotivosError] = useState("");
-
-  // =====================================================
-  // REFERENTES
-  // =====================================================
-
+  const [menuLateralAbierto, setMenuLateralAbierto] = useState(false);
+  const [menuExcelAbierto, setMenuExcelAbierto] = useState(false);
+  const [menuDropboxAbierto, setMenuDropboxAbierto] = useState(false);
   const [showReferentes, setShowReferentes] = useState(false);
-
-  // =====================================================
-  // REVERSIÓN
-  // =====================================================
-
   const [showReversion, setShowReversion] = useState(false);
-
-  // =====================================================
-  // CARGAR AJUSTES
-  // =====================================================
 
   const fetchAjustes = async () => {
     try {
@@ -97,12 +85,6 @@ export default function Ajustes() {
 
       const payload = response.data;
 
-      /*
-       * Compatibilidad con el backend anterior.
-       *
-       * Si devuelve un array, el paginado se hace
-       * en el navegador.
-       */
       if (Array.isArray(payload)) {
         setPaginacionServidor(false);
         setAjustes(payload);
@@ -112,17 +94,6 @@ export default function Ajustes() {
         return;
       }
 
-      /*
-       * Si el backend devuelve:
-       *
-       * {
-       *   data: [],
-       *   total: 100,
-       *   totalPages: 4
-       * }
-       *
-       * utilizamos el paginado del servidor.
-       */
       const data = Array.isArray(payload?.data) ? payload.data : [];
 
       setPaginacionServidor(true);
@@ -142,9 +113,7 @@ export default function Ajustes() {
 
   const fetchCantidadRevisiones = async () => {
     try {
-      const response = await api.get(
-        "/ajustes/alertas-consumo/pendientes",
-      );
+      const response = await api.get("/ajustes/alertas-consumo/pendientes");
       const payload = response.data;
       const revisiones = Array.isArray(payload)
         ? payload
@@ -155,10 +124,7 @@ export default function Ajustes() {
             : [];
       setCantidadRevisiones(revisiones.length);
     } catch (error) {
-      console.error(
-        "Error cargando revisiones Dropbox:",
-        error,
-      );
+      console.error("Error cargando revisiones Dropbox:", error);
       setCantidadRevisiones(0);
     }
   };
@@ -195,6 +161,62 @@ export default function Ajustes() {
           error.response?.data?.detalle ||
           "Error al consumir producción",
       );
+    }
+  };
+
+  // CONSUMIR RECORTES
+  const consumirRecortes = async () => {
+    if (procesandoRecortes) {
+      return;
+    }
+
+    const confirmado = window.confirm(
+      "¿Ejecutar el ajuste de stock de recortes desde Dropbox?\n\n" +
+        "Se procesarán los valores de la columna Consumido, " +
+        "se actualizará el stock y se modificará el archivo Excel.",
+    );
+
+    if (!confirmado) {
+      return;
+    }
+
+    try {
+      setProcesandoRecortes(true);
+
+      const response = await api.post("/dropbox-recortes/consumir");
+
+      const resultado = response.data || {};
+
+      const movimientos = Array.isArray(resultado.movimientos)
+        ? resultado.movimientos
+        : [];
+
+      const errores = Array.isArray(resultado.errores) ? resultado.errores : [];
+
+      alert(
+        `Proceso de recortes finalizado.\n\n` +
+          `Procesados: ${resultado.procesados || 0}\n` +
+          `Alertas: ${resultado.alertas || 0}\n` +
+          `Ajuste generado: ${resultado.numero_ajuste || "No se generó"}\n` +
+          `Movimientos: ${movimientos.length}\n` +
+          `Errores: ${errores.length}`,
+      );
+
+      setMostrarConsumosDropbox(true);
+      setCurrentPage(1);
+
+      await fetchAjustes();
+      await fetchCantidadRevisiones();
+    } catch (error) {
+      console.error("Error consumiendo recortes desde Dropbox:", error);
+
+      alert(
+        error.response?.data?.error ||
+          error.response?.data?.detalle ||
+          "Error al ajustar el stock de recortes",
+      );
+    } finally {
+      setProcesandoRecortes(false);
     }
   };
 
@@ -376,8 +398,7 @@ export default function Ajustes() {
       await fetchMotivos();
     } catch (error) {
       alert(
-        error.response?.data?.error ||
-          "Error al cambiar el tipo de movimiento",
+        error.response?.data?.error || "Error al cambiar el tipo de movimiento",
       );
     }
   };
@@ -408,9 +429,7 @@ export default function Ajustes() {
 
   const getAjusteValue = (ajuste, key) => {
     if (key === "fecha") {
-      return ajuste.fecha
-        ? new Date(ajuste.fecha).toLocaleString("es-AR")
-        : "";
+      return ajuste.fecha ? new Date(ajuste.fecha).toLocaleString("es-AR") : "";
     }
 
     if (key === "fecha_real") {
@@ -443,7 +462,7 @@ export default function Ajustes() {
   const filtrados = useMemo(() => {
     return excel.rows;
   }, [excel.rows]);
-  
+
   // PAGINADO DE AJUSTES
   const totalPages = paginacionServidor
     ? serverTotalPages || 1
@@ -458,21 +477,12 @@ export default function Ajustes() {
     const fin = currentPage * pageSize;
 
     return filtrados.slice(inicio, fin);
-  }, [
-    paginacionServidor,
-    filtrados,
-    currentPage,
-    pageSize,
-  ]);
+  }, [paginacionServidor, filtrados, currentPage, pageSize]);
 
   const irPagina = (pagina) => {
     const numero = Number(pagina);
 
-    if (
-      !Number.isFinite(numero) ||
-      numero < 1 ||
-      numero > totalPages
-    ) {
+    if (!Number.isFinite(numero) || numero < 1 || numero > totalPages) {
       return;
     }
 
@@ -484,14 +494,9 @@ export default function Ajustes() {
     : filtrados.length;
 
   const from =
-    cantidadTotalMostrada === 0
-      ? 0
-      : (currentPage - 1) * pageSize + 1;
+    cantidadTotalMostrada === 0 ? 0 : (currentPage - 1) * pageSize + 1;
 
-  const to = Math.min(
-    currentPage * pageSize,
-    cantidadTotalMostrada,
-  );
+  const to = Math.min(currentPage * pageSize, cantidadTotalMostrada);
 
   // =====================================================
   // RENDER
@@ -499,110 +504,328 @@ export default function Ajustes() {
 
   return (
     <div className="transferencias-page">
-      <h2 className="module-title">Ajustes</h2>
-
-      <div className="acciones">
-        <button
-          type="button"
-          onClick={() => navigate("/ajustes/nuevo")}
-        >
-          Nuevo ajuste
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setShowReversion(true)}
-        >
-          ↩ Revertir movimientos
-        </button>
-
-        <button type="button" className={
-            cantidadRevisiones > 0
-              ? "btn-con-revisiones"
-              : ""
-          }
-          onClick={() =>
-            setShowRevisionesDropbox(true)
-          }
-        >
-          ⚠ Revisiones Dropbox
-          {cantidadRevisiones > 0
-            ? ` (${cantidadRevisiones})`
-            : ""}
-        </button>
-
-        <button
-          type="button"
-          onClick={abrirMotivos}
-        >
-          🧾 Motivos
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setShowReferentes(true)}
-        >
-          👤 Actuantes
-        </button>
-
-        <label style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            cursor: "pointer",
-            padding: "6px 10px",
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 18,
+        }}
+      >
+        <h2
+          className="module-title"
+          style={{
+            margin: 0,
           }}
         >
-          <input type="checkbox" checked={mostrarConsumosDropbox}
-            onChange={(event) => {
-              setMostrarConsumosDropbox(event.target.checked);
-              setCurrentPage(1);
-            }}
-          />
-          Mostrar consumos Dropbox
-        </label>
+          Ajustes
+        </h2>
 
         <button
           type="button"
           onClick={() => {
-            excel.clearAllFilters();
-            setCurrentPage(1);
+            setMenuLateralAbierto((abierto) => !abierto);
           }}
-        >
-          Limpiar filtros
-        </button>
-
-        <button
-          type="button"
-          onClick={descargarPlantilla}
-        >
-          📤 Descargar plantilla
-        </button>
-
-        <label
           style={{
-            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "9px 14px",
+            fontWeight: 600,
           }}
         >
-          📥 Importar Excel
-
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={importarExcel}
-            style={{
-              display: "none",
-            }}
-          />
-        </label>
-
-        <button
-          type="button"
-          className="btn-primary btn-ajuste-produccion"
-          onClick={consumirProduccion}
-        >
-          ⚙️ Ajustar Registro de Producción
+          ☰ Menú lateral
         </button>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 18,
+          position: "relative",
+        }}
+      >
+        {/* ===============================================
+      ACCIONES PRINCIPALES
+  =============================================== */}
+
+        <div
+          className="acciones"
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          <button type="button" onClick={() => navigate("/ajustes/nuevo")}>
+            Nuevo ajuste
+          </button>
+
+          <button type="button" onClick={() => setShowReversion(true)}>
+            ↩ Revertir movimientos
+          </button>
+
+          <button type="button" onClick={abrirMotivos}>
+            🧾 Motivos
+          </button>
+
+          <button type="button" onClick={() => setShowReferentes(true)}>
+            👤 Actuantes
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              excel.clearAllFilters();
+              setCurrentPage(1);
+            }}
+          >
+            Limpiar filtros
+          </button>
+
+          <button
+            type="button"
+            className={cantidadRevisiones > 0 ? "btn-con-revisiones" : ""}
+            onClick={() => setShowRevisionesDropbox(true)}
+          >
+            ⚠ Revisiones Dropbox
+            {cantidadRevisiones > 0 ? ` (${cantidadRevisiones})` : ""}
+          </button>
+        </div>
+
+        {/* ===============================================
+      MENÚ LATERAL
+  =============================================== */}
+
+        {menuLateralAbierto && (
+          <aside
+            style={{
+              width: 290,
+              minWidth: 290,
+              background: "#ffffff",
+              border: "1px solid #d7dce2",
+              borderRadius: 8,
+              boxShadow: "0 5px 18px rgba(0, 0, 0, 0.12)",
+              overflow: "hidden",
+              position: "relative",
+              zIndex: 50,
+            }}
+          >
+            {/* ENCABEZADO DEL MENÚ */}
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "12px 14px",
+                background: "#f4f6f8",
+                borderBottom: "1px solid #d7dce2",
+              }}
+            >
+              <strong>Menú lateral</strong>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuLateralAbierto(false);
+                  setMenuExcelAbierto(false);
+                  setMenuDropboxAbierto(false);
+                }}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  cursor: "pointer",
+                  fontSize: 18,
+                  padding: 2,
+                }}
+                title="Cerrar menú"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* =============================================
+          MENÚ EXCEL
+      ============================================= */}
+
+            <div
+              style={{
+                borderBottom: "1px solid #e3e6e9",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuExcelAbierto((abierto) => !abierto);
+                }}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "12px 14px",
+                  border: "none",
+                  borderRadius: 0,
+                  background: menuExcelAbierto ? "#edf4fb" : "#ffffff",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontWeight: 600,
+                }}
+              >
+                <span>📊 Excel</span>
+
+                <span>{menuExcelAbierto ? "▲" : "▼"}</span>
+              </button>
+
+              {menuExcelAbierto && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    padding: "8px 12px 12px 24px",
+                    background: "#fafbfc",
+                  }}
+                >
+                  <label
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      cursor: "pointer",
+                      padding: "9px 10px",
+                      border: "1px solid #d7dce2",
+                      borderRadius: 5,
+                      background: "#ffffff",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    📥 Importar Excel
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls"
+                      onChange={importarExcel}
+                      style={{
+                        display: "none",
+                      }}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={descargarPlantilla}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                    }}
+                  >
+                    📤 Descargar plantilla
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* =============================================
+          MENÚ DROPBOX
+      ============================================= */}
+
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuDropboxAbierto((abierto) => !abierto);
+                }}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "12px 14px",
+                  border: "none",
+                  borderRadius: 0,
+                  background: menuDropboxAbierto ? "#edf4fb" : "#ffffff",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontWeight: 600,
+                }}
+              >
+                <span>☁️ Dropbox</span>
+
+                <span>{menuDropboxAbierto ? "▲" : "▼"}</span>
+              </button>
+
+              {menuDropboxAbierto && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 7,
+                    padding: "8px 12px 14px 24px",
+                    background: "#fafbfc",
+                  }}
+                >
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      cursor: "pointer",
+                      padding: "9px 10px",
+                      border: "1px solid #d7dce2",
+                      borderRadius: 5,
+                      background: "#ffffff",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={mostrarConsumosDropbox}
+                      onChange={(event) => {
+                        setMostrarConsumosDropbox(event.target.checked);
+
+                        setCurrentPage(1);
+                      }}
+                    />
+                    Mostrar consumos Dropbox
+                  </label>
+
+                  <button
+                    type="button"
+                    className="btn-primary btn-ajuste-produccion"
+                    onClick={consumirProduccion}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                    }}
+                  >
+                    ⚙️ Ajustar registro de producción
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn-primary btn-ajuste-produccion"
+                    onClick={consumirRecortes}
+                    disabled={procesandoRecortes}
+                    title="Procesar el archivo de stock de recortes de Dropbox"
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                      opacity: procesandoRecortes ? 0.7 : 1,
+                      cursor: procesandoRecortes ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {procesandoRecortes
+                      ? "⏳ Ajustando stock de recortes..."
+                      : "✂️ Ajustar stock de recortes"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* =================================================
@@ -642,8 +865,7 @@ export default function Ajustes() {
 
         <tbody>
           {paginated.map((ajuste) => {
-            const id =
-              ajuste.numero_ajuste ?? ajuste.id;
+            const id = ajuste.numero_ajuste ?? ajuste.id;
 
             return (
               <tr
@@ -652,12 +874,8 @@ export default function Ajustes() {
                   cursor: "pointer",
                 }}
                 onClick={() => {
-                  if (
-                    ajuste.estado === "BORRADOR"
-                  ) {
-                    navigate(
-                      `/ajustes/nuevo?borradorId=${ajuste.id_borrador}`,
-                    );
+                  if (ajuste.estado === "BORRADOR") {
+                    navigate(`/ajustes/nuevo?borradorId=${ajuste.id_borrador}`);
                   } else {
                     navigate(`/ajustes/${id}`);
                   }
@@ -666,42 +884,30 @@ export default function Ajustes() {
               >
                 <td>
                   {ajuste.estado === "BORRADOR" ? (
-                    <span className="badge-borrador">
-                      BORRADOR
-                    </span>
+                    <span className="badge-borrador">BORRADOR</span>
                   ) : ajuste.estado === "REVISAR" ? (
-                    <span className="badge-revisar">
-                      REVISAR
-                    </span>
+                    <span className="badge-revisar">REVISAR</span>
                   ) : (
-                    <span className="badge-confirmado">
-                      CONFIRMADO
-                    </span>
+                    <span className="badge-confirmado">CONFIRMADO</span>
                   )}
                 </td>
 
                 <td>
                   {ajuste.fecha
-                    ? new Date(
-                        ajuste.fecha,
-                      ).toLocaleString("es-AR")
+                    ? new Date(ajuste.fecha).toLocaleString("es-AR")
                     : ""}
                 </td>
 
                 <td>
                   {ajuste.fecha_real
-                    ? new Date(
-                        ajuste.fecha_real,
-                      ).toLocaleDateString("es-AR")
+                    ? new Date(ajuste.fecha_real).toLocaleDateString("es-AR")
                     : ""}
                 </td>
 
                 <td>{ajuste.deposito || ""}</td>
                 <td>{ajuste.motivo || ""}</td>
                 <td>{ajuste.referente || ""}</td>
-                <td>
-                  {ajuste.remito_referencia || ""}
-                </td>
+                <td>{ajuste.remito_referencia || ""}</td>
                 <td>{id}</td>
               </tr>
             );
@@ -709,20 +915,15 @@ export default function Ajustes() {
 
           {loadingAjustes && (
             <tr>
-              <td colSpan={8}>
-                Cargando ajustes...
-              </td>
+              <td colSpan={8}>Cargando ajustes...</td>
             </tr>
           )}
 
-          {!loadingAjustes &&
-            paginated.length === 0 && (
-              <tr>
-                <td colSpan={8}>
-                  Sin ajustes.
-                </td>
-              </tr>
-            )}
+          {!loadingAjustes && paginated.length === 0 && (
+            <tr>
+              <td colSpan={8}>Sin ajustes.</td>
+            </tr>
+          )}
         </tbody>
       </table>
 
@@ -732,17 +933,14 @@ export default function Ajustes() {
 
       <div className="paginado-pro">
         <div className="paginado-info">
-          Mostrando {from}-{to} de{" "}
-          {cantidadTotalMostrada}
+          Mostrando {from}-{to} de {cantidadTotalMostrada}
         </div>
 
         <div className="paginado-size">
           <select
             value={pageSize}
             onChange={(event) => {
-              setPageSize(
-                Number(event.target.value),
-              );
+              setPageSize(Number(event.target.value));
 
               setCurrentPage(1);
             }}
@@ -756,15 +954,12 @@ export default function Ajustes() {
 
         <div className="paginado-goto">
           Ir a:
-
           <input
             type="number"
             min="1"
             max={totalPages}
             value={gotoPage}
-            onChange={(event) =>
-              setGotoPage(event.target.value)
-            }
+            onChange={(event) => setGotoPage(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 irPagina(Number(gotoPage));
@@ -787,9 +982,7 @@ export default function Ajustes() {
           <button
             type="button"
             className="pg-btn"
-            onClick={() =>
-              irPagina(currentPage - 1)
-            }
+            onClick={() => irPagina(currentPage - 1)}
             disabled={currentPage === 1}
           >
             ◀
@@ -805,27 +998,17 @@ export default function Ajustes() {
               (page) =>
                 page === 1 ||
                 page === totalPages ||
-                Math.abs(
-                  page - currentPage,
-                ) <= 1,
+                Math.abs(page - currentPage) <= 1,
             )
             .map((page, index, array) => (
               <React.Fragment key={page}>
-                {index > 0 &&
-                  page - array[index - 1] >
-                    1 && (
-                    <span className="pg-dots">
-                      …
-                    </span>
-                  )}
+                {index > 0 && page - array[index - 1] > 1 && (
+                  <span className="pg-dots">…</span>
+                )}
 
                 <button
                   type="button"
-                  className={`pg-btn ${
-                    currentPage === page
-                      ? "activo"
-                      : ""
-                  }`}
+                  className={`pg-btn ${currentPage === page ? "activo" : ""}`}
                   onClick={() => irPagina(page)}
                 >
                   {page}
@@ -836,12 +1019,8 @@ export default function Ajustes() {
           <button
             type="button"
             className="pg-btn"
-            onClick={() =>
-              irPagina(currentPage + 1)
-            }
-            disabled={
-              currentPage === totalPages
-            }
+            onClick={() => irPagina(currentPage + 1)}
+            disabled={currentPage === totalPages}
           >
             ▶
           </button>
@@ -849,12 +1028,8 @@ export default function Ajustes() {
           <button
             type="button"
             className="pg-btn"
-            onClick={() =>
-              irPagina(totalPages)
-            }
-            disabled={
-              currentPage === totalPages
-            }
+            onClick={() => irPagina(totalPages)}
+            disabled={currentPage === totalPages}
           >
             ⏭
           </button>
@@ -874,11 +1049,7 @@ export default function Ajustes() {
             zIndex: 999999,
           }}
           onMouseDown={(event) => {
-            if (
-              event.target.classList.contains(
-                "modal-backdrop",
-              )
-            ) {
+            if (event.target.classList.contains("modal-backdrop")) {
               setShowMotivos(false);
             }
           }}
@@ -893,12 +1064,7 @@ export default function Ajustes() {
             <div className="modal-head">
               <h3>Motivos de ajuste</h3>
 
-              <button
-                type="button"
-                onClick={() =>
-                  setShowMotivos(false)
-                }
-              >
+              <button type="button" onClick={() => setShowMotivos(false)}>
                 ✕
               </button>
             </div>
@@ -917,11 +1083,7 @@ export default function Ajustes() {
             <div className="modal-row">
               <input
                 value={nuevoMotivo}
-                onChange={(event) =>
-                  setNuevoMotivo(
-                    event.target.value,
-                  )
-                }
+                onChange={(event) => setNuevoMotivo(event.target.value)}
                 placeholder="Nuevo motivo…"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
@@ -932,24 +1094,14 @@ export default function Ajustes() {
 
               <select
                 value={nuevoTipoMovimiento}
-                onChange={(event) =>
-                  setNuevoTipoMovimiento(
-                    event.target.value,
-                  )
-                }
+                onChange={(event) => setNuevoTipoMovimiento(event.target.value)}
                 title="Tipo de movimiento sugerido"
               >
-                <option value="">
-                  Ingreso / Egreso
-                </option>
+                <option value="">Ingreso / Egreso</option>
 
-                <option value="INGRESO">
-                  Ingreso
-                </option>
+                <option value="INGRESO">Ingreso</option>
 
-                <option value="EGRESO">
-                  Egreso
-                </option>
+                <option value="EGRESO">Egreso</option>
               </select>
 
               <button
@@ -960,10 +1112,7 @@ export default function Ajustes() {
                 Agregar
               </button>
 
-              <button
-                type="button"
-                onClick={fetchMotivos}
-              >
+              <button type="button" onClick={fetchMotivos}>
                 ↻ Recargar
               </button>
             </div>
@@ -992,10 +1141,7 @@ export default function Ajustes() {
 
                       <td>
                         <select
-                          value={
-                            motivo.tipo_movimiento ||
-                            ""
-                          }
+                          value={motivo.tipo_movimiento || ""}
                           onChange={(event) =>
                             cambiarTipoMovimientoMotivo(
                               motivo.id_motivo,
@@ -1003,25 +1149,15 @@ export default function Ajustes() {
                             )
                           }
                         >
-                          <option value="">
-                            Ingreso / Egreso
-                          </option>
+                          <option value="">Ingreso / Egreso</option>
 
-                          <option value="INGRESO">
-                            Ingreso
-                          </option>
+                          <option value="INGRESO">Ingreso</option>
 
-                          <option value="EGRESO">
-                            Egreso
-                          </option>
+                          <option value="EGRESO">Egreso</option>
                         </select>
                       </td>
 
-                      <td>
-                        {motivo.activo
-                          ? "SI"
-                          : "NO"}
-                      </td>
+                      <td>{motivo.activo ? "SI" : "NO"}</td>
 
                       <td
                         style={{
@@ -1034,10 +1170,7 @@ export default function Ajustes() {
                           type="button"
                           className="btn-light"
                           onClick={() =>
-                            editarMotivo(
-                              motivo.id_motivo,
-                              motivo.nombre,
-                            )
+                            editarMotivo(motivo.id_motivo, motivo.nombre)
                           }
                         >
                           Editar
@@ -1047,25 +1180,16 @@ export default function Ajustes() {
                           type="button"
                           className="btn-light"
                           onClick={() =>
-                            toggleMotivo(
-                              motivo.id_motivo,
-                              motivo.activo,
-                            )
+                            toggleMotivo(motivo.id_motivo, motivo.activo)
                           }
                         >
-                          {motivo.activo
-                            ? "Desactivar"
-                            : "Activar"}
+                          {motivo.activo ? "Desactivar" : "Activar"}
                         </button>
 
                         <button
                           type="button"
                           className="borrar-btn"
-                          onClick={() =>
-                            borrarMotivo(
-                              motivo.id_motivo,
-                            )
-                          }
+                          onClick={() => borrarMotivo(motivo.id_motivo)}
                         >
                           Eliminar
                         </button>
@@ -1075,9 +1199,7 @@ export default function Ajustes() {
 
                   {motivos.length === 0 && (
                     <tr>
-                      <td colSpan={4}>
-                        Sin motivos.
-                      </td>
+                      <td colSpan={4}>Sin motivos.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1085,12 +1207,7 @@ export default function Ajustes() {
             </div>
 
             <div className="modal-foot">
-              <button
-                type="button"
-                onClick={() =>
-                  setShowMotivos(false)
-                }
-              >
+              <button type="button" onClick={() => setShowMotivos(false)}>
                 Cerrar
               </button>
             </div>
@@ -1108,9 +1225,7 @@ export default function Ajustes() {
 
       <ReferentesModal
         abierto={showReferentes}
-        onClose={() =>
-          setShowReferentes(false)
-        }
+        onClose={() => setShowReferentes(false)}
         onChanged={() => {
           fetchAjustes();
         }}
@@ -1118,9 +1233,7 @@ export default function Ajustes() {
 
       <RevisionesDropboxModal
         abierto={showRevisionesDropbox}
-        onClose={() =>
-          setShowRevisionesDropbox(false)
-        }
+        onClose={() => setShowRevisionesDropbox(false)}
         onChanged={async () => {
           await fetchAjustes();
           await fetchCantidadRevisiones();

@@ -77,6 +77,7 @@ const dashboardObrasRoutes = require("./routes/dashboardObras");
 const estadoResumenRoutes = require("./routes/estadoResumen");
 const referentesRoutes = require("./routes/referentes");
 const stockRecortesRoutes = require("./routes/stockRecortes");
+const dropboxRecortesRoutes = require("./routes/dropboxRecortes");
 
 // =====================
 // BACKEND ROUTES
@@ -104,6 +105,7 @@ app.use("/api/dashboard-obras", dashboardObrasRoutes);
 app.use("/api/estado-resumen", estadoResumenRoutes);
 app.use("/referentes", referentesRoutes);
 app.use("/api/stock-recortes", stockRecortesRoutes);
+app.use("/dropbox-recortes", dropboxRecortesRoutes);
 
 // =====================
 // DEBUG / HEALTHCHECK
@@ -162,10 +164,35 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en http://0.0.0.0:${PORT}`);
 
+  // ==========================================
+  // JOB: CONSUMO DE PRODUCCIÓN
+  // ==========================================
   try {
-    const { startConsumoProduccionJobs } = require("./jobs/consumoProduccion.job");
+    const {
+      startConsumoProduccionJobs,
+    } = require("./jobs/consumoProduccion.job");
+
     startConsumoProduccionJobs();
   } catch (e) {
-    console.error("[JOB] No se pudo iniciar consumoProduccion:", e.message);
+    console.error(
+      "[JOB] No se pudo iniciar consumoProduccion:",
+      e.message,
+    );
+  }
+
+  // ==========================================
+  // JOB: CONSUMO DE RECORTES
+  // ==========================================
+  try {
+    const {
+      startConsumoRecortesJobs,
+    } = require("./jobs/consumoRecortes.job");
+
+    startConsumoRecortesJobs();
+  } catch (e) {
+    console.error(
+      "[JOB] No se pudo iniciar consumoRecortes:",
+      e.message,
+    );
   }
 });

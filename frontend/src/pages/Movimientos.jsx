@@ -2,56 +2,19 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 import api from "../api/axiosConfig";
 import * as XLSX from "xlsx";
 import "./../styles/transferencias.css";
-import ServerExcelFilterButton from "../components/ServerExcelFilterButton";
+import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
 
-const STORAGE_KEY_MOVIMIENTOS = "movimientos_filtros_v1";
-const MOTIVO_CONSUMO_DROPBOX = "CONSUMO PRODUCCIÓN (DROPBOX)";
+const STORAGE_KEY_MOVIMIENTOS = "movimientos_preferencias_v2";
+const LOAD_BATCH_SIZE = 500;
+const LOAD_CONCURRENCY = 3;
 
-const DEFAULT_SERVER_FILTERS = {
-  motivo: {
-    mode: "notIn",
-    values: [MOTIVO_CONSUMO_DROPBOX],
-  },
-};
-
-const DEFAULT_SORT_STATE = {
-  key: "",
-  dir: "",
-};
-
-function cargarPreferenciasMovimientos() {
+function cargarPageSizeGuardado() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_MOVIMIENTOS);
-
-    if (!raw) {
-      return {
-        serverFilters: DEFAULT_SERVER_FILTERS,
-        sortState: DEFAULT_SORT_STATE,
-        pageSize: 100,
-      };
-    }
-
-    const parsed = JSON.parse(raw);
-
-    return {
-      serverFilters:
-        parsed?.serverFilters && typeof parsed.serverFilters === "object"
-          ? parsed.serverFilters
-          : DEFAULT_SERVER_FILTERS,
-
-      sortState:
-        parsed?.sortState && typeof parsed.sortState === "object"
-          ? parsed.sortState
-          : DEFAULT_SORT_STATE,
-
-      pageSize: Number(parsed?.pageSize) || 100,
-    };
+    const parsed = raw ? JSON.parse(raw) : null;
+    return Number(parsed?.pageSize) || 50;
   } catch {
-    return {
-      serverFilters: DEFAULT_SERVER_FILTERS,
-      sortState: DEFAULT_SORT_STATE,
-      pageSize: 100,
-    };
+    return 50;
   }
 }
 
@@ -84,17 +47,12 @@ function Movimientos() {
 
   const [currentPage, setCurrentPage] = useState(1);
 
-  const preferenciasIniciales = useMemo(
-    () => cargarPreferenciasMovimientos(),
-    []
-  );
-
-  const [pageSize, setPageSize] = useState(preferenciasIniciales.pageSize);
+  const [pageSize, setPageSize] = useState(() => cargarPageSizeGuardado());
   const [gotoPage, setGotoPage] = useState("");
 
-  const [totalRows, setTotalRows] = useState(0);
-  const [serverTotalPages, setServerTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [loadedRows, setLoadedRows] = useState(0);
+  const [expectedRows, setExpectedRows] = useState(0);
 
   const [showEdit, setShowEdit] = useState(false);
   const [movEdit, setMovEdit] = useState(null);
@@ -106,11 +64,6 @@ function Movimientos() {
   const [masivoEdit, setMasivoEdit] = useState(null);
   const [buscandoMasivo, setBuscandoMasivo] = useState(false);
 
-  const [serverFilters, setServerFilters] = useState(
-    preferenciasIniciales.serverFilters
-  );
-
-  const [sortState, setSortState] = useState(preferenciasIniciales.sortState);
 
   const tableWrapRef = useRef(null);
   const topScrollRef = useRef(null);
@@ -140,10 +93,12 @@ function Movimientos() {
       {
         key: "fecha",
         label: "Fecha",
+        type: "date",
       },
       {
         key: "fecha_real",
         label: "Fecha Real",
+        type: "date",
       },
       {
         key: "codigo",
@@ -213,38 +168,97 @@ function Movimientos() {
     []
   );
 
+  const excelColumns = useMemo(
+    () =>
+      columnas.map((col) => ({
+        ...col,
+        getValue: (row) => row?.[col.key] ?? "",
+      })),
+    [columnas]
+  );
+
+  const excel = useExcelFilters(rows, excelColumns, {
+    onChange: () => setCurrentPage(1),
+  });
+
   const cargarMovimientos = async () => {
     try {
       setLoading(true);
+      setRows([]);
+      setLoadedRows(0);
+      setExpectedRows(0);
+      setCurrentPage(1);
 
-      const res = await api.get("/movimientos", {
+      const primeraRespuesta = await api.get("/movimientos", {
         params: {
-          page: currentPage,
-          pageSize,
-          filters: JSON.stringify(serverFilters),
-          sortKey: sortState.key || "",
-          sortDir: sortState.dir || "",
+          page: 1,
+          pageSize: LOAD_BATCH_SIZE,
+          filters: JSON.stringify({}),
+          sortKey: "",
+          sortDir: "",
         },
         timeout: 120000,
       });
 
-      const payload = res.data || {};
-
-      const data = Array.isArray(payload.data)
-        ? payload.data
-        : Array.isArray(payload)
-          ? payload
+      const primerPayload = primeraRespuesta.data || {};
+      const primeraPagina = Array.isArray(primerPayload.data)
+        ? primerPayload.data
+        : Array.isArray(primerPayload)
+          ? primerPayload
           : [];
 
-      setRows(data);
-      setTotalRows(Number(payload.total || data.length || 0));
-      setServerTotalPages(Number(payload.totalPages || 1));
+      const total = Number(primerPayload.total || primeraPagina.length || 0);
+      const totalPaginas = Number(
+        primerPayload.totalPages || Math.ceil(total / LOAD_BATCH_SIZE) || 1
+      );
+
+      setRows(primeraPagina);
+      setLoadedRows(primeraPagina.length);
+      setExpectedRows(total);
+
+      if (totalPaginas <= 1) return;
+
+      const paginasPendientes = Array.from(
+        { length: totalPaginas - 1 },
+        (_, index) => index + 2
+      );
+
+      for (let i = 0; i < paginasPendientes.length; i += LOAD_CONCURRENCY) {
+        const bloque = paginasPendientes.slice(i, i + LOAD_CONCURRENCY);
+
+        const respuestas = await Promise.all(
+          bloque.map((page) =>
+            api.get("/movimientos", {
+              params: {
+                page,
+                pageSize: LOAD_BATCH_SIZE,
+                filters: JSON.stringify({}),
+                sortKey: "",
+                sortDir: "",
+              },
+              timeout: 120000,
+            })
+          )
+        );
+
+        const nuevasFilas = respuestas.flatMap((response) => {
+          const payload = response.data || {};
+          return Array.isArray(payload.data)
+            ? payload.data
+            : Array.isArray(payload)
+              ? payload
+              : [];
+        });
+
+        setRows((prev) => [...prev, ...nuevasFilas]);
+        setLoadedRows((prev) => prev + nuevasFilas.length);
+      }
     } catch (err) {
       console.error("Error cargando movimientos:", err);
 
       setRows([]);
-      setTotalRows(0);
-      setServerTotalPages(1);
+      setLoadedRows(0);
+      setExpectedRows(0);
 
       alert(
         err.response?.data?.error ||
@@ -254,6 +268,11 @@ function Movimientos() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const actualizarMovimientos = () => {
+    excel.clearAllFilters();
+    cargarMovimientos();
   };
 
   const cargarReferentes = async () => {
@@ -278,40 +297,22 @@ function Movimientos() {
     try {
       localStorage.setItem(
         STORAGE_KEY_MOVIMIENTOS,
-        JSON.stringify({
-          serverFilters,
-          sortState,
-          pageSize,
-        })
+        JSON.stringify({ pageSize })
       );
     } catch (err) {
-      console.error("No se pudieron guardar los filtros de movimientos:", err);
+      console.error("No se pudo guardar el tamaño de página:", err);
     }
-  }, [serverFilters, sortState, pageSize]);
+  }, [pageSize]);
 
   useEffect(() => {
     cargarMovimientos();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, pageSize, serverFilters, sortState]);
+  }, []);
 
   const limpiarFiltros = () => {
-    setServerFilters(DEFAULT_SERVER_FILTERS);
-    setSortState(DEFAULT_SORT_STATE);
+    excel.clearAllFilters();
     setCurrentPage(1);
     setGotoPage("");
-
-    try {
-      localStorage.setItem(
-        STORAGE_KEY_MOVIMIENTOS,
-        JSON.stringify({
-          serverFilters: DEFAULT_SERVER_FILTERS,
-          sortState: DEFAULT_SORT_STATE,
-          pageSize,
-        })
-      );
-    } catch (err) {
-      console.error("No se pudieron limpiar los filtros guardados:", err);
-    }
   };
 
   const abrirEdicion = (r) => {
@@ -452,8 +453,13 @@ function Movimientos() {
     }
   };
 
-  const totalPages = serverTotalPages || 1;
-  const paginated = rows;
+  const movimientosFiltrados = excel.rows;
+  const totalRows = movimientosFiltrados.length;
+  const totalPages = Math.ceil(totalRows / pageSize) || 1;
+  const paginated = movimientosFiltrados.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
 
   const irPagina = (p) => {
     const n = Number(p);
@@ -663,8 +669,8 @@ function Movimientos() {
       const res = await api.get("/movimientos/export", {
         params: {
           filters: JSON.stringify(filtrosParaExportar),
-          sortKey: sortState.key || "",
-          sortDir: sortState.dir || "",
+          sortKey: excel.sort?.key || "",
+          sortDir: excel.sort?.dir || "",
         },
         timeout: 180000,
       });
@@ -809,13 +815,18 @@ function Movimientos() {
       >
         <button onClick={abrirModalExportacion}>Exportar a Excel</button>
         <button onClick={limpiarFiltros}>Limpiar filtros</button>
-        <button onClick={cargarMovimientos}>↻ Actualizar</button>
+        <button onClick={actualizarMovimientos}>↻ Actualizar</button>
 
         <button className="btn-primary" onClick={abrirMasivo}>
           Editar transacción completa
         </button>
 
-        {loading && <span style={{ padding: "6px 10px" }}>Cargando...</span>}
+        {loading && (
+          <span style={{ padding: "6px 10px" }}>
+            Cargando movimientos: {loadedRows}
+            {expectedRows > 0 ? ` de ${expectedRows}` : ""}
+          </span>
+        )}
       </div>
 
       <div className="tabla-scroll-top" ref={topScrollRef}>
@@ -834,7 +845,7 @@ function Movimientos() {
           <thead>
             <tr>
               {columnas.map((col) => (
-                <th key={col.key}>
+                <th key={col.key} style={{ overflow: "visible" }}>
                   <div
                     style={{
                       display: "flex",
@@ -845,16 +856,10 @@ function Movimientos() {
                   >
                     <span>{col.label}</span>
 
-                    <ServerExcelFilterButton
+                    <ExcelFilterButton
                       columnKey={col.key}
                       label={col.label}
-                      filters={serverFilters}
-                      setFilters={setServerFilters}
-                      sortState={sortState}
-                      setSortState={setSortState}
-                      onApply={() => {
-                        setCurrentPage(1);
-                      }}
+                      excel={excel}
                     />
                   </div>
                 </th>

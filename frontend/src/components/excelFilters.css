@@ -30,6 +30,8 @@
   color: #111827;
   font-size: 12px;
   box-sizing: border-box;
+  max-height: calc(100vh - 20px);
+  overflow: hidden;
 }
 
 .excel-filter-action {
@@ -66,11 +68,13 @@
 
 .excel-filter-checks {
   margin-top: 8px;
-  max-height: 190px;
+  max-height: min(310px, calc(100vh - 250px));
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: #fff;
   border: 1px solid #cbd5e1;
   padding: 6px;
+  scrollbar-gutter: stable;
 }
 
 .excel-filter-check {
@@ -81,18 +85,72 @@
   cursor: pointer;
   font-weight: normal;
   color: #111827;
+  user-select: none;
+}
+
+.excel-filter-check:hover {
+  background: #eff6ff;
 }
 
 .excel-filter-check input {
   width: 14px;
   height: 14px;
   cursor: pointer;
+  flex: 0 0 auto;
 }
 
 .excel-filter-check span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.excel-filter-select-all {
+  position: sticky;
+  top: -6px;
+  z-index: 2;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 4px;
+  padding: 3px 0;
+  font-weight: 600;
+}
+
+.excel-filter-tree-node {
+  min-width: 0;
+}
+
+.excel-filter-tree-row {
+  gap: 4px;
+}
+
+.excel-filter-tree-children {
+  margin-left: 20px;
+  border-left: 1px dotted #cbd5e1;
+  padding-left: 5px;
+}
+
+.excel-filter-expand {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid #94a3b8;
+  border-radius: 2px;
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  line-height: 13px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.excel-filter-expand:hover {
+  background: #dbeafe;
+  border-color: #2563eb;
+}
+
+.excel-filter-day {
+  padding-left: 21px;
 }
 
 .excel-filter-empty {

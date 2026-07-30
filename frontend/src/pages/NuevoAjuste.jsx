@@ -18,6 +18,7 @@ const esDepositoRecortes = (valor) =>
 const MOTIVOS_OCULTOS = new Set([
   "CONSUMO PRODUCCION (DROPBOX)",
   "IMPORTACION EXCEL",
+  "CONSUMO RECORTES (DROPBOX)",
 ]);
 
 const esMotivoOculto = (nombre) =>
