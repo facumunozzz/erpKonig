@@ -7,6 +7,7 @@ import {
   useExcelFilters,
   ExcelFilterButton,
 } from "../components/ExcelColumnFilter";
+import { useAuth } from "../context/AuthContext";
 
 const normalizeHeader = (txt) => {
   const clean = String(txt || "")
@@ -56,12 +57,14 @@ const STOCK_HEADERS = [
 ];
 
 function Stock() {
+  const { isAdmin } = useAuth();
   const [stock, setStock] = useState([]);
   const [filtered, setFiltered] = useState([]);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [goTo, setGoTo] = useState("");
+  const [adminAccionesAbiertas, setAdminAccionesAbiertas] = useState(false);
 
   const [filtros, setFiltros] = useState({
     codigo: "",
@@ -658,7 +661,7 @@ function Stock() {
 
   const depositoPanelSeleccionado = useMemo(() => {
     return agrupado.find(
-      (dep) => String(dep.id_deposito) === String(panelDepositoId)
+      (dep) => String(dep.id_deposito) === String(panelDepositoId),
     );
   }, [agrupado, panelDepositoId]);
 
@@ -714,20 +717,82 @@ function Stock() {
       <h2 className="module-title">Stock en Depósitos</h2>
 
       <div className="acciones">
-        <button onClick={() => setMostrarModal(true)}>Crear depósito</button>
-        <button onClick={abrirVerDepositos}>Ver depósitos</button>
-        <button onClick={abrirAdministrarUbicaciones}>
-          Administrar ubicaciones
-        </button>
+        {isAdmin && (
+          <div
+            style={{
+              position: "relative",
+              display: "inline-block",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setAdminAccionesAbiertas((prev) => !prev)}
+            >
+              Administración de Stock {adminAccionesAbiertas ? "▲" : "▼"}
+            </button>
+
+            {adminAccionesAbiertas && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 6px)",
+                  left: 0,
+                  zIndex: 1000,
+                  minWidth: "220px",
+                  padding: "8px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "6px",
+                  background: "#ffffff",
+                  border: "1px solid #d9d9d9",
+                  borderRadius: "6px",
+                  boxShadow: "0 4px 14px rgba(0, 0, 0, 0.15)",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMostrarModal(true);
+                    setAdminAccionesAbiertas(false);
+                  }}
+                >
+                  Crear depósito
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminAccionesAbiertas(false);
+                    abrirVerDepositos();
+                  }}
+                >
+                  Ver depósitos
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminAccionesAbiertas(false);
+                    abrirAdministrarUbicaciones();
+                  }}
+                >
+                  Administrar ubicaciones
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <button onClick={exportarExcel}>Exportar a Excel</button>
+
         <button onClick={limpiarFiltros}>Limpiar filtros</button>
       </div>
 
       <UbicacionesModal
-  isOpen={openUbicaciones}
-  onClose={() => setOpenUbicaciones(false)}
-  onSaved={refreshAll}
-/>
+        isOpen={openUbicaciones}
+        onClose={() => setOpenUbicaciones(false)}
+        onSaved={refreshAll}
+      />
       {mostrarModal && (
         <div className="modal">
           <div className="modal-content">
@@ -1147,30 +1212,36 @@ function Stock() {
                           </div>
                         </div>
 
-                        {depositoPanelSeleccionado.ubicaciones.map((ubicacion) => (
-                          <div
-                            key={ubicacion.id_ubicacion ?? ubicacion.ubicacion}
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "1fr 90px",
-                              gap: 12,
-                              padding: "8px 0",
-                              borderBottom: "1px solid #eee",
-                            }}
-                          >
-                            <div>{ubicacion.ubicacion}</div>
-
+                        {depositoPanelSeleccionado.ubicaciones.map(
+                          (ubicacion) => (
                             <div
+                              key={
+                                ubicacion.id_ubicacion ?? ubicacion.ubicacion
+                              }
                               style={{
-                                textAlign: "right",
-                                paddingRight: 8,
-                                fontWeight: 600,
+                                display: "grid",
+                                gridTemplateColumns: "1fr 90px",
+                                gap: 12,
+                                padding: "8px 0",
+                                borderBottom: "1px solid #eee",
                               }}
                             >
-                              {Number(ubicacion.cantidad || 0).toLocaleString("es-AR")}
+                              <div>{ubicacion.ubicacion}</div>
+
+                              <div
+                                style={{
+                                  textAlign: "right",
+                                  paddingRight: 8,
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {Number(ubicacion.cantidad || 0).toLocaleString(
+                                  "es-AR",
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          ),
+                        )}
                       </>
                     ) : (
                       <div className="stock-panel-info">

@@ -1,318 +1,569 @@
-/* =====================================================
-   NAVBAR GENERAL
-   ===================================================== */
+:root {
+  --sidebar-width: 175px;
+  --navbar-height: 66px;
+  --azul-oscuro: #003366;
+  --azul-claro: #004c99;
+  --celeste: #00c3ff;
+  --texto-claro: #ffffff;
+  --texto-oscuro: #1f2937;
+  --borde-claro: rgba(255, 255, 255, 0.2);
+  --fondo-hover: rgba(255, 255, 255, 0.1);
+}
 
-.navbar {
+.navbar-layout {
   position: relative;
   z-index: 4000;
-
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-
-  padding: 12px 16px;
-  background: linear-gradient(90deg, #003366, #004c99);
-  color: white;
-
-  overflow: visible;
+  width: 100%;
 }
 
-/* =====================================================
-   LOGOS
-   ===================================================== */
+.navbar-main {
+  margin-left: var(--sidebar-width);
+}
 
-.logo-sz {
-  height: 48px;
+.navbar-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-width);
+  background: linear-gradient(
+    180deg,
+    var(--azul-oscuro),
+    var(--azul-claro)
+  );
+  color: var(--texto-claro);
+  box-shadow: 3px 0 10px rgba(0, 0, 0, 0.16);
+}
+
+.navbar-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--navbar-height);
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--borde-claro);
+}
+
+.logo-sz-sidebar {
+  display: block;
+  width: auto;
+  max-width: 135px;
+  height: 55px;
   object-fit: contain;
 }
 
-.logo-aquatic {
-  height: 28px;
-  object-fit: contain;
+.navbar-sidebar-close {
+  display: none;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--texto-claro);
+  font-size: 23px;
+  line-height: 1;
+  cursor: pointer;
 }
 
-/* =====================================================
-   MENÚ PRINCIPAL
+.navbar-sidebar-close:hover {
+  background: var(--fondo-hover);
+}
 
-   IMPORTANTE:
-   Se usa .navbar-menu y no .navbar ul porque el
-   desplegable también contiene un UL.
-   ===================================================== */
-
-.navbar-menu {
+.navbar-modulos {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 10px;
-
-  margin: 0;
-  padding: 0;
-
-  list-style: none;
-  text-align: center;
-
-  overflow: visible;
+  width: 100%;
+  padding: 14px 0;
 }
 
-.navbar-menu > li {
+.navbar-modulo {
   position: relative;
-  margin: 0;
-  padding: 0;
-}
-
-.navbar-menu > li > a {
-  position: relative;
-
   display: flex;
   align-items: center;
-  gap: 5px;
-
-  padding: 4px 6px;
-
-  color: white;
-  text-decoration: none;
-  font-size: 1rem;
-  font-weight: 500;
-  white-space: nowrap;
-
-  transition: color 0.3s ease;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 16px;
+  border: none;
+  border-left: 3px solid transparent;
+  background: transparent;
+  color: var(--texto-claro);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color 0.3s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease;
 }
 
-/* Línea inferior */
+.navbar-modulo:hover {
+  color: var(--celeste);
+  background: var(--fondo-hover);
+}
 
-.navbar-menu > li > a::after {
+.navbar-modulo.active {
+  color: var(--celeste);
+  background: rgba(255, 255, 255, 0.12);
+  border-left-color: var(--celeste);
+}
+
+.navbar-modulo::after {
   content: "";
+  position: absolute;
+  left: 15px;
+  right: 13px;
+  bottom: 3px;
+  height: 1px;
+  background: transparent;
+  transition: background-color 0.3s ease;
+}
 
+.navbar-modulo:hover::after,
+.navbar-modulo.active::after {
+  background: var(--celeste);
+}
+
+.logo-sz-top {
+  display: none;
+  height: 44px;
+  object-fit: contain;
+}
+
+.navbar-top {
+  position: fixed;
+  top: 0;
+  left: var(--sidebar-width);
+  right: 0;
+  z-index: 3900;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: var(--navbar-height);
+  min-height: var(--navbar-height);
+  padding: 7px 16px;
+  background: linear-gradient(
+    90deg,
+    var(--azul-oscuro),
+    var(--azul-claro)
+  );
+  color: var(--texto-claro);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+  overflow: visible;
+}
+
+.navbar-options {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+.navbar-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 5px 5px;
+  color: var(--texto-claro);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    color 0.3s ease,
+    background-color 0.2s ease;
+}
+
+.navbar-link::after {
+  content: "";
   position: absolute;
   left: 0;
-  bottom: -2px;
-
+  bottom: 8px;
   width: 0;
-  height: 2px;
-
-  background: #00c3ff;
-
+  height: 1px;
+  background: var(--celeste);
   transition: width 0.3s ease;
 }
 
-.navbar-menu > li > a:hover {
-  color: #00c3ff;
+.navbar-link:hover {
+  color: var(--celeste);
 }
 
-.navbar-menu > li > a:hover::after {
+.navbar-link:hover::after,
+.navbar-link.active::after {
   width: 100%;
 }
 
-.navbar-menu > li > a.active {
-  color: #00c3ff;
-  font-weight: 600;
+.navbar-link.active {
+  color: var(--celeste);
 }
 
-/* =====================================================
-   DESPLEGABLE DE STOCK
-   ===================================================== */
+.navbar-user-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.navbar-user {
+  display: block;
+  max-width: 155px;
+  overflow: hidden;
+  color: var(--texto-claro);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.9;
+}
+
+.navbar-logout,
+.navbar-login {
+  padding: 7px 13px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--texto-oscuro);
+  font-family: inherit;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.logo-aquatic {
+  display: block;
+  width: auto;
+  height: 39px;
+  object-fit: contain;
+}
+
+.navbar-logout:hover,
+.navbar-login:hover {
+  background: #f5f5f5;
+  color: #007acc;
+}
+
+.navbar-mobile-toggle {
+  display: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--texto-claro);
+  font-size: 25px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.navbar-mobile-toggle:hover {
+  background: var(--fondo-hover);
+}
+
+.navbar-overlay {
+  display: none;
+}
+
+.app-content {
+  position: relative;
+  width: calc(100% - var(--sidebar-width));
+  max-width: none;
+  min-height: 100vh;
+  margin: 0 0 0 var(--sidebar-width);
+  padding:
+    calc(var(--navbar-height) + 32px)
+    12px
+    24px
+    30px;
+  overflow: visible;
+}
+
+.app-content > * {
+  width: 100%;
+  max-width: none;
+}
+
+.app-content > :first-child {
+  margin-top: 0;
+}
+
+.app-content .page,
+.app-content .page-container,
+.app-content .content,
+.app-content .content-container,
+.app-content .table-container,
+.app-content .tabla-container,
+.app-content .table-responsive {
+  width: 100%;
+  max-width: none;
+}
+
+/* =========================================================
+   SUBMENU STOCK
+   ========================================================= */
 
 .navbar-dropdown {
   position: relative;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  flex-shrink: 0;
+  z-index: 5100;
 }
 
-/*
-  Área invisible mínima entre el enlace y el menú.
-  Evita que se cierre accidentalmente al bajar el mouse.
-*/
-.navbar-dropdown::before {
-  content: "";
-
-  position: absolute;
-  top: 100%;
-  left: 0;
-
-  width: 100%;
-  height: 5px;
-}
-
-.navbar-dropdown-title {
-  cursor: pointer;
+.navbar-dropdown-link {
+  gap: 5px;
 }
 
 .navbar-dropdown-arrow {
   display: inline-block;
-  font-size: 10px;
+  margin-left: 3px;
+  font-size: 11px;
   line-height: 1;
-
   transition: transform 0.2s ease;
-}
-
-/* El menú está oculto siempre */
-
-.navbar .navbar-dropdown-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 9999;
-
-  display: none;
-
-  width: max-content;
-  min-width: 180px;
-
-  margin: 0;
-  padding: 5px 0;
-
-  list-style: none;
-
-  background: #ffffff;
-  border: 1px solid #d6dce3;
-  border-radius: 5px;
-
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
-
-  text-align: left;
-}
-
-/*
-  Se muestra únicamente mientras el mouse está
-  sobre Stock o sobre el propio desplegable.
-*/
-.navbar-dropdown:hover > .navbar-dropdown-menu {
-  display: block;
-}
-
-.navbar-dropdown:hover > .navbar-dropdown-title {
-  color: #00c3ff;
 }
 
 .navbar-dropdown:hover .navbar-dropdown-arrow {
   transform: rotate(180deg);
 }
 
-/* Elementos del desplegable */
+.navbar-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 9999;
 
-.navbar .navbar-dropdown-menu > li {
-  display: block;
-  width: 100%;
+  display: none;
+  min-width: 190px;
 
-  margin: 0;
-  padding: 0;
+  padding: 6px 0;
+
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 0 0 7px 7px;
+
+  background: #ffffff;
+
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.22);
 }
 
-.navbar .navbar-dropdown-menu > li > a {
-  position: relative;
+.navbar-dropdown:hover .navbar-dropdown-menu {
+  display: block;
+}
 
+.navbar-dropdown-item {
   display: block;
   width: 100%;
-
-  padding: 9px 14px;
   box-sizing: border-box;
 
-  color: #1f2937;
-  background: #ffffff;
+  padding: 11px 15px;
 
-  font-size: 14px;
-  font-weight: 500;
-  text-align: left;
+  color: #1f2937;
+
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+
   text-decoration: none;
   white-space: nowrap;
+
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
 }
 
-/* Evita la línea animada del menú principal */
-
-.navbar .navbar-dropdown-menu > li > a::after {
-  display: none;
-  content: none;
-}
-
-.navbar .navbar-dropdown-menu > li > a:hover {
-  color: #007acc;
+.navbar-dropdown-item:hover {
   background: #f1f5f9;
-}
-
-.navbar .navbar-dropdown-menu > li > a.active {
   color: #007acc;
-  background: #eaf4fb;
-  font-weight: 700;
 }
 
-/* =====================================================
-   SECTOR DERECHO
-   ===================================================== */
-
-.navbar-right {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
+.navbar-dropdown-item.active {
+  background: #eaf6ff;
+  color: #007acc;
 }
 
-.navbar-user {
-  font-size: 0.9rem;
-  opacity: 0.9;
-}
-
-.navbar-logout,
-.navbar-login {
-  padding: 0.4rem 0.8rem;
-
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: 0.5rem;
-
-  background: #ffffff;
-  color: #1f2937;
-
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.navbar-logout:hover,
-.navbar-login:hover {
-  background: #f5f5f5;
-}
-
-/* =====================================================
-   DESKTOP
-   ===================================================== */
-
-@media (min-width: 768px) {
-  .navbar {
-    flex-direction: row;
-    justify-content: space-between;
+@media (max-width: 1150px) {
+  .navbar-options {
+    gap: 10px;
   }
 
-  .navbar-menu {
-    flex-direction: row;
-    align-items: center;
-    gap: 20px;
+  .navbar-link {
+    font-size: 11px;
   }
 
-  .logo-sz {
-    height: 60px;
-  }
-
-  .logo-aquatic {
-    height: 36px;
-  }
-}
-
-/* =====================================================
-   MÓVIL
-
-   En móvil no existe hover estable. El desplegable no
-   queda abierto accidentalmente.
-   ===================================================== */
-
-@media (max-width: 767px) {
-  .navbar-dropdown::before {
+  .navbar-user {
     display: none;
   }
 
-  .navbar .navbar-dropdown-menu {
-    position: static;
-    width: 100%;
-    margin-top: 6px;
-    box-shadow: none;
+  .logo-aquatic {
+    height: 30px;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --sidebar-width: 270px;
+    --navbar-height: 64px;
   }
 
-  .navbar-dropdown:hover > .navbar-dropdown-menu {
+  .navbar-sidebar {
+    width: var(--sidebar-width);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 5px 0 18px rgba(0, 0, 0, 0.25);
+  }
+
+  .navbar-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .navbar-sidebar-header {
+    justify-content: space-between;
+    padding: 8px 12px;
+  }
+
+  .logo-sz-sidebar {
+    max-width: 170px;
+    height: 48px;
+  }
+
+  .navbar-sidebar-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .navbar-main {
+    margin-left: 0;
+  }
+
+  .navbar-top {
+    left: 0;
+    gap: 8px;
+    height: var(--navbar-height);
+    min-height: var(--navbar-height);
+    padding: 8px 12px;
+  }
+
+  .navbar-mobile-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .logo-sz-top {
     display: block;
+    width: auto;
+    max-width: 100px;
+    height: 44px;
+  }
+
+  .navbar-options {
+    gap: 8px;
+    min-height: 44px;
+    overflow: visible;
+  }
+
+  .navbar-link {
+    min-height: 42px;
+    padding: 4px 8px;
+    font-size: 0.85rem;
+  }
+
+  .navbar-link::after {
+    bottom: 0;
+  }
+
+  .navbar-user-area {
+    gap: 6px;
+  }
+
+  .navbar-user {
+    display: none;
+  }
+
+  .navbar-logout,
+  .navbar-login {
+    padding: 7px 10px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
+  .logo-aquatic {
+    display: none;
+  }
+
+  .navbar-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 3950;
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: none;
+    background: rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+  }
+
+  .app-content {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding:
+      calc(var(--navbar-height) + 22px)
+      14px
+      20px;
+  }
+}
+
+@media (max-width: 560px) {
+  .navbar-top {
+    padding: 8px;
+  }
+
+  .logo-sz-top {
+    display: none;
+  }
+
+  .navbar-options {
+    gap: 4px;
+  }
+
+  .navbar-link {
+    padding: 4px 7px;
+    font-size: 0.8rem;
+  }
+
+  .navbar-logout,
+  .navbar-login {
+    padding: 7px 8px;
+    font-size: 0.75rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .navbar-user-area {
+    display: none;
+  }
+
+  .navbar-options {
+    width: 100%;
   }
 }

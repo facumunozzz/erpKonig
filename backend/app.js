@@ -78,6 +78,8 @@ const estadoResumenRoutes = require("./routes/estadoResumen");
 const referentesRoutes = require("./routes/referentes");
 const stockRecortesRoutes = require("./routes/stockRecortes");
 const dropboxRecortesRoutes = require("./routes/dropboxRecortes");
+const planificacionProduccionRoutes = require("./routes/planificacionProduccion");
+const observacionesRouter = require("./routes/observaciones");
 
 // =====================
 // BACKEND ROUTES
@@ -106,10 +108,9 @@ app.use("/api/estado-resumen", estadoResumenRoutes);
 app.use("/referentes", referentesRoutes);
 app.use("/api/stock-recortes", stockRecortesRoutes);
 app.use("/dropbox-recortes", dropboxRecortesRoutes);
+app.use("/api/planificacion-produccion",planificacionProduccionRoutes);
+app.use("/observaciones", observacionesRouter);
 
-// =====================
-// DEBUG / HEALTHCHECK
-// =====================
 app.get("/__routes", (req, res) => {
   res.json(listEndpoints(app));
 });

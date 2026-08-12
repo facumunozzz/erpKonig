@@ -141,7 +141,7 @@ export default function NuevoRemito() {
   };
 
   return (
-    <div className="transferencias-page">
+    <div className="transferencias-page nueva-transferencia-page">
       <div className="nt-header">
         <h2 className="module-title">Nuevo Remito</h2>
 

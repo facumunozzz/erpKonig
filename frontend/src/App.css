@@ -1,44 +1,845 @@
-body {
+:root {
   font-family: Arial, sans-serif;
+  color: #1f2937;
+  background: #f7f7f7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+  background: #f7f7f7;
+}
+
+body {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100vh;
   margin: 0;
-  background-color: #f7f7f7;
+  overflow-x: hidden;
+  background: #f7f7f7;
 }
 
-.navbar {
-  background-color: #003366;
-  color: white;
-  padding: 10px 20px;
-  display: flex;
-  align-items: center;
+#root {
+  width: 100%;
+  min-height: 100vh;
 }
 
-.navbar h2 {
-  margin: 0;
-  margin-right: 40px;
-  font-size: 20px;
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }
 
-.navbar ul {
-  list-style: none;
-  display: flex;
-  gap: 20px;
-  padding: 0;
-  margin: 0;
-}
-
-.navbar ul li a {
-  color: white;
-  text-decoration: none;
-}
-
-.navbar ul li a.active {
-  font-weight: bold;
-  text-decoration: underline;
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
 }
 
 .container {
-  padding: 20px;
-  max-width: 1200px;
-  margin: auto;
+  width: min(100% - 32px, 1200px);
+  margin: 0 auto;
+  padding: 20px 0 32px;
 }
 
+.login-content {
+  width: 100%;
+  min-height: 100vh;
+}
+
+@media (max-width: 767px) {
+  .container {
+    width: 100%;
+    padding: 12px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* ============================================================
+   ============================================================
+   FIX GLOBAL MOBILE / TABLET - ERP KONIG
+   SOLO AFECTA PANTALLAS HASTA 1024px
+   NO MODIFICA PC
+   ============================================================
+   ============================================================ */
+
+@media (max-width: 1024px) {
+
+  /* ==========================================================
+     1. EVITAR QUE LAS PAGINAS SE SALGAN DE LA PANTALLA
+     ========================================================== */
+
+  html,
+  body,
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  .stock-container,
+  .articulos-container,
+  .transferencias-page,
+  .nueva-transferencia-page {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+
+  /* ==========================================================
+     2. TABLAS STOCK / ARTICULOS / MOVIMIENTOS / REMITOS
+
+     IMPORTANTE:
+     PISA EL overflowX:"hidden" QUE TENES INLINE EN LOS JSX.
+
+     AHORA SE PUEDE ARRASTRAR LA TABLA CON EL DEDO.
+     ========================================================== */
+
+  .tabla-stock-container,
+  .tabla-articulos-container {
+    display: block !important;
+
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+
+    -webkit-overflow-scrolling: touch !important;
+
+    touch-action: pan-x pan-y !important;
+
+    overscroll-behavior-x: contain;
+
+    position: relative;
+
+    border: 1px solid #dbe3ec;
+    border-radius: 10px;
+
+    background: #ffffff;
+  }
+
+
+  /* La tabla conserva su ancho real.
+     NO intentamos comprimir 15 columnas dentro del celular. */
+
+  .tabla-stock,
+  .tabla-articulos,
+  .tabla-movimientos {
+    width: max-content !important;
+    min-width: 100% !important;
+
+    white-space: nowrap;
+
+    touch-action: pan-x pan-y;
+  }
+
+
+  /* ==========================================================
+     3. BARRA SUPERIOR DE SCROLL
+
+     En PC sigue funcionando.
+     En mobile deja de ser necesaria porque ahora
+     podemos mover directamente la tabla.
+
+     La ocultamos para ganar espacio.
+     ========================================================== */
+
+  .tabla-scroll-top {
+    display: none !important;
+  }
+
+
+  /* ==========================================================
+     4. TRANSFERENCIAS / AJUSTES
+
+     ESTAS TABLAS NO SIEMPRE TIENEN UN CONTENEDOR SCROLLABLE.
+     HACEMOS QUE LA PROPIA TABLA PUEDA DESPLAZARSE.
+     ========================================================== */
+
+  .transferencias-page > .tabla-transferencias,
+  .nueva-transferencia-page .tabla-transferencias {
+    display: block !important;
+
+    width: 100% !important;
+    max-width: 100% !important;
+
+    overflow-x: auto !important;
+    overflow-y: hidden;
+
+    -webkit-overflow-scrolling: touch !important;
+
+    touch-action: pan-x pan-y !important;
+
+    white-space: nowrap;
+
+    border-collapse: collapse;
+
+    border: 1px solid #dbe3ec;
+    border-radius: 8px;
+  }
+
+
+  /* Mantener ancho lógico de columnas */
+
+  .tabla-transferencias th,
+  .tabla-transferencias td {
+    white-space: nowrap;
+    min-width: 110px;
+  }
+
+
+  /* ==========================================================
+     5. TABLAS QUE ESTAN DENTRO DE MODALES
+
+     Permite moverlas con el dedo SIN agrandar el modal.
+     ========================================================== */
+
+  .modal-card .tabla-transferencias,
+  .modal-content .tabla-transferencias,
+  .modal-contenido .tabla-transferencias,
+  .modal-form .tabla-transferencias,
+  .modal-export .tabla-transferencias {
+
+    display: block !important;
+
+    width: 100% !important;
+    max-width: 100% !important;
+
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+
+    -webkit-overflow-scrolling: touch !important;
+
+    touch-action: pan-x pan-y !important;
+
+    white-space: nowrap;
+  }
+
+
+  /* ==========================================================
+     6. BACKDROP DE TODOS LOS MODALES
+     ========================================================== */
+
+  .modal-backdrop,
+  .modal {
+
+    position: fixed !important;
+
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+
+    width: 100vw !important;
+    height: 100dvh !important;
+
+    max-width: 100vw !important;
+
+    padding: 10px !important;
+
+    display: flex !important;
+
+    align-items: center !important;
+    justify-content: center !important;
+
+    overflow: hidden !important;
+
+    z-index: 999999 !important;
+
+    box-sizing: border-box !important;
+  }
+
+
+  /* ==========================================================
+     7. MODAL CARD
+     Referentes
+     Reversiones
+     Dropbox
+     etc.
+     ========================================================== */
+
+  .modal-card {
+
+    position: relative !important;
+
+    top: auto !important;
+    left: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+
+    transform: none !important;
+
+    width: 100% !important;
+    max-width: 100% !important;
+
+    min-width: 0 !important;
+
+    max-height: calc(100dvh - 20px) !important;
+
+    margin: 0 !important;
+
+    padding: 14px !important;
+
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+
+    border-radius: 12px !important;
+
+    box-sizing: border-box !important;
+
+    -webkit-overflow-scrolling: touch;
+  }
+
+
+  /* ==========================================================
+     8. OTROS TIPOS DE MODALES
+     Stock / Articulos / Formularios antiguos
+     ========================================================== */
+
+  .modal-content,
+  .modal-contenido,
+  .modal-form,
+  .modal-export {
+
+    width: calc(100vw - 20px) !important;
+    max-width: calc(100vw - 20px) !important;
+
+    min-width: 0 !important;
+
+    max-height: calc(100dvh - 20px) !important;
+
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+
+    box-sizing: border-box !important;
+
+    margin: 0 !important;
+  }
+
+
+  /* Modal antiguo centrado con absolute */
+
+  .modal-contenido {
+    position: fixed !important;
+
+    top: 50% !important;
+    left: 50% !important;
+
+    right: auto !important;
+    bottom: auto !important;
+
+    transform: translate(-50%, -50%) !important;
+
+    resize: none !important;
+  }
+
+
+  /* Modal form */
+
+  .modal-form {
+    position: fixed !important;
+
+    top: 50% !important;
+    left: 50% !important;
+
+    transform: translate(-50%, -50%) !important;
+
+    padding: 16px !important;
+  }
+
+
+  /* ==========================================================
+     9. HEADER DEL MODAL
+     ========================================================== */
+
+  .modal-head,
+  .modal-header {
+
+    position: sticky;
+
+    top: -14px;
+
+    z-index: 20;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: space-between;
+
+    gap: 10px;
+
+    background: #ffffff;
+
+    padding: 10px 0;
+
+    margin-bottom: 8px;
+
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+
+  .modal-head h3,
+  .modal-header h3 {
+
+    margin: 0;
+
+    font-size: 1.1rem;
+
+    line-height: 1.25;
+
+    word-break: break-word;
+  }
+
+
+  /* Botón cerrar */
+
+  .modal-head > button,
+  .modal-header > button {
+
+    flex: 0 0 auto;
+
+    min-width: 42px;
+    min-height: 42px;
+
+    padding: 6px 10px;
+  }
+
+
+  /* ==========================================================
+     10. FILAS DE FORMULARIO DENTRO DE MODALES
+     ========================================================== */
+
+  .modal-row {
+
+    display: flex !important;
+
+    flex-direction: column !important;
+
+    align-items: stretch !important;
+
+    width: 100% !important;
+
+    gap: 8px !important;
+  }
+
+
+  .modal-row input,
+  .modal-row select,
+  .modal-row textarea {
+
+    width: 100% !important;
+    max-width: 100% !important;
+
+    min-height: 44px;
+
+    font-size: 16px;
+
+    box-sizing: border-box;
+  }
+
+
+  .modal-row button {
+
+    width: 100%;
+
+    min-height: 44px;
+  }
+
+
+  /* ==========================================================
+     11. FOOTER DEL MODAL
+     ========================================================== */
+
+  .modal-foot,
+  .modal-footer,
+  .modal-botones {
+
+    display: flex !important;
+
+    flex-wrap: wrap;
+
+    gap: 8px;
+
+    width: 100%;
+
+    margin-top: 12px;
+
+    padding-top: 10px;
+
+    background: #ffffff;
+  }
+
+
+  .modal-foot button,
+  .modal-footer button,
+  .modal-botones button {
+
+    flex: 1 1 140px;
+
+    min-height: 44px;
+  }
+
+
+  /* ==========================================================
+     12. TABLAS DENTRO DE MODALES
+     ========================================================== */
+
+  .modal-card > div,
+  .modal-content > div,
+  .modal-contenido > div {
+
+    max-width: 100%;
+  }
+
+
+  .modal-card table,
+  .modal-content table,
+  .modal-contenido table,
+  .modal-form table {
+
+    white-space: nowrap;
+  }
+
+
+  /* ==========================================================
+     13. PAGINADO
+     Evitar que se salga por la derecha
+     ========================================================== */
+
+  .paginado-pro,
+  .paginado,
+  .paginado-empresarial {
+
+    width: 100% !important;
+    max-width: 100% !important;
+
+    display: flex;
+
+    flex-wrap: wrap !important;
+
+    justify-content: center;
+
+    gap: 8px;
+
+    box-sizing: border-box;
+  }
+
+
+  .paginado-pro .paginado-botones,
+  .pag-nav {
+
+    margin-left: 0 !important;
+
+    max-width: 100%;
+
+    display: flex;
+
+    flex-wrap: wrap;
+
+    justify-content: center;
+  }
+
+
+  /* ==========================================================
+     14. AUTOCOMPLETE / SUGERENCIAS
+     ========================================================== */
+
+  .nt-sugs {
+
+    max-width: calc(100vw - 24px) !important;
+
+    overflow-x: hidden;
+
+    overflow-y: auto;
+
+    -webkit-overflow-scrolling: touch;
+  }
+
+}
+
+
+/* ============================================================
+   MOBILE MAS PEQUEÑO
+   ============================================================ */
+
+@media (max-width: 767px) {
+
+
+  /* ==========================================================
+     PAGINAS
+     ========================================================== */
+
+  .transferencias-page,
+  .nueva-transferencia-page,
+  .stock-container,
+  .articulos-container {
+
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+
+
+  /* ==========================================================
+     BOTONES SUPERIORES
+     ========================================================== */
+
+  .acciones {
+
+    width: 100% !important;
+
+    display: flex !important;
+
+    flex-direction: column !important;
+
+    align-items: stretch !important;
+
+    gap: 8px !important;
+  }
+
+
+  .acciones button,
+  .acciones input,
+  .acciones select {
+
+    width: 100% !important;
+
+    max-width: 100% !important;
+
+    min-height: 44px;
+
+    box-sizing: border-box;
+  }
+
+
+  /* ==========================================================
+     TABLAS
+     ========================================================== */
+
+  .tabla-stock-container,
+  .tabla-articulos-container {
+
+    width: 100% !important;
+
+    max-width: 100% !important;
+
+    overflow-x: auto !important;
+
+    -webkit-overflow-scrolling: touch !important;
+
+    touch-action: pan-x pan-y !important;
+  }
+
+
+  .tabla-stock,
+  .tabla-articulos,
+  .tabla-movimientos {
+
+    min-width: 760px;
+  }
+
+
+  /* ==========================================================
+     TRANSFERENCIAS / AJUSTES
+     ========================================================== */
+
+  .transferencias-page > .tabla-transferencias,
+  .nueva-transferencia-page .tabla-transferencias {
+
+    width: 100% !important;
+
+    max-width: 100% !important;
+
+    overflow-x: auto !important;
+
+    touch-action: pan-x pan-y !important;
+
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+
+  /* ==========================================================
+     MODALES
+     ========================================================== */
+
+  .modal-backdrop,
+  .modal {
+
+    padding: 6px !important;
+
+    align-items: center !important;
+  }
+
+
+  .modal-card {
+
+    width: calc(100vw - 12px) !important;
+
+    max-width: calc(100vw - 12px) !important;
+
+    max-height: calc(100dvh - 12px) !important;
+
+    padding: 12px !important;
+
+    border-radius: 10px !important;
+  }
+
+
+  .modal-content,
+  .modal-contenido,
+  .modal-form,
+  .modal-export {
+
+    width: calc(100vw - 12px) !important;
+
+    max-width: calc(100vw - 12px) !important;
+
+    max-height: calc(100dvh - 12px) !important;
+  }
+
+
+  /* Inputs suficientemente grandes para evitar
+     el zoom automático de Safari / Chrome mobile */
+
+  .modal-card input,
+  .modal-card select,
+  .modal-card textarea,
+
+  .modal-content input,
+  .modal-content select,
+  .modal-content textarea,
+
+  .modal-contenido input,
+  .modal-contenido select,
+  .modal-contenido textarea {
+
+    max-width: 100% !important;
+
+    font-size: 16px !important;
+
+    box-sizing: border-box !important;
+  }
+
+
+  /* ==========================================================
+     TABLAS INTERNAS DEL MODAL
+     ========================================================== */
+
+  .modal-card .tabla-transferencias,
+  .modal-content .tabla-transferencias,
+  .modal-contenido .tabla-transferencias {
+
+    display: block !important;
+
+    width: 100% !important;
+
+    max-width: 100% !important;
+
+    overflow-x: auto !important;
+
+    -webkit-overflow-scrolling: touch !important;
+
+    touch-action: pan-x pan-y !important;
+  }
+
+
+  .modal-card .tabla-transferencias th,
+  .modal-card .tabla-transferencias td {
+
+    min-width: 100px;
+
+    padding: 8px 7px;
+  }
+
+
+  /* ==========================================================
+     UBICACIONES
+     ========================================================== */
+
+  .ubis-row {
+
+    grid-template-columns: 1fr !important;
+
+    gap: 6px !important;
+  }
+
+
+  .ubis-actions {
+
+    width: 100%;
+
+    text-align: left !important;
+
+    white-space: normal !important;
+  }
+
+
+  .ubis-actions button {
+
+    min-height: 40px;
+  }
+
+
+  /* ==========================================================
+     OBRA / VERSION
+     ========================================================== */
+
+  .obra-version-field {
+
+    grid-template-columns: 1fr !important;
+
+    width: 100% !important;
+  }
+
+
+  /* ==========================================================
+     FOOTER NUEVA TRANSFERENCIA / AJUSTE
+     ========================================================== */
+
+  .nt-footer,
+  .nt-actions {
+
+    width: 100% !important;
+
+    display: flex !important;
+
+    flex-direction: column !important;
+
+    align-items: stretch !important;
+
+    gap: 8px !important;
+  }
+
+
+  .nt-footer button,
+  .nt-actions button {
+
+    width: 100% !important;
+
+    min-height: 44px;
+  }
+
+}

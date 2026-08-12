@@ -1,89 +1,426 @@
-import React from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext'; // 👈 Importamos el contexto
-import logoSZ from './../images/LOGO-SZCONSULTORES.png';
-import logoAquatic from './../images/logo-aquatic.png';
-import './../styles/navbar.css';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
+import {
+  NavLink,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
+
+import { useAuth } from "../context/AuthContext";
+
+import logoSZ from "./../images/LOGO-SZCONSULTORES.png";
+import logoAquatic from "./../images/logo-aquatic.png";
+
+import "./../styles/navbar.css";
 
 function Navbar() {
+  const location = useLocation();
   const navigate = useNavigate();
-  const { user, isAuth, isAdmin, hasUtilidad, displayName, logout } = useAuth(); // 👈 Traemos todo desde el contexto
 
-  const linkClass = ({ isActive }) => (isActive ? 'active' : undefined);
+  const {
+    isAuth,
+    isAdmin,
+    hasUtilidad,
+    displayName,
+    logout,
+  } = useAuth();
+
+  const [moduloActivo, setModuloActivo] = useState("stock");
+  const [menuMovilAbierto, setMenuMovilAbierto] = useState(false);
+
+  const linkClass = ({ isActive }) =>
+    isActive ? "navbar-link active" : "navbar-link";
+
+  const obtenerOpcionesModulo = useCallback(
+    (modulo) => {
+      switch (modulo) {
+        case "stock":
+          return [
+            {
+              texto: "Artículos",
+              ruta: "/articulos",
+              visible: hasUtilidad("Artículos"),
+            },
+            {
+              texto: "Stock",
+              ruta: "/stock",
+              visible:
+                hasUtilidad("Stock") ||
+                hasUtilidad("StockRecortes"),
+              submenu: true,
+            },
+            {
+              texto: "Transferencias",
+              ruta: "/transferencias",
+              visible: hasUtilidad("Transferencias"),
+            },
+            {
+              texto: "Movimientos/Ajustes",
+              ruta: "/ajustes",
+              visible: hasUtilidad("Ajustes"),
+            },
+            {
+              texto: "Transacciones",
+              ruta: "/movimientos",
+              visible: hasUtilidad("Movimientos"),
+            },
+            {
+              texto: "Remitos",
+              ruta: "/remitos",
+              visible: hasUtilidad("Remitos"),
+            },
+          ];
+
+        case "obras":
+          return [
+            {
+              texto: "Estado de Obras",
+              ruta: "/estado-obras",
+              visible: hasUtilidad("EstadoObras"),
+            },
+          ];
+
+        case "administracion":
+          return [
+            {
+              texto: "Administración",
+              ruta: "/admin",
+              visible: isAdmin,
+            },
+          ];
+
+        case "produccion":
+          return [
+            {
+              texto: "Planificación de Producción",
+              ruta: "/produccion/planificacion",
+              visible:
+                isAdmin ||
+                hasUtilidad("PlanificacionProduccion"),
+            },
+            {
+              texto: "Observaciones",
+              ruta: "/produccion/observaciones",
+              visible:
+                isAdmin ||
+                hasUtilidad("Observaciones"),
+            },
+          ];
+
+        default:
+          return [];
+      }
+    },
+    [hasUtilidad, isAdmin]
+  );
+
+  const opcionesModulo = useMemo(
+    () => obtenerOpcionesModulo(moduloActivo),
+    [moduloActivo, obtenerOpcionesModulo]
+  );
+
+  useEffect(() => {
+    const ruta = location.pathname;
+
+    const rutasStock = [
+      "/articulos",
+      "/stock",
+      "/stock-recortes",
+      "/transferencias",
+      "/ajustes",
+      "/movimientos",
+      "/remitos",
+    ];
+
+    if (rutasStock.some((item) => ruta.startsWith(item))) {
+      setModuloActivo("stock");
+      return;
+    }
+
+    if (ruta.startsWith("/estado-obras")) {
+      setModuloActivo("obras");
+      return;
+    }
+
+    if (ruta.startsWith("/admin")) {
+      setModuloActivo("administracion");
+      return;
+    }
+
+    if (
+      ruta.startsWith("/produccion") ||
+      ruta.startsWith("/fabrica")
+    ) {
+      setModuloActivo("produccion");
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    setMenuMovilAbierto(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const cerrarConEscape = (event) => {
+      if (event.key === "Escape") {
+        setMenuMovilAbierto(false);
+      }
+    };
+
+    window.addEventListener("keydown", cerrarConEscape);
+
+    return () => {
+      window.removeEventListener("keydown", cerrarConEscape);
+    };
+  }, []);
+
+  const seleccionarModulo = (modulo) => {
+    setModuloActivo(modulo);
+    setMenuMovilAbierto(false);
+
+    /*
+      Gestión de Stock siempre entra por defecto a /stock
+    */
+    if (modulo === "stock") {
+      navigate("/stock");
+      return;
+    }
+
+    const primeraOpcion = obtenerOpcionesModulo(modulo).find(
+      (opcion) => opcion.visible
+    );
+
+    if (primeraOpcion) {
+      navigate(primeraOpcion.ruta);
+    }
+  };
+
+  const cerrarSesion = () => {
+    setMenuMovilAbierto(false);
+    logout();
+  };
 
   return (
-    <nav className="navbar">
-      <img src={logoSZ} alt="SZ Consultores" className="logo-sz" />
+    <div className="navbar-layout">
+      <aside
+        className={`navbar-sidebar ${
+          menuMovilAbierto ? "open" : ""
+        }`}
+      >
+        <div className="navbar-sidebar-header">
+          <img
+            src={logoSZ}
+            alt="SZ Consultores"
+            className="logo-sz-sidebar"
+          />
 
-      <ul className="navbar-menu">
-        {hasUtilidad('EstadoObras') && (
-          <li><NavLink to="/estado-obras" className={linkClass}>Estado de Obras</NavLink></li>
-        )}
-        {hasUtilidad('Artículos') && (
-          <li><NavLink to="/articulos" className={linkClass}>Artículos</NavLink></li>
-        )}
-        {hasUtilidad("Stock") && (
-          <li className="navbar-dropdown">
-            <NavLink
-              to="/stock"
-              className={({ isActive }) =>
-                isActive
-                  ? "active navbar-dropdown-title"
-                  : "navbar-dropdown-title"
+          <button
+            type="button"
+            className="navbar-sidebar-close"
+            onClick={() => setMenuMovilAbierto(false)}
+            aria-label="Cerrar menú"
+          >
+            ✕
+          </button>
+        </div>
+
+        <nav
+          className="navbar-modulos"
+          aria-label="Módulos principales"
+        >
+          <button
+            type="button"
+            className={`navbar-modulo ${
+              moduloActivo === "stock" ? "active" : ""
+            }`}
+            onClick={() => seleccionarModulo("stock")}
+          >
+            Gestión de Stock
+          </button>
+
+          {hasUtilidad("EstadoObras") && (
+            <button
+              type="button"
+              className={`navbar-modulo ${
+                moduloActivo === "obras" ? "active" : ""
+              }`}
+              onClick={() => seleccionarModulo("obras")}
+            >
+              Estado de Obras
+            </button>
+          )}
+
+          {(isAdmin ||
+            hasUtilidad("PlanificacionProduccion") ||
+            hasUtilidad("Observaciones")) && (
+            <button
+              type="button"
+              className={`navbar-modulo ${
+                moduloActivo === "produccion" ? "active" : ""
+              }`}
+              onClick={() => seleccionarModulo("produccion")}
+            >
+              Gestión de Producción
+            </button>
+          )}
+
+          {isAdmin && (
+            <button
+              type="button"
+              className={`navbar-modulo ${
+                moduloActivo === "administracion" ? "active" : ""
+              }`}
+              onClick={() =>
+                seleccionarModulo("administracion")
               }
             >
-              Stock
-              <span className="navbar-dropdown-arrow">▲</span>
-            </NavLink>
-
-            <ul className="navbar-dropdown-menu">
-              <li>
-                <NavLink to="/stock" className={linkClass}>
-                  Stock general
-                </NavLink>
-              </li>
-
-              <li>
-                <NavLink to="/stock-recortes" className={linkClass}>
-                  Stock recortes
-                </NavLink>
-              </li>
-            </ul>
-          </li>
-        )}
-        {hasUtilidad('Transferencias') && (
-          <li><NavLink to="/transferencias" className={linkClass}>Transferencias</NavLink></li>
-        )}
-        {hasUtilidad('Ajustes') && (
-          <li><NavLink to="/ajustes" className={linkClass}>Movimientos/Ajustes</NavLink></li>
-        )}
-        {hasUtilidad('Movimientos') && (
-          <li><NavLink to="/movimientos" className={linkClass}>Transacciones</NavLink></li>
-        )}
-        {hasUtilidad('Remitos') && (
-        <li><NavLink to="/remitos" className={linkClass}>Remitos</NavLink></li>
-        )}
-        {isAdmin && (
-          <li><NavLink to="/admin" className={linkClass}>Administración</NavLink></li>
-        )}
-      </ul>
-
-      <div className="navbar-right">
-        {isAuth ? (
-          <>
-            <span className="navbar-user">{displayName}</span>
-            <button className="navbar-logout" onClick={logout}>
-              Salir
+              Administración
             </button>
-          </>
-        ) : (
-          <NavLink to="/login" className="navbar-login">
-            Iniciar sesión
-          </NavLink>
-        )}
-        <img src={logoAquatic} alt="Aquatic" className="logo-aquatic" />
+          )}
+        </nav>
+      </aside>
+
+      <div className="navbar-main">
+        <header className="navbar-top">
+          <button
+            type="button"
+            className="navbar-mobile-toggle"
+            onClick={() =>
+              setMenuMovilAbierto(
+                (estadoActual) => !estadoActual
+              )
+            }
+            aria-label="Abrir menú"
+            aria-expanded={menuMovilAbierto}
+          >
+            ☰
+          </button>
+
+          <img
+            src={logoSZ}
+            alt="SZ Consultores"
+            className="logo-sz-top"
+          />
+
+          <nav
+            className="navbar-options"
+            aria-label="Opciones del módulo"
+          >
+            {opcionesModulo
+              .filter((opcion) => opcion.visible)
+              .map((opcion) => {
+                /*
+                  STOCK CON SUBMENU
+                */
+                if (
+                  opcion.texto === "Stock" &&
+                  opcion.submenu
+                ) {
+                  const stockActivo =
+                    location.pathname === "/stock" ||
+                    location.pathname.startsWith(
+                      "/stock-recortes"
+                    );
+
+                  return (
+                    <div
+                      key={opcion.ruta}
+                      className="navbar-dropdown"
+                    >
+                      <NavLink
+                        to="/stock"
+                        className={`navbar-link navbar-dropdown-link ${
+                          stockActivo ? "active" : ""
+                        }`}
+                      >
+                        Stock
+                        <span className="navbar-dropdown-arrow">
+                          ▾
+                        </span>
+                      </NavLink>
+
+                      <div className="navbar-dropdown-menu">
+                        {hasUtilidad("Stock") && (
+                          <NavLink
+                            to="/stock"
+                            className="navbar-dropdown-item"
+                          >
+                            Stock
+                          </NavLink>
+                        )}
+
+                        <NavLink
+                          to="/stock-recortes"
+                          className="navbar-dropdown-item"
+                        >
+                          Stock Recortes
+                        </NavLink>
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <NavLink
+                    key={opcion.ruta}
+                    to={opcion.ruta}
+                    className={linkClass}
+                  >
+                    {opcion.texto}
+                  </NavLink>
+                );
+              })}
+          </nav>
+
+          <div className="navbar-user-area">
+            {isAuth ? (
+              <>
+                <span
+                  className="navbar-user"
+                  title={displayName}
+                >
+                  {displayName}
+                </span>
+
+                <button
+                  type="button"
+                  className="navbar-logout"
+                  onClick={cerrarSesion}
+                >
+                  Salir
+                </button>
+              </>
+            ) : (
+              <NavLink
+                to="/login"
+                className="navbar-login"
+              >
+                Iniciar sesión
+              </NavLink>
+            )}
+
+            <img
+              src={logoAquatic}
+              alt="Aquatic"
+              className="logo-aquatic"
+            />
+          </div>
+        </header>
       </div>
-    </nav>
+
+      {menuMovilAbierto && (
+        <button
+          type="button"
+          className="navbar-overlay"
+          aria-label="Cerrar menú"
+          onClick={() => setMenuMovilAbierto(false)}
+        />
+      )}
+    </div>
   );
 }
 

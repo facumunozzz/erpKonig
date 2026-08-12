@@ -693,3 +693,82 @@ h2.module-title:hover::after {
 .tabla-scroll-top > div {
   height: 1px;
 }
+/* ===== Adaptación móvil KONIG ===== */
+@media (max-width: 767px) {
+  .stock-container {
+    margin-top: 8px;
+  }
+
+  .stock-container h2,
+  .stock-container .module-title {
+    font-size: 1.35rem;
+    line-height: 1.2;
+  }
+
+  .acciones {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .acciones input,
+  .acciones select,
+  .acciones button {
+    width: 100%;
+    min-height: 46px;
+  }
+
+  .tabla-stock-container,
+  .tabla-articulos-container {
+    width: calc(100vw - 24px);
+    max-width: 100%;
+    overflow-x: auto;
+    border: 1px solid #dbe3ec;
+    border-radius: 10px;
+    background: #fff;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tabla-stock,
+  .tabla-articulos {
+    min-width: 760px;
+  }
+
+  .tabla-stock th,
+  .tabla-stock td,
+  .tabla-articulos th,
+  .tabla-articulos td {
+    min-width: 110px;
+    padding: 9px 8px;
+  }
+
+  .tabla-stock th:first-child,
+  .tabla-stock td:first-child,
+  .tabla-articulos th:first-child,
+  .tabla-articulos td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #fff;
+    box-shadow: 2px 0 4px rgba(15, 23, 42, 0.08);
+  }
+
+  .tabla-stock thead th:first-child,
+  .tabla-articulos thead th:first-child {
+    background: #f4f4f4;
+    z-index: 3;
+  }
+
+  .paginado,
+  .paginado-pro {
+    justify-content: center;
+  }
+
+  .modal-content {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 32px);
+    padding: 20px;
+    overflow-y: auto;
+  }
+}

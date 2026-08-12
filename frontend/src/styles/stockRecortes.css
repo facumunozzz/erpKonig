@@ -435,3 +435,30 @@
   flex-wrap: wrap;
   gap: 10px;
 }
+/* ===== Refuerzo móvil para Stock de Recortes ===== */
+@media (max-width: 767px) {
+  .stock-recortes-page,
+  .stock-recortes-container {
+    width: 100%;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .stock-recortes-page .acciones,
+  .stock-recortes-container .acciones {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .stock-recortes-page .acciones button,
+  .stock-recortes-container .acciones button,
+  .stock-recortes-page input,
+  .stock-recortes-page select {
+    min-height: 46px;
+  }
+
+  .stock-recortes-page table,
+  .stock-recortes-container table {
+    min-width: 720px;
+  }
+}

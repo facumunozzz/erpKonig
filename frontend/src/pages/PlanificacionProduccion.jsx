@@ -1,0 +1,1852 @@
+import React, { useEffect, useMemo, useState } from "react";
+import "../styles/planificacionProduccion.css";
+
+const API_PLANIFICACION = "/api/planificacion-produccion";
+
+function normalizarTexto(valor) {
+  return String(valor ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+}
+
+const OPERACIONES_CARGA_AUTOMATICA = new Set([
+  "PREPARACION PERFIL",
+  "CORTE REFUERZO",
+  "CORTE PERFIL",
+  "MECANIZADO",
+  "SOLDADURA AUTO",
+  "ARMADO",
+  "ACRISTALADO",
+  "MOSQUITERO",
+]);
+
+const CLAVE_BORRADOR = "planificacionProduccion_borrador_v4";
+const CLAVE_HISTORICOS = "planificacionProduccion_historicos_v4";
+
+function obtenerSiguienteId(filas) {
+  if (!Array.isArray(filas) || filas.length === 0) {
+    return 1;
+  }
+
+  return Math.max(...filas.map((fila) => Number(fila.id) || 0)) + 1;
+}
+
+function crearFilaVacia(id) {
+  return {
+    id,
+    obra: "",
+    sectorId: "",
+    cantidad: "",
+    tiempoStd: "",
+    totalHoras: "",
+    fase: "",
+    cantidadesPorDia: {},
+  };
+}
+
+function crearFilaTipoMaterial(id) {
+  return {
+    id,
+    sectorId: "",
+    tipo: "",
+  };
+}
+
+function crearFilaMaterialExcluir(id) {
+  return {
+    id,
+    sectorId: "",
+    codigo: "",
+    descripcion: "",
+    idArticulo: null,
+    estado: "vacio",
+    mensaje: "",
+  };
+}
+
+function crearFilasIniciales() {
+  return Array.from({ length: 12 }, (_, indice) =>
+    crearFilaVacia(indice + 1)
+  );
+}
+
+function obtenerMesActual() {
+  const fecha = new Date();
+
+  return `${fecha.getFullYear()}-${String(
+    fecha.getMonth() + 1
+  ).padStart(2, "0")}`;
+}
+
+function obtenerDiasHabiles(anio, mes) {
+  const dias = [];
+  const fecha = new Date(anio, mes, 1);
+
+  while (fecha.getMonth() === mes) {
+    const diaSemana = fecha.getDay();
+
+    if (diaSemana !== 0 && diaSemana !== 6) {
+      dias.push(new Date(fecha));
+    }
+
+    fecha.setDate(fecha.getDate() + 1);
+  }
+
+  return dias;
+}
+
+function formatearDia(fecha) {
+  const texto = fecha.toLocaleDateString("es-AR", {
+    weekday: "long",
+  });
+
+  return texto.charAt(0).toUpperCase() + texto.slice(1).replace(".", "");
+}
+
+function formatearFecha(fecha) {
+  return fecha.toLocaleDateString("es-AR");
+}
+
+function crearClaveFecha(fecha) {
+  const anio = fecha.getFullYear();
+  const mes = String(fecha.getMonth() + 1).padStart(2, "0");
+  const dia = String(fecha.getDate()).padStart(2, "0");
+
+  return `${anio}-${mes}-${dia}`;
+}
+
+function convertirNumero(valor) {
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? numero : 0;
+}
+
+function calcularHoras(cantidad, tiempoStd) {
+  const cantidadNumero = convertirNumero(cantidad);
+  const tiempoNumero = convertirNumero(tiempoStd);
+
+  if (cantidadNumero <= 0 || tiempoNumero <= 0) {
+    return "";
+  }
+
+  return ((cantidadNumero * tiempoNumero) / 60).toFixed(2);
+}
+
+function leerLocalStorage(clave, valorPredeterminado) {
+  try {
+    const contenido = localStorage.getItem(clave);
+
+    return contenido ? JSON.parse(contenido) : valorPredeterminado;
+  } catch {
+    return valorPredeterminado;
+  }
+}
+
+async function solicitarJson(url, opciones = {}) {
+  const respuesta = await fetch(url, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(opciones.headers || {}),
+    },
+    ...opciones,
+  });
+
+  let contenido = null;
+
+  try {
+    contenido = await respuesta.json();
+  } catch {
+    contenido = null;
+  }
+
+  if (!respuesta.ok) {
+    throw new Error(
+      contenido?.error ||
+        contenido?.message ||
+        contenido?.detalle ||
+        `Error HTTP ${respuesta.status}`
+    );
+  }
+
+  return contenido;
+}
+
+function normalizarOperacion(fila) {
+  return {
+    id: Number(fila.id_operacion ?? fila.id),
+    nombre: String(fila.nombre ?? fila.operacion ?? "").trim(),
+    tiempoStd: fila.tiempo_std ?? fila.tiempoStd ?? 0,
+  };
+}
+
+function normalizarTipoMaterial(fila, indice) {
+  return {
+    id: Number(fila.id_tipo_material ?? fila.id ?? indice + 1),
+    sectorId: String(fila.id_operacion ?? fila.sectorId ?? ""),
+    tipo: String(fila.tipo ?? "").trim(),
+  };
+}
+
+function normalizarMaterialExcluir(fila, indice) {
+  return {
+    id: Number(fila.id_material_excluir ?? fila.id ?? indice + 1),
+    sectorId: String(fila.id_operacion ?? fila.sectorId ?? ""),
+    codigo: String(fila.codigo ?? "").trim(),
+    descripcion: String(fila.descripcion ?? "").trim(),
+    idArticulo: Number(fila.id_articulo ?? fila.idArticulo) || null,
+    estado: fila.id_articulo || fila.idArticulo ? "valido" : "pendiente",
+    mensaje: "",
+  };
+}
+
+function PlanificacionProduccion() {
+  const borradorInicial = leerLocalStorage(CLAVE_BORRADOR, null);
+
+  const [mesSeleccionado, setMesSeleccionado] = useState(
+    borradorInicial?.mesSeleccionado || obtenerMesActual()
+  );
+
+  const [sectores, setSectores] = useState([]);
+  const [obras, setObras] = useState(() =>
+    Array.isArray(borradorInicial?.obras) && borradorInicial.obras.length
+      ? borradorInicial.obras
+      : crearFilasIniciales()
+  );
+
+  const [tiposMaterialPorOperacion, setTiposMaterialPorOperacion] =
+    useState([]);
+  const [materialesExcluir, setMaterialesExcluir] = useState([]);
+  const [tiposArticulos, setTiposArticulos] = useState([]);
+
+  const [cargandoConfiguracion, setCargandoConfiguracion] = useState(true);
+  const [guardandoConfiguracion, setGuardandoConfiguracion] = useState(false);
+  const [filaCalculando, setFilaCalculando] = useState(null);
+  const [errorGeneral, setErrorGeneral] = useState("");
+  const [errorTipos, setErrorTipos] = useState("");
+
+  const [modalTiemposAbierto, setModalTiemposAbierto] = useState(false);
+  const [modalTiposMaterialAbierto, setModalTiposMaterialAbierto] =
+    useState(false);
+  const [modalExcluirAbierto, setModalExcluirAbierto] = useState(false);
+  const [modalHistoricoAbierto, setModalHistoricoAbierto] = useState(false);
+
+  const [mesHistorico, setMesHistorico] = useState(obtenerMesActual());
+  const [nuevoSector, setNuevoSector] = useState("");
+
+  const diasHabiles = useMemo(() => {
+    if (!mesSeleccionado) {
+      return [];
+    }
+
+    const [anio, mes] = mesSeleccionado.split("-").map(Number);
+
+    return obtenerDiasHabiles(anio, mes - 1);
+  }, [mesSeleccionado]);
+
+  const sectoresPorId = useMemo(() => {
+    return sectores.reduce((resultado, sector) => {
+      resultado[String(sector.id)] = sector;
+      return resultado;
+    }, {});
+  }, [sectores]);
+
+  const totalesPorSectorYFecha = useMemo(() => {
+    const totales = {};
+
+    obras.forEach((obra) => {
+      if (!obra.sectorId) {
+        return;
+      }
+
+      const tiempoStd = convertirNumero(obra.tiempoStd);
+
+      if (tiempoStd <= 0) {
+        return;
+      }
+
+      Object.entries(obra.cantidadesPorDia || {}).forEach(
+        ([claveFecha, cantidad]) => {
+          const cantidadNumero = convertirNumero(cantidad);
+
+          if (cantidadNumero <= 0) {
+            return;
+          }
+
+          const clave = `${obra.sectorId}-${claveFecha}`;
+
+          totales[clave] =
+            (totales[clave] || 0) +
+            (cantidadNumero * tiempoStd) / 60;
+        }
+      );
+    });
+
+    return totales;
+  }, [obras]);
+
+  useEffect(() => {
+    const cargarConfiguracionInicial = async () => {
+      try {
+        setCargandoConfiguracion(true);
+        setErrorGeneral("");
+
+        const [
+          operacionesRespuesta,
+          tiposRespuesta,
+          tiposMaterialRespuesta,
+          materialesExcluirRespuesta,
+        ] = await Promise.all([
+          solicitarJson(`${API_PLANIFICACION}/operaciones`),
+          solicitarJson(`${API_PLANIFICACION}/tipos-articulos`),
+          solicitarJson(`${API_PLANIFICACION}/tipos-material`),
+          solicitarJson(`${API_PLANIFICACION}/materiales-excluir`),
+        ]);
+
+        const operacionesNormalizadas = Array.isArray(operacionesRespuesta)
+          ? operacionesRespuesta.map(normalizarOperacion)
+          : [];
+
+        setSectores(operacionesNormalizadas);
+        setTiposArticulos(
+          Array.isArray(tiposRespuesta)
+            ? tiposRespuesta
+                .map((tipo) => String(tipo || "").trim())
+                .filter(Boolean)
+            : []
+        );
+        setTiposMaterialPorOperacion(
+          Array.isArray(tiposMaterialRespuesta)
+            ? tiposMaterialRespuesta.map(normalizarTipoMaterial)
+            : []
+        );
+        setMaterialesExcluir(
+          Array.isArray(materialesExcluirRespuesta)
+            ? materialesExcluirRespuesta.map(normalizarMaterialExcluir)
+            : []
+        );
+
+        if (operacionesNormalizadas.length > 0) {
+          setObras((estadoAnterior) =>
+            estadoAnterior.map((obra) => {
+              const sector =
+                operacionesNormalizadas.find(
+                  (item) => String(item.id) === String(obra.sectorId)
+                ) || null;
+
+              if (!sector) {
+                return obra;
+              }
+
+              return {
+                ...obra,
+                tiempoStd: String(sector.tiempoStd ?? ""),
+                totalHoras: calcularHoras(
+                  obra.cantidad,
+                  sector.tiempoStd
+                ),
+              };
+            })
+          );
+        }
+      } catch (error) {
+        console.error("Error al cargar configuración:", error);
+        setErrorGeneral(
+          `${error.message}. Verificá que el router esté montado en ${API_PLANIFICACION}.`
+        );
+      } finally {
+        setCargandoConfiguracion(false);
+      }
+    };
+
+    cargarConfiguracionInicial();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(
+      CLAVE_BORRADOR,
+      JSON.stringify({
+        mesSeleccionado,
+        obras,
+      })
+    );
+  }, [mesSeleccionado, obras]);
+
+  const recargarOperaciones = async () => {
+    const respuesta = await solicitarJson(
+      `${API_PLANIFICACION}/operaciones`
+    );
+
+    const operacionesNormalizadas = Array.isArray(respuesta)
+      ? respuesta.map(normalizarOperacion)
+      : [];
+
+    setSectores(operacionesNormalizadas);
+    return operacionesNormalizadas;
+  };
+
+  const recargarTiposMaterial = async () => {
+    const respuesta = await solicitarJson(
+      `${API_PLANIFICACION}/tipos-material`
+    );
+
+    setTiposMaterialPorOperacion(
+      Array.isArray(respuesta)
+        ? respuesta.map(normalizarTipoMaterial)
+        : []
+    );
+  };
+
+  const recargarMaterialesExcluir = async () => {
+    const respuesta = await solicitarJson(
+      `${API_PLANIFICACION}/materiales-excluir`
+    );
+
+    setMaterialesExcluir(
+      Array.isArray(respuesta)
+        ? respuesta.map(normalizarMaterialExcluir)
+        : []
+    );
+  };
+
+  const actualizarObra = (id, campo, valor) => {
+    setObras((estadoAnterior) =>
+      estadoAnterior.map((obra) => {
+        if (obra.id !== id) {
+          return obra;
+        }
+
+        const actualizada = {
+          ...obra,
+          [campo]: valor,
+        };
+
+        if (campo === "sectorId") {
+          const sector = sectoresPorId[String(valor)];
+
+          actualizada.tiempoStd = sector
+            ? String(sector.tiempoStd ?? "")
+            : "";
+        }
+
+        actualizada.totalHoras = calcularHoras(
+          actualizada.cantidad,
+          actualizada.tiempoStd
+        );
+
+        return actualizada;
+      })
+    );
+  };
+
+  const actualizarCantidadDia = (id, fecha, valor) => {
+    const claveFecha = crearClaveFecha(fecha);
+
+    setObras((estadoAnterior) =>
+      estadoAnterior.map((obra) =>
+        obra.id === id
+          ? {
+              ...obra,
+              cantidadesPorDia: {
+                ...obra.cantidadesPorDia,
+                [claveFecha]: valor,
+              },
+            }
+          : obra
+      )
+    );
+  };
+
+  const agregarFila = () => {
+    setObras((estadoAnterior) => [
+      ...estadoAnterior,
+      crearFilaVacia(obtenerSiguienteId(estadoAnterior)),
+    ]);
+  };
+
+  const eliminarFila = (id) => {
+    setObras((estadoAnterior) =>
+      estadoAnterior.filter((obra) => obra.id !== id)
+    );
+  };
+
+  const actualizarTiempoSectorLocal = (id, valor) => {
+    setSectores((estadoAnterior) =>
+      estadoAnterior.map((sector) =>
+        sector.id === id ? { ...sector, tiempoStd: valor } : sector
+      )
+    );
+
+    setObras((estadoAnterior) =>
+      estadoAnterior.map((obra) => {
+        if (String(obra.sectorId) !== String(id)) {
+          return obra;
+        }
+
+        return {
+          ...obra,
+          tiempoStd: valor,
+          totalHoras: calcularHoras(obra.cantidad, valor),
+        };
+      })
+    );
+  };
+
+  const guardarTiempoSector = async (sector) => {
+    try {
+      setErrorGeneral("");
+
+      await solicitarJson(
+        `${API_PLANIFICACION}/operaciones/${sector.id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            nombre: sector.nombre,
+            tiempo_std: convertirNumero(sector.tiempoStd),
+          }),
+        }
+      );
+
+      await recargarOperaciones();
+    } catch (error) {
+      console.error("Error al guardar tiempo estándar:", error);
+      setErrorGeneral(error.message);
+      window.alert(error.message);
+    }
+  };
+
+  const agregarSector = async () => {
+    const nombre = nuevoSector.trim();
+
+    if (!nombre) {
+      return;
+    }
+
+    try {
+      setErrorGeneral("");
+
+      await solicitarJson(`${API_PLANIFICACION}/operaciones`, {
+        method: "POST",
+        body: JSON.stringify({
+          nombre,
+          tiempo_std: 0,
+        }),
+      });
+
+      await recargarOperaciones();
+      setNuevoSector("");
+    } catch (error) {
+      console.error("Error al crear operación:", error);
+      setErrorGeneral(error.message);
+      window.alert(error.message);
+    }
+  };
+
+  const eliminarSector = async (id) => {
+    const sectorUsado = obras.some(
+      (obra) => String(obra.sectorId) === String(id)
+    );
+
+    if (sectorUsado) {
+      window.alert(
+        "La operación está siendo utilizada en la planificación."
+      );
+      return;
+    }
+
+    if (!window.confirm("¿Eliminar esta operación?")) {
+      return;
+    }
+
+    try {
+      await solicitarJson(
+        `${API_PLANIFICACION}/operaciones/${id}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      await Promise.all([
+        recargarOperaciones(),
+        recargarTiposMaterial(),
+        recargarMaterialesExcluir(),
+      ]);
+    } catch (error) {
+      console.error("Error al eliminar operación:", error);
+      window.alert(error.message);
+    }
+  };
+
+  const agregarFilaTipoMaterial = () => {
+    setTiposMaterialPorOperacion((estadoAnterior) => [
+      ...estadoAnterior,
+      crearFilaTipoMaterial(obtenerSiguienteId(estadoAnterior)),
+    ]);
+  };
+
+  const actualizarFilaTipoMaterial = (id, campo, valor) => {
+    setTiposMaterialPorOperacion((estadoAnterior) =>
+      estadoAnterior.map((fila) =>
+        fila.id === id ? { ...fila, [campo]: valor } : fila
+      )
+    );
+  };
+
+  const eliminarFilaTipoMaterial = (id) => {
+    setTiposMaterialPorOperacion((estadoAnterior) =>
+      estadoAnterior.filter((fila) => fila.id !== id)
+    );
+  };
+
+  const guardarTiposMaterial = async () => {
+    const filasIncompletas = tiposMaterialPorOperacion.some(
+      (fila) => !fila.sectorId || !fila.tipo
+    );
+
+    if (filasIncompletas) {
+      window.alert(
+        "Todas las filas deben tener una operación y un tipo de material."
+      );
+      return;
+    }
+
+    try {
+      setGuardandoConfiguracion(true);
+      setErrorTipos("");
+
+      await solicitarJson(`${API_PLANIFICACION}/tipos-material`, {
+        method: "PUT",
+        body: JSON.stringify({
+          filas: tiposMaterialPorOperacion.map((fila) => ({
+            id_operacion: Number(fila.sectorId),
+            tipo: fila.tipo,
+          })),
+        }),
+      });
+
+      await recargarTiposMaterial();
+      setModalTiposMaterialAbierto(false);
+    } catch (error) {
+      console.error("Error al guardar tipos de material:", error);
+      setErrorTipos(error.message);
+    } finally {
+      setGuardandoConfiguracion(false);
+    }
+  };
+
+  const agregarFilaMaterialExcluir = () => {
+    setMaterialesExcluir((estadoAnterior) => [
+      ...estadoAnterior,
+      crearFilaMaterialExcluir(obtenerSiguienteId(estadoAnterior)),
+    ]);
+  };
+
+  const actualizarFilaMaterialExcluir = (id, campo, valor) => {
+    setMaterialesExcluir((estadoAnterior) =>
+      estadoAnterior.map((fila) => {
+        if (fila.id !== id) {
+          return fila;
+        }
+
+        if (campo === "codigo") {
+          return {
+            ...fila,
+            codigo: valor.toUpperCase(),
+            descripcion: "",
+            idArticulo: null,
+            estado: valor.trim() ? "pendiente" : "vacio",
+            mensaje: "",
+          };
+        }
+
+        return {
+          ...fila,
+          [campo]: valor,
+        };
+      })
+    );
+  };
+
+  const buscarMaterialExcluir = async (id) => {
+    const fila = materialesExcluir.find((item) => item.id === id);
+    const codigo = String(fila?.codigo || "").trim();
+
+    if (!codigo) {
+      return;
+    }
+
+    setMaterialesExcluir((estadoAnterior) =>
+      estadoAnterior.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              estado: "buscando",
+              mensaje: "",
+            }
+          : item
+      )
+    );
+
+    try {
+      const articulo = await solicitarJson(
+        `${API_PLANIFICACION}/articulos/codigo/${encodeURIComponent(
+          codigo
+        )}`
+      );
+
+      setMaterialesExcluir((estadoAnterior) =>
+        estadoAnterior.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                codigo: String(articulo.codigo || codigo),
+                descripcion: String(articulo.descripcion || ""),
+                idArticulo: Number(articulo.id_articulo) || null,
+                estado: articulo.id_articulo ? "valido" : "inexistente",
+                mensaje: articulo.id_articulo
+                  ? ""
+                  : "El código no existe.",
+              }
+            : item
+        )
+      );
+    } catch (error) {
+      setMaterialesExcluir((estadoAnterior) =>
+        estadoAnterior.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                descripcion: "",
+                idArticulo: null,
+                estado:
+                  String(error.message).toLowerCase().includes("no encontrado")
+                    ? "inexistente"
+                    : "error",
+                mensaje: error.message,
+              }
+            : item
+        )
+      );
+    }
+  };
+
+  const eliminarFilaMaterialExcluir = (id) => {
+    setMaterialesExcluir((estadoAnterior) =>
+      estadoAnterior.filter((fila) => fila.id !== id)
+    );
+  };
+
+  const guardarMaterialesExcluir = async () => {
+    const filasIncompletas = materialesExcluir.some(
+      (fila) =>
+        !fila.sectorId ||
+        !fila.idArticulo ||
+        fila.estado !== "valido"
+    );
+
+    if (filasIncompletas) {
+      window.alert(
+        "Todas las filas deben tener operación y un código de artículo válido."
+      );
+      return;
+    }
+
+    try {
+      setGuardandoConfiguracion(true);
+
+      await solicitarJson(
+        `${API_PLANIFICACION}/materiales-excluir`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            filas: materialesExcluir.map((fila) => ({
+              id_operacion: Number(fila.sectorId),
+              id_articulo: Number(fila.idArticulo),
+            })),
+          }),
+        }
+      );
+
+      await recargarMaterialesExcluir();
+      setModalExcluirAbierto(false);
+    } catch (error) {
+      console.error("Error al guardar materiales excluidos:", error);
+      window.alert(error.message);
+    } finally {
+      setGuardandoConfiguracion(false);
+    }
+  };
+
+  const cargarOperacionesDeFila = async (filaOrigen) => {
+    const obraVersion = String(filaOrigen.obra || "")
+      .trim()
+      .replace(",", ".");
+    const faseTexto = String(filaOrigen.fase || "").trim();
+    const fase = Number(faseTexto);
+
+    if (!obraVersion || !obraVersion.includes(".")) {
+      window.alert(
+        "Ingrese Obra/Versión con el formato OBRA.VERSION, por ejemplo 12345.2."
+      );
+      return;
+    }
+
+    if (!Number.isInteger(fase)) {
+      window.alert("La fase debe ser un número entero.");
+      return;
+    }
+
+    const obraNormalizada = obraVersion.toUpperCase();
+
+    const yaExiste = obras.some(
+      (obra) =>
+        obra.id !== filaOrigen.id &&
+        String(obra.obra || "")
+          .trim()
+          .replace(",", ".")
+          .toUpperCase() === obraNormalizada &&
+        Number(obra.fase) === fase
+    );
+
+    if (yaExiste) {
+      const continuar = window.confirm(
+        `Ya existen operaciones cargadas para la obra ${obraVersion}, fase ${fase}.\n\n` +
+          "Si continúa, se agregará un nuevo conjunto sin eliminar las filas existentes.\n\n" +
+          "¿Desea continuar?"
+      );
+
+      if (!continuar) {
+        return;
+      }
+    }
+
+    try {
+      setFilaCalculando(filaOrigen.id);
+      setErrorGeneral("");
+
+      const respuesta = await solicitarJson(
+        `${API_PLANIFICACION}/calcular-materiales`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            obraVersion,
+            fase,
+          }),
+        }
+      );
+
+      const operacionesRespuesta = Array.isArray(
+        respuesta?.operaciones
+      )
+        ? respuesta.operaciones.filter((operacion) =>
+            OPERACIONES_CARGA_AUTOMATICA.has(
+              normalizarTexto(operacion.operacion)
+            )
+          )
+        : [];
+
+      if (operacionesRespuesta.length === 0) {
+        window.alert(
+          "La consulta no devolvió ninguna de las operaciones habilitadas para carga automática."
+        );
+        return;
+      }
+
+      setObras((estadoAnterior) => {
+        const siguienteIdInicial =
+          obtenerSiguienteId(estadoAnterior);
+
+        const nuevasFilas = operacionesRespuesta.map(
+          (operacion, indice) => {
+            const cantidad = convertirNumero(
+              operacion.cantidad
+            );
+            const tiempoStd = convertirNumero(
+              operacion.tiempo_std
+            );
+
+            return {
+              ...crearFilaVacia(
+                siguienteIdInicial + indice
+              ),
+              obra: respuesta.obraVersion || obraVersion,
+              sectorId: String(
+                operacion.id_operacion
+              ),
+              cantidad:
+                cantidad === 0 ? "0" : String(cantidad),
+              tiempoStd: String(tiempoStd),
+              totalHoras: calcularHoras(
+                cantidad,
+                tiempoStd
+              ),
+              fase: String(respuesta.fase ?? fase),
+            };
+          }
+        );
+
+        const filaOrigenVacia =
+          !filaOrigen.sectorId &&
+          !filaOrigen.cantidad &&
+          !filaOrigen.tiempoStd &&
+          !filaOrigen.totalHoras &&
+          Object.keys(
+            filaOrigen.cantidadesPorDia || {}
+          ).length === 0;
+
+        if (filaOrigenVacia) {
+          return [
+            ...estadoAnterior.filter(
+              (obra) => obra.id !== filaOrigen.id
+            ),
+            ...nuevasFilas,
+          ];
+        }
+
+        return [...estadoAnterior, ...nuevasFilas];
+      });
+
+      const ignorados =
+        respuesta?.materialesIgnorados?.length || 0;
+      const excluidos =
+        respuesta?.materialesExcluidos?.length || 0;
+
+      window.alert(
+        `Se agregaron ${operacionesRespuesta.length} operaciones.\n` +
+          `Materiales ignorados: ${ignorados}.\n` +
+          `Materiales excluidos: ${excluidos}.`
+      );
+    } catch (error) {
+      console.error(
+        "Error al cargar operaciones:",
+        error
+      );
+      setErrorGeneral(error.message);
+      window.alert(error.message);
+    } finally {
+      setFilaCalculando(null);
+    }
+  };
+
+  const guardarHistorico = () => {
+    if (!mesSeleccionado) {
+      window.alert("Debe seleccionar un mes.");
+      return;
+    }
+
+    const historicos = leerLocalStorage(CLAVE_HISTORICOS, {});
+
+    historicos[mesSeleccionado] = {
+      mesSeleccionado,
+      obras,
+      fechaGuardado: new Date().toISOString(),
+    };
+
+    localStorage.setItem(
+      CLAVE_HISTORICOS,
+      JSON.stringify(historicos)
+    );
+
+    window.alert(
+      `La planificación de ${mesSeleccionado} fue guardada.`
+    );
+  };
+
+  const cargarHistorico = () => {
+    const historicos = leerLocalStorage(CLAVE_HISTORICOS, {});
+    const historico = historicos[mesHistorico];
+
+    if (!historico) {
+      window.alert(
+        "No existe una planificación guardada para ese mes."
+      );
+      return;
+    }
+
+    setMesSeleccionado(historico.mesSeleccionado);
+    setObras(
+      Array.isArray(historico.obras)
+        ? historico.obras
+        : crearFilasIniciales()
+    );
+    setModalHistoricoAbierto(false);
+  };
+
+  return (
+    <section className="planificacion-produccion">
+      <div className="planificacion-encabezado">
+        <h2 className="module-title">
+          Planificación de Producción
+        </h2>
+
+        <label className="selector-mes">
+          <span>Mes de planificación</span>
+
+          <input
+            type="month"
+            value={mesSeleccionado}
+            onChange={(event) =>
+              setMesSeleccionado(event.target.value)
+            }
+          />
+        </label>
+      </div>
+
+      {errorGeneral && (
+        <div className="mensaje-consulta error">
+          {errorGeneral}
+        </div>
+      )}
+
+      {cargandoConfiguracion && (
+        <div className="mensaje-consulta">
+          Cargando operaciones y configuraciones...
+        </div>
+      )}
+
+      <div className="planificacion-acciones">
+        <button
+          type="button"
+          onClick={() => setModalTiemposAbierto(true)}
+        >
+          Tiempos STD
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setErrorTipos("");
+            setModalTiposMaterialAbierto(true);
+          }}
+        >
+          Tipos de material
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setModalExcluirAbierto(true)}
+        >
+          Materiales a excluir
+        </button>
+
+        <button type="button" onClick={guardarHistorico}>
+          Guardar
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setMesHistorico(mesSeleccionado);
+            setModalHistoricoAbierto(true);
+          }}
+        >
+          Cargar histórico
+        </button>
+      </div>
+
+      <div className="planificacion-bloque">
+        <div className="planificacion-scroll">
+          <table className="tabla-planificacion tabla-sectores">
+            <thead>
+              <tr>
+                <th
+                  className="columna-sector columna-fija"
+                  rowSpan={2}
+                >
+                  Sectores
+                </th>
+
+                {diasHabiles.map((fecha, indice) => (
+                  <th
+                    key={crearClaveFecha(fecha)}
+                    className={
+                      fecha.getDay() === 1 && indice !== 0
+                        ? "inicio-semana"
+                        : ""
+                    }
+                  >
+                    {formatearDia(fecha)}
+                  </th>
+                ))}
+              </tr>
+
+              <tr>
+                {diasHabiles.map((fecha, indice) => (
+                  <th
+                    key={crearClaveFecha(fecha)}
+                    className={
+                      fecha.getDay() === 1 && indice !== 0
+                        ? "inicio-semana"
+                        : ""
+                    }
+                  >
+                    {formatearFecha(fecha)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+
+            <tbody>
+              {sectores.map((sector) => (
+                <tr key={sector.id}>
+                  <td className="columna-sector columna-fija">
+                    {sector.nombre}
+                  </td>
+
+                  {diasHabiles.map((fecha, indice) => {
+                    const claveFecha = crearClaveFecha(fecha);
+                    const clave = `${sector.id}-${claveFecha}`;
+                    const total = totalesPorSectorYFecha[clave] || 0;
+
+                    return (
+                      <td
+                        key={clave}
+                        className={`celda-total-sector ${
+                          fecha.getDay() === 1 && indice !== 0
+                            ? "inicio-semana"
+                            : ""
+                        }`}
+                      >
+                        {total > 0 ? total.toFixed(2) : ""}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="planificacion-bloque">
+        <div className="planificacion-bloque-encabezado">
+          <button type="button" onClick={agregarFila}>
+            Agregar fila
+          </button>
+        </div>
+
+        <div className="planificacion-scroll">
+          <table className="tabla-planificacion tabla-obras">
+            <thead>
+              <tr>
+                <th
+                  className="columna-cargar"
+                  rowSpan={2}
+                >
+                  Cargar
+                </th>
+                <th
+                  className="columna-obra columna-fija-obra"
+                  rowSpan={2}
+                >
+                  Obra
+                </th>
+
+                <th className="columna-sector-obra" rowSpan={2}>
+                  Sector
+                </th>
+
+                <th className="columna-cantidad" rowSpan={2}>
+                  Cantidad
+                </th>
+
+                <th className="columna-tiempo" rowSpan={2}>
+                  Tiempo STD
+                </th>
+
+                <th className="columna-total" rowSpan={2}>
+                  Total horas
+                </th>
+
+                <th className="columna-fase" rowSpan={2}>
+                  Fase
+                </th>
+
+                {diasHabiles.map((fecha, indice) => (
+                  <th
+                    key={crearClaveFecha(fecha)}
+                    className={
+                      fecha.getDay() === 1 && indice !== 0
+                        ? "inicio-semana"
+                        : ""
+                    }
+                  >
+                    {formatearDia(fecha)}
+                  </th>
+                ))}
+
+                <th
+                  className="columna-acciones"
+                  rowSpan={2}
+                >
+                  Eliminar
+                </th>
+              </tr>
+
+              <tr>
+                {diasHabiles.map((fecha, indice) => (
+                  <th
+                    key={crearClaveFecha(fecha)}
+                    className={
+                      fecha.getDay() === 1 && indice !== 0
+                        ? "inicio-semana"
+                        : ""
+                    }
+                  >
+                    {formatearFecha(fecha)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+
+            <tbody>
+              {obras.map((obra) => (
+  <tr key={obra.id}>
+    <td className="celda-cargar">
+      <button
+        type="button"
+        className="boton-cargar-operaciones"
+        onClick={() =>
+          cargarOperacionesDeFila(obra)
+        }
+        disabled={filaCalculando !== null}
+        title="Cargar operaciones y materiales"
+      >
+        {filaCalculando === obra.id
+          ? "..."
+          : "Cargar"}
+      </button>
+    </td>
+
+    <td className="columna-fija-obra">
+      <input
+        type="text"
+        value={obra.obra}
+        placeholder="Obra/Versión"
+        onChange={(event) =>
+          actualizarObra(
+            obra.id,
+            "obra",
+            event.target.value
+          )
+        }
+      />
+    </td>
+
+                  <td>
+                    <select
+                      value={obra.sectorId}
+                      onChange={(event) =>
+                        actualizarObra(
+                          obra.id,
+                          "sectorId",
+                          event.target.value
+                        )
+                      }
+                    >
+                      <option value="">Seleccionar</option>
+
+                      {sectores.map((sector) => (
+                        <option key={sector.id} value={sector.id}>
+                          {sector.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+
+                  <td>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={obra.cantidad}
+                      onChange={(event) =>
+                        actualizarObra(
+                          obra.id,
+                          "cantidad",
+                          event.target.value
+                        )
+                      }
+                    />
+                  </td>
+
+                  <td>
+                    <input
+                      type="number"
+                      value={obra.tiempoStd}
+                      readOnly
+                      className="campo-calculado"
+                    />
+                  </td>
+
+                  <td>
+                    <input
+                      type="number"
+                      value={obra.totalHoras}
+                      readOnly
+                      className="campo-calculado"
+                    />
+                  </td>
+
+                  <td>
+                    <input
+                      type="text"
+                      value={obra.fase}
+                      placeholder="Fase"
+                      onChange={(event) =>
+                        actualizarObra(
+                          obra.id,
+                          "fase",
+                          event.target.value
+                        )
+                      }
+                    />
+                  </td>
+
+                  {diasHabiles.map((fecha, indice) => {
+                    const claveFecha = crearClaveFecha(fecha);
+                    const cantidadPlanificada =
+                      obra.cantidadesPorDia?.[claveFecha] || "";
+
+                    const horasPlanificadas = calcularHoras(
+                      cantidadPlanificada,
+                      obra.tiempoStd
+                    );
+
+                    return (
+                      <td
+                        key={claveFecha}
+                        className={
+                          fecha.getDay() === 1 && indice !== 0
+                            ? "inicio-semana"
+                            : ""
+                        }
+                      >
+                        <div className="celda-planificacion-dia">
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={cantidadPlanificada}
+                            onChange={(event) =>
+                              actualizarCantidadDia(
+                                obra.id,
+                                fecha,
+                                event.target.value
+                              )
+                            }
+                          />
+
+                          {horasPlanificadas && (
+                            <span>{horasPlanificadas} h</span>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })}
+
+                  <td className="celda-acciones">
+                    <button
+                      type="button"
+                      className="boton-eliminar-fila"
+                      onClick={() => eliminarFila(obra.id)}
+                      disabled={filaCalculando !== null}
+                      title="Eliminar fila"
+                    >
+                      ×
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {modalTiemposAbierto && (
+        <div
+          className="planificacion-modal-overlay"
+          onMouseDown={() => setModalTiemposAbierto(false)}
+        >
+          <div
+            className="planificacion-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="planificacion-modal-header">
+              <div>
+                <h3>Tiempos estándar</h3>
+                <span>Tiempo expresado en minutos</span>
+              </div>
+
+              <button
+                type="button"
+                className="planificacion-modal-cerrar"
+                onClick={() => setModalTiemposAbierto(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="planificacion-modal-body">
+              <div className="nuevo-sector">
+                <input
+                  type="text"
+                  value={nuevoSector}
+                  placeholder="Nueva operación"
+                  onChange={(event) =>
+                    setNuevoSector(event.target.value)
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      agregarSector();
+                    }
+                  }}
+                />
+
+                <button type="button" onClick={agregarSector}>
+                  Agregar
+                </button>
+              </div>
+
+              <div className="tabla-tiempos-wrapper">
+                <table className="tabla-tiempos-std">
+                  <thead>
+                    <tr>
+                      <th>Operación</th>
+                      <th>Tiempo STD</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {sectores.map((sector) => (
+                      <tr key={sector.id}>
+                        <td>{sector.nombre}</td>
+
+                        <td>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={sector.tiempoStd}
+                            onChange={(event) =>
+                              actualizarTiempoSectorLocal(
+                                sector.id,
+                                event.target.value
+                              )
+                            }
+                            onBlur={() =>
+                              guardarTiempoSector(sector)
+                            }
+                          />
+                        </td>
+
+                        <td>
+                          <button
+                            type="button"
+                            className="boton-eliminar-tiempo"
+                            onClick={() => eliminarSector(sector.id)}
+                          >
+                            Eliminar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="planificacion-modal-footer">
+              <button
+                type="button"
+                onClick={() => setModalTiemposAbierto(false)}
+              >
+                Aceptar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalTiposMaterialAbierto && (
+        <div
+          className="planificacion-modal-overlay"
+          onMouseDown={() => setModalTiposMaterialAbierto(false)}
+        >
+          <div
+            className="planificacion-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="planificacion-modal-header">
+              <div>
+                <h3>Tipos de material</h3>
+                <span>
+                  Relación entre operación y tipo de artículo
+                </span>
+              </div>
+
+              <button
+                type="button"
+                className="planificacion-modal-cerrar"
+                onClick={() => setModalTiposMaterialAbierto(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="planificacion-modal-body">
+              <div className="configuracion-modal-acciones">
+                <button
+                  type="button"
+                  onClick={agregarFilaTipoMaterial}
+                >
+                  Agregar fila
+                </button>
+              </div>
+
+              {errorTipos && (
+                <div className="mensaje-consulta error">
+                  {errorTipos}
+                </div>
+              )}
+
+              <div className="tabla-configuracion-wrapper">
+                <table className="tabla-configuracion">
+                  <thead>
+                    <tr>
+                      <th>Operación</th>
+                      <th>Tipo de material</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {tiposMaterialPorOperacion.length === 0 && (
+                      <tr>
+                        <td colSpan={3} className="tabla-vacia">
+                          No hay relaciones cargadas.
+                        </td>
+                      </tr>
+                    )}
+
+                    {tiposMaterialPorOperacion.map((fila) => (
+                      <tr key={fila.id}>
+                        <td>
+                          <select
+                            value={fila.sectorId}
+                            onChange={(event) =>
+                              actualizarFilaTipoMaterial(
+                                fila.id,
+                                "sectorId",
+                                event.target.value
+                              )
+                            }
+                          >
+                            <option value="">Seleccionar</option>
+
+                            {sectores.map((sector) => (
+                              <option
+                                key={sector.id}
+                                value={sector.id}
+                              >
+                                {sector.nombre}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+
+                        <td>
+                          <select
+                            value={fila.tipo}
+                            onChange={(event) =>
+                              actualizarFilaTipoMaterial(
+                                fila.id,
+                                "tipo",
+                                event.target.value
+                              )
+                            }
+                          >
+                            <option value="">Seleccionar</option>
+
+                            {tiposArticulos.map((tipo) => (
+                              <option key={tipo} value={tipo}>
+                                {tipo}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+
+                        <td>
+                          <button
+                            type="button"
+                            className="boton-eliminar-configuracion"
+                            onClick={() =>
+                              eliminarFilaTipoMaterial(fila.id)
+                            }
+                          >
+                            Eliminar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="planificacion-modal-footer">
+              <button
+                type="button"
+                className="boton-secundario"
+                onClick={() => setModalTiposMaterialAbierto(false)}
+                disabled={guardandoConfiguracion}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={guardarTiposMaterial}
+                disabled={guardandoConfiguracion}
+              >
+                {guardandoConfiguracion ? "Guardando..." : "Guardar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalExcluirAbierto && (
+        <div
+          className="planificacion-modal-overlay"
+          onMouseDown={() => setModalExcluirAbierto(false)}
+        >
+          <div
+            className="planificacion-modal planificacion-modal-grande"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="planificacion-modal-header">
+              <div>
+                <h3>Materiales a excluir</h3>
+                <span>
+                  Artículos que no deberán considerarse en una operación
+                </span>
+              </div>
+
+              <button
+                type="button"
+                className="planificacion-modal-cerrar"
+                onClick={() => setModalExcluirAbierto(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="planificacion-modal-body">
+              <div className="configuracion-modal-acciones">
+                <button
+                  type="button"
+                  onClick={agregarFilaMaterialExcluir}
+                >
+                  Agregar fila
+                </button>
+              </div>
+
+              <div className="tabla-configuracion-wrapper">
+                <table className="tabla-configuracion tabla-materiales-excluir">
+                  <thead>
+                    <tr>
+                      <th>Operación</th>
+                      <th>Código</th>
+                      <th>Descripción</th>
+                      <th>Estado</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {materialesExcluir.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="tabla-vacia">
+                          No hay materiales excluidos.
+                        </td>
+                      </tr>
+                    )}
+
+                    {materialesExcluir.map((fila) => (
+                      <tr key={fila.id}>
+                        <td>
+                          <select
+                            value={fila.sectorId}
+                            onChange={(event) =>
+                              actualizarFilaMaterialExcluir(
+                                fila.id,
+                                "sectorId",
+                                event.target.value
+                              )
+                            }
+                          >
+                            <option value="">Seleccionar</option>
+
+                            {sectores.map((sector) => (
+                              <option
+                                key={sector.id}
+                                value={sector.id}
+                              >
+                                {sector.nombre}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+
+                        <td>
+                          <input
+                            type="text"
+                            value={fila.codigo}
+                            placeholder="Código"
+                            onChange={(event) =>
+                              actualizarFilaMaterialExcluir(
+                                fila.id,
+                                "codigo",
+                                event.target.value
+                              )
+                            }
+                            onBlur={() =>
+                              buscarMaterialExcluir(fila.id)
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                buscarMaterialExcluir(fila.id);
+                              }
+                            }}
+                          />
+                        </td>
+
+                        <td>
+                          <input
+                            type="text"
+                            value={fila.descripcion}
+                            readOnly
+                            placeholder="Descripción"
+                            className="campo-configuracion-calculado"
+                          />
+                        </td>
+
+                        <td>
+                          <span
+                            className={`estado-material estado-${fila.estado}`}
+                            title={fila.mensaje}
+                          >
+                            {fila.estado === "buscando" && "Buscando..."}
+                            {fila.estado === "valido" && "Válido"}
+                            {fila.estado === "inexistente" && "No existe"}
+                            {fila.estado === "error" && "Error"}
+                            {(fila.estado === "vacio" ||
+                              fila.estado === "pendiente") &&
+                              "Pendiente"}
+                          </span>
+                        </td>
+
+                        <td>
+                          <button
+                            type="button"
+                            className="boton-eliminar-configuracion"
+                            onClick={() =>
+                              eliminarFilaMaterialExcluir(fila.id)
+                            }
+                          >
+                            Eliminar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="planificacion-modal-footer">
+              <button
+                type="button"
+                className="boton-secundario"
+                onClick={() => setModalExcluirAbierto(false)}
+                disabled={guardandoConfiguracion}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={guardarMaterialesExcluir}
+                disabled={guardandoConfiguracion}
+              >
+                {guardandoConfiguracion ? "Guardando..." : "Guardar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalHistoricoAbierto && (
+        <div
+          className="planificacion-modal-overlay"
+          onMouseDown={() => setModalHistoricoAbierto(false)}
+        >
+          <div
+            className="planificacion-modal planificacion-modal-pequeno"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="planificacion-modal-header">
+              <div>
+                <h3>Cargar histórico</h3>
+                <span>Seleccione el mes y el año</span>
+              </div>
+
+              <button
+                type="button"
+                className="planificacion-modal-cerrar"
+                onClick={() => setModalHistoricoAbierto(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="planificacion-modal-body">
+              <label className="campo-historico">
+                <span>Mes y año</span>
+
+                <input
+                  type="month"
+                  value={mesHistorico}
+                  onChange={(event) =>
+                    setMesHistorico(event.target.value)
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="planificacion-modal-footer">
+              <button
+                type="button"
+                className="boton-secundario"
+                onClick={() => setModalHistoricoAbierto(false)}
+              >
+                Cancelar
+              </button>
+
+              <button type="button" onClick={cargarHistorico}>
+                Cargar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export default PlanificacionProduccion;

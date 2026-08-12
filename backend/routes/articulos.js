@@ -1,22 +1,23 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const articulos = require('../controllers/articulos');
-const articulosController = require("../controllers/articulos");
 
-router.get('/codigo/:cod?', articulos.getArticuloByCodigo);
-router.get('/', articulos.getAllArticulos);
-router.get('/:id', articulos.getArticuloById);
-router.delete("/:id/full", articulosController.deleteArticuloFull);
+const articulos = require("../controllers/articulos");
 
-// nuevas rutas
-router.get('/:id/clasificaciones', articulos.getClasificacionesArticulo);
-router.post('/:id/clasificaciones', articulos.setClasificacionesArticulo);
+router.get("/tipos/listado", articulos.getTiposArticulos);
+router.get("/codigo/:cod?", articulos.getArticuloByCodigo);
+router.get("/", articulos.getAllArticulos);
+router.get("/:id", articulos.getArticuloById);
 
-// editar solo ubicación del artículo
+router.delete("/:id/full", articulos.deleteArticuloFull);
+
+router.get("/:id/clasificaciones", articulos.getClasificacionesArticulo);
+
+router.post("/:id/clasificaciones", articulos.setClasificacionesArticulo);
+
 router.patch("/:id/ubicacion", articulos.updateUbicacionArticulo);
 
-router.post('/', articulos.createArticulo);
-router.put('/:id', articulos.updateArticulo);
-router.delete('/:id', articulos.deleteArticulo);
+router.post("/", articulos.createArticulo);
+router.put("/:id", articulos.updateArticulo);
+router.delete("/:id", articulos.deleteArticulo);
 
 module.exports = router;

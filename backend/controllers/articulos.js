@@ -101,6 +101,36 @@ exports.getAllArticulos = async (req, res) => {
   }
 };
 
+exports.getTiposArticulos = async (req, res) => {
+  try {
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool.request().query(`
+      SET NOCOUNT ON;
+
+      SELECT DISTINCT
+        LTRIM(RTRIM(tipo)) AS tipo
+      FROM dbo.articulos
+      WHERE tipo IS NOT NULL
+        AND LTRIM(RTRIM(tipo)) <> ''
+      ORDER BY LTRIM(RTRIM(tipo));
+    `);
+
+    const tipos = (result.recordset || [])
+      .map((fila) => String(fila.tipo || "").trim())
+      .filter(Boolean);
+
+    return res.json(tipos);
+  } catch (err) {
+    console.error("Error en getTiposArticulos:", err);
+
+    return res.status(500).json({
+      error: "Error al obtener los tipos de artículos",
+      detalle: err.message,
+    });
+  }
+};
 // -----------------------------------------------------------------------------
 // OBTENER POR ID
 // -----------------------------------------------------------------------------
