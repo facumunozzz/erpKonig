@@ -49,6 +49,7 @@ function Movimientos() {
 
   const [pageSize, setPageSize] = useState(() => cargarPageSizeGuardado());
   const [gotoPage, setGotoPage] = useState("");
+  const [filtrosColumnas, setFiltrosColumnas] = useState({});
 
   const [loading, setLoading] = useState(false);
   const [loadedRows, setLoadedRows] = useState(0);
@@ -271,6 +272,7 @@ function Movimientos() {
   };
 
   const actualizarMovimientos = () => {
+    setFiltrosColumnas({});
     excel.clearAllFilters();
     cargarMovimientos();
   };
@@ -310,6 +312,7 @@ function Movimientos() {
   }, []);
 
   const limpiarFiltros = () => {
+    setFiltrosColumnas({});
     excel.clearAllFilters();
     setCurrentPage(1);
     setGotoPage("");
@@ -453,7 +456,29 @@ function Movimientos() {
     }
   };
 
-  const movimientosFiltrados = excel.rows;
+  const movimientosFiltrados = useMemo(() => {
+    return excel.rows.filter((movimiento) =>
+      columnas.every((col) => {
+        const filtro = String(filtrosColumnas[col.key] ?? "")
+          .trim()
+          .toLowerCase();
+
+        if (!filtro) {
+          return true;
+        }
+
+        const valor =
+          col.key === "fecha" || col.key === "fecha_real"
+            ? formatFecha(movimiento?.[col.key])
+            : movimiento?.[col.key];
+
+        return String(valor ?? "")
+          .toLowerCase()
+          .includes(filtro);
+      }),
+    );
+  }, [excel.rows, filtrosColumnas, columnas]);
+
   const totalRows = movimientosFiltrados.length;
   const totalPages = Math.ceil(totalRows / pageSize) || 1;
   const paginated = movimientosFiltrados.slice(
@@ -866,6 +891,33 @@ function Movimientos() {
               ))}
 
               <th>Acción</th>
+            </tr>
+
+            <tr>
+              {columnas.map((col) => (
+                <th key={`filtro-${col.key}`}>
+                  <input
+                    type="text"
+                    value={filtrosColumnas[col.key] || ""}
+                    placeholder="Filtrar..."
+                    onChange={(event) => {
+                      setFiltrosColumnas((prev) => ({
+                        ...prev,
+                        [col.key]: event.target.value,
+                      }));
+                      setCurrentPage(1);
+                    }}
+                    style={{
+                      width: "100%",
+                      minWidth: 0,
+                      boxSizing: "border-box",
+                      padding: "5px 7px",
+                    }}
+                  />
+                </th>
+              ))}
+
+              <th />
             </tr>
           </thead>
 

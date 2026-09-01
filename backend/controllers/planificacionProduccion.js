@@ -10,6 +10,20 @@ function numero(valor) {
   return Number.isFinite(resultado) ? resultado : null;
 }
 
+function normalizarObraVersion(valor) {
+  return String(valor ?? "").trim().replace(",", ".").toUpperCase();
+}
+
+function usuarioAuditoria(req) {
+  return (
+    texto(req.user?.nombre) ||
+    texto(req.user?.displayName) ||
+    texto(req.user?.usuario) ||
+    texto(req.user?.email) ||
+    "sistema"
+  );
+}
+
 const OPERACIONES_CARGA_AUTOMATICA = new Set([
   "PREPARACION PERFIL",
   "CORTE REFUERZO",
@@ -203,6 +217,202 @@ exports.deleteOperacion = async (req, res) => {
 
     return res.status(500).json({
       error: "Error al eliminar la operación",
+      detalle: error.message,
+    });
+  }
+};
+
+exports.getTiemposStdObra = async (req, res) => {
+  try {
+    const obraVersion = normalizarObraVersion(req.query?.obraVersion);
+    const fase = Number(req.query?.fase);
+
+    if (!obraVersion) {
+      return res.status(400).json({
+        error: "Debe indicar Obra/Versión",
+      });
+    }
+
+    if (!Number.isInteger(fase)) {
+      return res.status(400).json({
+        error: "La fase debe ser un número entero",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input("obra_version", sql.NVarChar(150), obraVersion)
+      .input("fase", sql.Int, fase)
+      .query(`
+        SELECT
+          teo.id_tiempo_std_obra,
+          teo.obra_version,
+          teo.fase,
+          teo.id_operacion,
+          op.nombre AS operacion,
+          op.tiempo_std AS tiempo_std_base,
+          teo.tiempo_std,
+          teo.usuario_modificacion,
+          teo.fecha_modificacion
+        FROM dbo.planificacion_tiempos_std_obra teo
+        INNER JOIN dbo.planificacion_operaciones op
+          ON op.id_operacion = teo.id_operacion
+        WHERE teo.obra_version = @obra_version
+          AND teo.fase = @fase
+        ORDER BY op.nombre;
+      `);
+
+    return res.json(result.recordset || []);
+  } catch (error) {
+    console.error("getTiemposStdObra:", error);
+
+    return res.status(500).json({
+      error: "Error al obtener tiempos STD específicos por obra",
+      detalle: error.message,
+    });
+  }
+};
+
+exports.saveTiempoStdObra = async (req, res) => {
+  try {
+    const obraVersion = normalizarObraVersion(req.body?.obraVersion);
+    const fase = Number(req.body?.fase);
+    const idOperacion = Number(req.body?.id_operacion);
+    const tiempoStd = numero(req.body?.tiempo_std);
+
+    if (!obraVersion) {
+      return res.status(400).json({
+        error: "Debe indicar Obra/Versión",
+      });
+    }
+
+    if (!Number.isInteger(fase)) {
+      return res.status(400).json({
+        error: "La fase debe ser un número entero",
+      });
+    }
+
+    if (!Number.isInteger(idOperacion)) {
+      return res.status(400).json({
+        error: "Debe indicar una operación válida",
+      });
+    }
+
+    if (tiempoStd === null || tiempoStd < 0) {
+      return res.status(400).json({
+        error: "Debe indicar un tiempo STD válido",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input("obra_version", sql.NVarChar(150), obraVersion)
+      .input("fase", sql.Int, fase)
+      .input("id_operacion", sql.Int, idOperacion)
+      .input("tiempo_std", sql.Decimal(18, 4), tiempoStd)
+      .input("usuario", sql.NVarChar(150), usuarioAuditoria(req))
+      .query(`
+        DECLARE @tiempo_base DECIMAL(18,4);
+        DECLARE @operacion NVARCHAR(150);
+
+        SELECT
+          @tiempo_base = tiempo_std,
+          @operacion = nombre
+        FROM dbo.planificacion_operaciones
+        WHERE id_operacion = @id_operacion
+          AND activa = 1;
+
+        IF @operacion IS NULL
+        BEGIN
+          THROW 51000, 'La operación no existe o está inactiva', 1;
+        END;
+
+        IF ABS(@tiempo_std - ISNULL(@tiempo_base, 0)) < 0.0001
+        BEGIN
+          DELETE FROM dbo.planificacion_tiempos_std_obra
+          WHERE obra_version = @obra_version
+            AND fase = @fase
+            AND id_operacion = @id_operacion;
+
+          SELECT
+            CAST(NULL AS INT) AS id_tiempo_std_obra,
+            @obra_version AS obra_version,
+            @fase AS fase,
+            @id_operacion AS id_operacion,
+            @operacion AS operacion,
+            @tiempo_base AS tiempo_std_base,
+            @tiempo_base AS tiempo_std,
+            CAST(0 AS BIT) AS tiempo_std_especifico,
+            @usuario AS usuario_modificacion,
+            SYSDATETIME() AS fecha_modificacion;
+        END
+        ELSE
+        BEGIN
+          MERGE dbo.planificacion_tiempos_std_obra AS destino
+          USING (
+            SELECT
+              @obra_version AS obra_version,
+              @fase AS fase,
+              @id_operacion AS id_operacion
+          ) AS origen
+          ON destino.obra_version = origen.obra_version
+         AND destino.fase = origen.fase
+         AND destino.id_operacion = origen.id_operacion
+          WHEN MATCHED THEN
+            UPDATE SET
+              tiempo_std = @tiempo_std,
+              usuario_modificacion = @usuario,
+              fecha_modificacion = SYSDATETIME()
+          WHEN NOT MATCHED THEN
+            INSERT (
+              obra_version,
+              fase,
+              id_operacion,
+              tiempo_std,
+              usuario_creacion,
+              usuario_modificacion
+            )
+            VALUES (
+              @obra_version,
+              @fase,
+              @id_operacion,
+              @tiempo_std,
+              @usuario,
+              @usuario
+            );
+
+          SELECT
+            teo.id_tiempo_std_obra,
+            teo.obra_version,
+            teo.fase,
+            teo.id_operacion,
+            op.nombre AS operacion,
+            op.tiempo_std AS tiempo_std_base,
+            teo.tiempo_std,
+            CAST(1 AS BIT) AS tiempo_std_especifico,
+            teo.usuario_modificacion,
+            teo.fecha_modificacion
+          FROM dbo.planificacion_tiempos_std_obra teo
+          INNER JOIN dbo.planificacion_operaciones op
+            ON op.id_operacion = teo.id_operacion
+          WHERE teo.obra_version = @obra_version
+            AND teo.fase = @fase
+            AND teo.id_operacion = @id_operacion;
+        END;
+      `);
+
+    return res.json(result.recordset[0]);
+  } catch (error) {
+    console.error("saveTiempoStdObra:", error);
+
+    return res.status(500).json({
+      error: "Error al guardar el tiempo STD específico por obra",
       detalle: error.message,
     });
   }
@@ -677,11 +887,13 @@ async function obtenerConfiguracionCalculo(pool) {
         SELECT
           id_articulo,
           UPPER(LTRIM(RTRIM(codigo))) AS codigo,
-          descripcion,
+          LTRIM(RTRIM(descripcion)) AS descripcion,
           UPPER(LTRIM(RTRIM(tipo))) AS tipo
         FROM dbo.articulos
-        WHERE codigo IS NOT NULL
-          AND LTRIM(RTRIM(codigo)) <> '';
+        WHERE
+          (codigo IS NOT NULL AND LTRIM(RTRIM(codigo)) <> '')
+          OR
+          (descripcion IS NOT NULL AND LTRIM(RTRIM(descripcion)) <> '');
       `),
       pool.request().query(`
         SET NOCOUNT ON;
@@ -704,11 +916,36 @@ async function obtenerConfiguracionCalculo(pool) {
   };
 }
 
+async function obtenerTiemposStdObra(pool, obraVersion, fase) {
+  const result = await pool
+    .request()
+    .input("obra_version", sql.NVarChar(150), normalizarObraVersion(obraVersion))
+    .input("fase", sql.Int, fase)
+    .query(`
+      SET NOCOUNT ON;
+
+      SELECT
+        id_operacion,
+        tiempo_std
+      FROM dbo.planificacion_tiempos_std_obra WITH (NOLOCK)
+      WHERE obra_version = @obra_version
+        AND fase = @fase;
+    `);
+
+  return new Map(
+    (result.recordset || []).map((fila) => [
+      Number(fila.id_operacion),
+      Number(fila.tiempo_std) || 0,
+    ])
+  );
+}
+
 function calcularOperacionesDesdeMateriales(
   materialesHetmo,
   configuracion
 ) {
   const articuloPorCodigo = new Map();
+  const articuloPorDescripcion = new Map();
   const operacionesPorTipo = new Map();
   const exclusiones = new Set();
   const cantidadesPorOperacion = new Map();
@@ -716,11 +953,24 @@ function calcularOperacionesDesdeMateriales(
   const materialesIgnorados = [];
   const materialesExcluidos = [];
 
+  /*
+    Se generan dos índices de artículos:
+    1) por código
+    2) por descripción
+
+    La búsqueda se hace primero por código. Si no encuentra coincidencia,
+    se intenta por descripción, igual que en la lógica del Excel.
+  */
   for (const articulo of configuracion.articulos) {
     const codigo = normalizar(articulo.codigo);
+    const descripcion = normalizar(articulo.descripcion);
 
     if (codigo && !articuloPorCodigo.has(codigo)) {
       articuloPorCodigo.set(codigo, articulo);
+    }
+
+    if (descripcion && !articuloPorDescripcion.has(descripcion)) {
+      articuloPorDescripcion.set(descripcion, articulo);
     }
   }
 
@@ -750,33 +1000,60 @@ function calcularOperacionesDesdeMateriales(
   }
 
   for (const fila of materialesHetmo) {
-    const codigo = normalizar(fila.REFERENCIA);
-    const descripcion = String(fila.DESCRIPCION ?? "").trim();
+    const codigoHetmo = normalizar(fila.REFERENCIA);
+    const descripcionHetmo = String(fila.DESCRIPCION ?? "").trim();
+    const descripcionNormalizada = normalizar(descripcionHetmo);
     const cantidad = Number(fila.UDS) || 0;
 
-    if (!codigo) {
-      continue;
-    }
-
-    const articulo = articuloPorCodigo.get(codigo);
-
-    if (!articulo) {
+    if (!codigoHetmo && !descripcionNormalizada) {
       materialesIgnorados.push({
-        codigo,
-        descripcion,
+        codigo: "",
+        descripcion: descripcionHetmo,
         cantidad,
-        motivo: "El código no existe en artículos",
+        motivo: "El material no tiene código ni descripción",
       });
       continue;
     }
 
+    // Primero busca por código.
+    let articulo = codigoHetmo
+      ? articuloPorCodigo.get(codigoHetmo)
+      : null;
+    let encontradoPor = articulo ? "codigo" : "";
+
+    // Si no encontró el código, busca por descripción.
+    if (!articulo && descripcionNormalizada) {
+      articulo = articuloPorDescripcion.get(descripcionNormalizada);
+
+      if (articulo) {
+        encontradoPor = "descripcion";
+      }
+    }
+
+    if (!articulo) {
+      materialesIgnorados.push({
+        codigo: codigoHetmo,
+        descripcion: descripcionHetmo,
+        cantidad,
+        motivo:
+          "No se encontró el artículo por código ni por descripción en dbo.articulos",
+      });
+      continue;
+    }
+
+    const codigoArticulo = normalizar(articulo.codigo);
+    const codigoMostrar = codigoHetmo || codigoArticulo;
+    const descripcionMostrar =
+      descripcionHetmo || String(articulo.descripcion ?? "").trim();
     const tipo = normalizar(articulo.tipo);
 
     if (!tipo) {
       materialesIgnorados.push({
-        codigo,
-        descripcion,
+        id_articulo: articulo.id_articulo,
+        codigo: codigoMostrar,
+        descripcion: descripcionMostrar,
         cantidad,
+        encontradoPor,
         motivo: "El artículo no tiene tipo",
       });
       continue;
@@ -787,10 +1064,11 @@ function calcularOperacionesDesdeMateriales(
     if (!idsOperaciones || idsOperaciones.size === 0) {
       materiales.push({
         id_articulo: articulo.id_articulo,
-        codigo,
-        descripcion,
+        codigo: codigoMostrar,
+        descripcion: descripcionMostrar,
         tipo,
         cantidad,
+        encontradoPor,
         operaciones: [],
         excluido: false,
       });
@@ -800,20 +1078,34 @@ function calcularOperacionesDesdeMateriales(
     const operacionesAplicadas = [];
 
     for (const idOperacion of idsOperaciones) {
-      const claveExclusion = `${idOperacion}|${codigo}`;
+      /*
+        Si la coincidencia fue por descripción, la REFERENCIA de HETMO puede
+        no coincidir con el código guardado en dbo.articulos. Por eso se
+        verifican ambos códigos contra la tabla de exclusiones.
+      */
+      const codigosParaExclusion = new Set(
+        [codigoHetmo, codigoArticulo].filter(Boolean)
+      );
+
+      const estaExcluido = Array.from(codigosParaExclusion).some(
+        (codigo) =>
+          exclusiones.has(`${idOperacion}|${codigo}`)
+      );
+
       const operacion = configuracion.operaciones.find(
         (item) => Number(item.id_operacion) === idOperacion
       );
 
-      if (exclusiones.has(claveExclusion)) {
+      if (estaExcluido) {
         materialesExcluidos.push({
           id_operacion: idOperacion,
           operacion: operacion?.nombre || "",
           id_articulo: articulo.id_articulo,
-          codigo,
-          descripcion,
+          codigo: codigoMostrar,
+          descripcion: descripcionMostrar,
           tipo,
           cantidad,
+          encontradoPor,
         });
         continue;
       }
@@ -831,10 +1123,11 @@ function calcularOperacionesDesdeMateriales(
 
     materiales.push({
       id_articulo: articulo.id_articulo,
-      codigo,
-      descripcion,
+      codigo: codigoMostrar,
+      descripcion: descripcionMostrar,
       tipo,
       cantidad,
+      encontradoPor,
       operaciones: operacionesAplicadas,
       excluido:
         operacionesAplicadas.length === 0 &&
@@ -849,6 +1142,7 @@ function calcularOperacionesDesdeMateriales(
     materialesExcluidos,
     exclusiones,
     articuloPorCodigo,
+    articuloPorDescripcion,
   };
 }
 
@@ -857,7 +1151,8 @@ function calcularMecanizado(
   idOperacionMecanizado,
   configuracion,
   exclusiones,
-  articuloPorCodigo
+  articuloPorCodigo,
+  articuloPorDescripcion
 ) {
   let cantidad = 0;
   const excluidos = [];
@@ -865,62 +1160,75 @@ function calcularMecanizado(
   const detalle = [];
 
   for (const fila of filasMecanizado) {
-    const codigo = normalizar(fila.COD_ART);
-    const descripcion = String(fila.DESCRIPCION ?? "").trim();
+    const codigoHetmo = normalizar(fila.COD_ART);
+    const descripcionHetmo = String(fila.DESCRIPCION ?? "").trim();
+    const descripcionNormalizada = normalizar(descripcionHetmo);
     const cortes = Number(fila.RES_NUMERO_CORTES) || 0;
-    const articulo = articuloPorCodigo.get(codigo);
 
-    if (!articulo) {
-      ignorados.push({
-        codigo,
-        descripcion,
-        cantidad: cortes,
-        motivo: "El código de mecanizado no existe en artículos",
-      });
-      continue;
+    /*
+      Para MECANIZADO dbo.articulos NO es obligatorio.
+
+      Se intenta encontrar el artículo para completar id/tipo y para respetar
+      una eventual exclusión configurada, pero si no existe igualmente se
+      cuentan los RES_NUMERO_CORTES devueltos por la consulta de fabricación.
+    */
+    let articulo = codigoHetmo
+      ? articuloPorCodigo.get(codigoHetmo)
+      : null;
+    let encontradoPor = articulo ? "codigo" : "";
+
+    if (!articulo && descripcionNormalizada) {
+      articulo = articuloPorDescripcion.get(descripcionNormalizada);
+
+      if (articulo) {
+        encontradoPor = "descripcion";
+      }
     }
 
-    const tipoArticulo = normalizar(articulo.tipo);
-    const claveExclusion = `${idOperacionMecanizado}|${codigo}`;
+    const codigoArticulo = normalizar(articulo?.codigo);
+    const codigoMostrar = codigoHetmo || codigoArticulo;
+    const descripcionMostrar =
+      descripcionHetmo || String(articulo?.descripcion ?? "").trim();
+    const tipoArticulo = normalizar(articulo?.tipo);
 
-    // El Excel no incluye los cortes de perfiles de mosquitero dentro de
-    // MECANIZADO. En la obra 12918.8 esos cortes sumaban 28, produciendo
-    // 263 en la web contra 235 en el Excel.
-    if (tipoArticulo === "MOSQUITERO") {
+    /*
+      Ya NO se excluyen automáticamente los materiales de tipo MOSQUITERO.
+      Si la consulta de mecanizado los devuelve, se contabilizan.
+    */
+
+    const codigosParaExclusion = new Set(
+      [codigoHetmo, codigoArticulo].filter(Boolean)
+    );
+
+    const estaExcluido = Array.from(codigosParaExclusion).some(
+      (codigo) =>
+        exclusiones.has(`${idOperacionMecanizado}|${codigo}`)
+    );
+
+    if (estaExcluido) {
       excluidos.push({
         id_operacion: idOperacionMecanizado,
         operacion: "MECANIZADO",
-        id_articulo: articulo.id_articulo,
-        codigo,
-        descripcion,
+        id_articulo: articulo?.id_articulo ?? null,
+        codigo: codigoMostrar,
+        descripcion: descripcionMostrar,
         tipo: tipoArticulo,
         cantidad: cortes,
-        motivo: "Los perfiles de mosquitero no se mecanizan en esta operación",
+        encontradoPor: encontradoPor || "sin_dbo_articulos",
       });
       continue;
     }
 
-    if (exclusiones.has(claveExclusion)) {
-      excluidos.push({
-        id_operacion: idOperacionMecanizado,
-        operacion: "MECANIZADO",
-        id_articulo: articulo.id_articulo,
-        codigo,
-        descripcion,
-        tipo: tipoArticulo,
-        cantidad: cortes,
-      });
-      continue;
-    }
-
+    // Se cuentan los cortes aunque el artículo no exista en dbo.articulos.
     cantidad += cortes;
 
     detalle.push({
-      id_articulo: articulo.id_articulo,
-      codigo,
-      descripcion,
+      id_articulo: articulo?.id_articulo ?? null,
+      codigo: codigoMostrar,
+      descripcion: descripcionMostrar,
       tipo: tipoArticulo,
       cantidad: cortes,
+      encontradoPor: encontradoPor || "sin_dbo_articulos",
     });
   }
 
@@ -958,6 +1266,12 @@ exports.calcularMaterialesObra = async (req, res) => {
       obtenerConfiguracionCalculo(pool),
     ]);
 
+    const tiemposStdObra = await obtenerTiemposStdObra(
+      pool,
+      obraVersion,
+      fase
+    );
+
     const calculoGeneral = calcularOperacionesDesdeMateriales(
       materialesHetmo,
       configuracion
@@ -979,7 +1293,8 @@ exports.calcularMaterialesObra = async (req, res) => {
         idMecanizado,
         configuracion,
         calculoGeneral.exclusiones,
-        calculoGeneral.articuloPorCodigo
+        calculoGeneral.articuloPorCodigo,
+        calculoGeneral.articuloPorDescripcion
       );
 
       calculoGeneral.cantidadesPorOperacion.set(
@@ -1004,13 +1319,21 @@ exports.calcularMaterialesObra = async (req, res) => {
             Number(operacion.id_operacion)
           ) || 0;
 
-        const tiempoStd = Number(operacion.tiempo_std) || 0;
+        const tiempoStdBase = Number(operacion.tiempo_std) || 0;
+        const tieneTiempoStdEspecifico = tiemposStdObra.has(
+          Number(operacion.id_operacion)
+        );
+        const tiempoStd = tieneTiempoStdEspecifico
+          ? tiemposStdObra.get(Number(operacion.id_operacion))
+          : tiempoStdBase;
 
         return {
           id_operacion: Number(operacion.id_operacion),
           operacion: operacion.nombre,
           cantidad,
           tiempo_std: tiempoStd,
+          tiempo_std_base: tiempoStdBase,
+          tiempo_std_especifico: tieneTiempoStdEspecifico,
           total_horas:
             cantidad > 0 && tiempoStd > 0
               ? Number(

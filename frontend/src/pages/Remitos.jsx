@@ -71,6 +71,7 @@ export default function Remitos() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(preferenciasIniciales.pageSize);
   const [gotoPage, setGotoPage] = useState("");
+  const [filtrosColumnas, setFiltrosColumnas] = useState({});
 
   const [totalRows, setTotalRows] = useState(0);
   const [serverTotalPages, setServerTotalPages] = useState(1);
@@ -196,6 +197,7 @@ export default function Remitos() {
   }, [currentPage, pageSize, serverFilters, sortState]);
 
   const limpiarFiltros = () => {
+    setFiltrosColumnas({});
     setServerFilters(DEFAULT_SERVER_FILTERS);
     setSortState(DEFAULT_SORT_STATE);
     setCurrentPage(1);
@@ -311,8 +313,31 @@ export default function Remitos() {
     }
   };
 
+  const remitosFiltrados = useMemo(() => {
+    return remitos.filter((remito) =>
+      columnas.every((col) => {
+        const filtro = String(filtrosColumnas[col.key] ?? "")
+          .trim()
+          .toLowerCase();
+
+        if (!filtro) {
+          return true;
+        }
+
+        const valor =
+          col.key === "fecha"
+            ? formatFecha(remito?.[col.key])
+            : remito?.[col.key];
+
+        return String(valor ?? "")
+          .toLowerCase()
+          .includes(filtro);
+      }),
+    );
+  }, [remitos, filtrosColumnas, columnas]);
+
   const totalPages = serverTotalPages || 1;
-  const paginated = remitos;
+  const paginated = remitosFiltrados;
 
   const irPagina = (p) => {
     const n = Number(p);
@@ -442,6 +467,31 @@ export default function Remitos() {
                       }}
                     />
                   </div>
+                </th>
+              ))}
+            </tr>
+
+            <tr>
+              {columnas.map((col) => (
+                <th key={`filtro-${col.key}`}>
+                  <input
+                    type="text"
+                    value={filtrosColumnas[col.key] || ""}
+                    placeholder="Filtrar..."
+                    onChange={(event) => {
+                      setFiltrosColumnas((prev) => ({
+                        ...prev,
+                        [col.key]: event.target.value,
+                      }));
+                      setCurrentPage(1);
+                    }}
+                    style={{
+                      width: "100%",
+                      minWidth: 0,
+                      boxSizing: "border-box",
+                      padding: "5px 7px",
+                    }}
+                  />
                 </th>
               ))}
             </tr>

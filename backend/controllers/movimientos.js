@@ -1159,6 +1159,194 @@ function buildMovimientosBase() {
          o.deposito_destino_id
   `);
 
+  // =====================================================
+  // STOCK RECORTES - CONSUMOS DESDE ORDENES DE TRABAJO
+  // =====================================================
+
+  selects.push(`
+    SELECT
+      CAST(
+        CONCAT(
+          'STOCK-RECORTE-',
+          cr.id_consumo_recorte
+        )
+        AS VARCHAR(300)
+      )
+        AS id_movimiento,
+
+      CAST(
+        cr.id_consumo_recorte
+        AS BIGINT
+      )
+        AS orden_movimiento,
+
+      CAST(
+        ot.otid
+        AS VARCHAR(50)
+      )
+        AS numero_transaccion,
+
+      CONVERT(
+        date,
+        cr.fecha
+      )
+        AS fecha,
+
+      CONVERT(
+        date,
+        cr.fecha
+      )
+        AS fecha_real,
+
+      CAST(
+        r.codigo
+        AS VARCHAR(100)
+      )
+        AS codigo,
+
+      CAST(
+        r.descripcion
+        AS VARCHAR(500)
+      )
+        AS descripcion,
+
+      CAST(
+        cr.cantidad
+        AS DECIMAL(18, 3)
+      )
+        AS cantidad,
+
+      CAST(
+        'STOCK RECORTES'
+        AS VARCHAR(255)
+      )
+        AS deposito_origen,
+
+      CAST(
+        COALESCE(
+          ru.nombre,
+          'SIN UBICACION'
+        )
+        AS VARCHAR(255)
+      )
+        AS ubicacion_origen,
+
+      CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS deposito_destino,
+
+      CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS ubicacion_destino,
+
+      CAST(
+        'STOCK RECORTE'
+        AS VARCHAR(50)
+      )
+        AS tipo_transaccion,
+
+      CAST(
+        CONCAT(
+          'CONSUMO OT - ',
+          COALESCE(ot.operacion, 'CORTE PERFIL')
+        )
+        AS VARCHAR(255)
+      )
+        AS motivo,
+
+      CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS remito_referencia,
+
+      CAST(
+        CASE
+          WHEN CHARINDEX('.', COALESCE(ot.obra_version, '')) > 0
+          THEN LEFT(
+            ot.obra_version,
+            CHARINDEX('.', ot.obra_version) - 1
+          )
+          ELSE ot.obra_version
+        END
+        AS VARCHAR(255)
+      )
+        AS obra,
+
+      CAST(
+        CASE
+          WHEN CHARINDEX('.', COALESCE(ot.obra_version, '')) > 0
+          THEN SUBSTRING(
+            ot.obra_version,
+            CHARINDEX('.', ot.obra_version) + 1,
+            255
+          )
+          ELSE NULL
+        END
+        AS VARCHAR(255)
+      )
+        AS version,
+
+      CAST(
+        NULL
+        AS VARCHAR(255)
+      )
+        AS referente,
+
+      CAST(
+        NULL
+        AS INT
+      )
+        AS id_referente,
+
+      CAST(
+        art.proveedor
+        AS VARCHAR(255)
+      )
+        AS proveedor,
+
+      CAST(
+        'E'
+        AS VARCHAR(10)
+      )
+        AS ingreso_egreso,
+
+      CAST(
+        cr.usuario
+        AS VARCHAR(255)
+      )
+        AS usuario
+
+    FROM dbo.ordenes_trabajo_consumos_recortes cr
+
+    INNER JOIN dbo.ordenes_trabajo ot
+      ON ot.id_ot = cr.id_ot
+
+    INNER JOIN dbo.ordenes_trabajo_materiales mat
+      ON mat.id_ot_material = cr.id_ot_material
+
+    INNER JOIN dbo.recortes r
+      ON r.id_recorte = cr.id_recorte
+
+    LEFT JOIN dbo.recortes_ubicaciones ru
+      ON ru.id_ubicacion_recorte =
+         cr.id_ubicacion_recorte
+
+    OUTER APPLY
+    (
+      SELECT TOP 1
+        a.proveedor
+      FROM dbo.articulos a
+      WHERE UPPER(LTRIM(RTRIM(a.codigo))) =
+            UPPER(LTRIM(RTRIM(mat.codigo)))
+      ORDER BY a.id_articulo
+    ) art
+  `);
+
   return `
     FROM (
       ${selects.join("\nUNION ALL\n")}

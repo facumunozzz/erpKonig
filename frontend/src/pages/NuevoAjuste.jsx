@@ -17,6 +17,7 @@ const esDepositoRecortes = (valor) =>
 
 const MOTIVOS_OCULTOS = new Set([
   "CONSUMO PRODUCCION (DROPBOX)",
+  "CONSUMO PRODUCCION",
   "IMPORTACION EXCEL",
   "CONSUMO RECORTES (DROPBOX)",
 ]);
@@ -214,36 +215,46 @@ export default function NuevoAjuste() {
     cargarDatosIniciales();
   }, []);
 
-  useEffect(() => {
+  // =====================================================
+// UBICACIONES DEL DEPÓSITO
+// IMPORTANTE:
+// NO limpiar items acá.
+// El onChange manual del depósito ya limpia las ubicaciones.
+// Si se limpia acá, al abrir un borrador se borra id_ubicacion.
+// =====================================================
+useEffect(() => {
   let activo = true;
 
   const cargar = async () => {
     setUbicaciones([]);
 
-    if (!depositoId) return;
+    if (!depositoId) {
+      return;
+    }
 
     try {
       setLoadingUbicaciones(true);
 
       let response;
 
-if (esDepositoRecortes(depositoId)) {
-  response = await api.get(
-    "/api/stock-recortes/ubicaciones"
-  );
-} else {
-  response = await api.get(
-    "/ubicaciones/by-deposito",
-    {
-      params: {
-        deposito_id:
-          Number(depositoId),
-      },
-    }
-  );
-}
+      if (esDepositoRecortes(depositoId)) {
+        response = await api.get(
+          "/api/stock-recortes/ubicaciones"
+        );
+      } else {
+        response = await api.get(
+          "/ubicaciones/by-deposito",
+          {
+            params: {
+              deposito_id: Number(depositoId),
+            },
+          }
+        );
+      }
 
-      if (!activo) return;
+      if (!activo) {
+        return;
+      }
 
       const original = Array.isArray(response.data)
         ? response.data
@@ -251,8 +262,7 @@ if (esDepositoRecortes(depositoId)) {
 
       const lista = esDepositoRecortes(depositoId)
         ? original.map((ubicacion) => ({
-            id_ubicacion:
-              ubicacion.id_ubicacion_recorte,
+            id_ubicacion: ubicacion.id_ubicacion_recorte,
             nombre: ubicacion.nombre,
             activa: ubicacion.activo,
           }))
@@ -262,15 +272,15 @@ if (esDepositoRecortes(depositoId)) {
 
       setUbicaciones(lista);
 
-        setItems((itemsActuales) =>
-        itemsActuales.map((item) => ({
-          ...item,
-          id_ubicacion: "",
-          ubicacion_nombre: "",
-          stock: "",
-          stockTotal: "",
-        }))
-      );
+      /*
+       * NO HACER setItems(...) acá.
+       *
+       * Cuando abrimos un borrador, cargarBorrador()
+       * restaura id_ubicacion en cada item.
+       *
+       * Antes este useEffect lo volvía a dejar en "",
+       * por eso desaparecía la ubicación seleccionada.
+       */
     } catch (error) {
       console.error(
         "Error cargando ubicaciones:",

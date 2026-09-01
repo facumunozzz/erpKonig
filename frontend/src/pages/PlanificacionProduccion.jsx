@@ -41,6 +41,8 @@ function crearFilaVacia(id) {
     sectorId: "",
     cantidad: "",
     tiempoStd: "",
+    tiempoStdBase: "",
+    tiempoStdEspecifico: false,
     totalHoras: "",
     fase: "",
     cantidadesPorDia: {},
@@ -68,17 +70,16 @@ function crearFilaMaterialExcluir(id) {
 }
 
 function crearFilasIniciales() {
-  return Array.from({ length: 12 }, (_, indice) =>
-    crearFilaVacia(indice + 1)
-  );
+  return Array.from({ length: 12 }, (_, indice) => crearFilaVacia(indice + 1));
 }
 
 function obtenerMesActual() {
   const fecha = new Date();
 
-  return `${fecha.getFullYear()}-${String(
-    fecha.getMonth() + 1
-  ).padStart(2, "0")}`;
+  return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(
+    2,
+    "0",
+  )}`;
 }
 
 function obtenerDiasHabiles(anio, mes) {
@@ -121,6 +122,29 @@ function crearClaveFecha(fecha) {
 function convertirNumero(valor) {
   const numero = Number(valor);
   return Number.isFinite(numero) ? numero : 0;
+}
+
+function obtenerRangoMes(mesTexto) {
+  const [anio, mes] = String(mesTexto || "")
+    .split("-")
+    .map(Number);
+
+  if (!Number.isInteger(anio) || !Number.isInteger(mes)) {
+    return {
+      inicio: "",
+      fin: "",
+    };
+  }
+
+  const ultimoDia = new Date(anio, mes, 0).getDate();
+
+  return {
+    inicio: `${anio}-${String(mes).padStart(2, "0")}-01`,
+    fin: `${anio}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(
+      2,
+      "0",
+    )}`,
+  };
 }
 
 function calcularHoras(cantidad, tiempoStd) {
@@ -166,7 +190,7 @@ async function solicitarJson(url, opciones = {}) {
       contenido?.error ||
         contenido?.message ||
         contenido?.detalle ||
-        `Error HTTP ${respuesta.status}`
+        `Error HTTP ${respuesta.status}`,
     );
   }
 
@@ -204,19 +228,37 @@ function normalizarMaterialExcluir(fila, indice) {
 function PlanificacionProduccion() {
   const borradorInicial = leerLocalStorage(CLAVE_BORRADOR, null);
 
-  const [mesSeleccionado, setMesSeleccionado] = useState(
-    borradorInicial?.mesSeleccionado || obtenerMesActual()
-  );
+  const mesInicial = borradorInicial?.mesSeleccionado || obtenerMesActual();
+
+  const obtenerObrasIniciales = () => {
+    // Nueva estructura: planificación separada por mes
+    const planificacionMes = borradorInicial?.planificaciones?.[mesInicial];
+
+    if (Array.isArray(planificacionMes) && planificacionMes.length > 0) {
+      return planificacionMes;
+    }
+
+    // Compatibilidad con el formato anterior.
+    // Así no perdemos la planificación que ya tenías cargada.
+    if (
+      Array.isArray(borradorInicial?.obras) &&
+      borradorInicial.obras.length > 0
+    ) {
+      return borradorInicial.obras;
+    }
+
+    return crearFilasIniciales();
+  };
+
+  const [mesSeleccionado, setMesSeleccionado] = useState(mesInicial);
 
   const [sectores, setSectores] = useState([]);
-  const [obras, setObras] = useState(() =>
-    Array.isArray(borradorInicial?.obras) && borradorInicial.obras.length
-      ? borradorInicial.obras
-      : crearFilasIniciales()
-  );
 
-  const [tiposMaterialPorOperacion, setTiposMaterialPorOperacion] =
-    useState([]);
+  const [obras, setObras] = useState(obtenerObrasIniciales);
+
+  const [tiposMaterialPorOperacion, setTiposMaterialPorOperacion] = useState(
+    [],
+  );
   const [materialesExcluir, setMaterialesExcluir] = useState([]);
   const [tiposArticulos, setTiposArticulos] = useState([]);
 
@@ -231,6 +273,20 @@ function PlanificacionProduccion() {
     useState(false);
   const [modalExcluirAbierto, setModalExcluirAbierto] = useState(false);
   const [modalHistoricoAbierto, setModalHistoricoAbierto] = useState(false);
+  const [modalExportarAbierto, setModalExportarAbierto] = useState(false);
+  const [exportandoOrdenes, setExportandoOrdenes] = useState(false);
+
+  const rangoExportacionInicial = obtenerRangoMes(
+    borradorInicial?.mesSeleccionado || obtenerMesActual(),
+  );
+
+  const [fechaInicioExportar, setFechaInicioExportar] = useState(
+    rangoExportacionInicial.inicio,
+  );
+
+  const [fechaFinExportar, setFechaFinExportar] = useState(
+    rangoExportacionInicial.fin,
+  );
 
   const [mesHistorico, setMesHistorico] = useState(obtenerMesActual());
   const [nuevoSector, setNuevoSector] = useState("");
@@ -277,9 +333,8 @@ function PlanificacionProduccion() {
           const clave = `${obra.sectorId}-${claveFecha}`;
 
           totales[clave] =
-            (totales[clave] || 0) +
-            (cantidadNumero * tiempoStd) / 60;
-        }
+            (totales[clave] || 0) + (cantidadNumero * tiempoStd) / 60;
+        },
       );
     });
 
@@ -314,17 +369,17 @@ function PlanificacionProduccion() {
             ? tiposRespuesta
                 .map((tipo) => String(tipo || "").trim())
                 .filter(Boolean)
-            : []
+            : [],
         );
         setTiposMaterialPorOperacion(
           Array.isArray(tiposMaterialRespuesta)
             ? tiposMaterialRespuesta.map(normalizarTipoMaterial)
-            : []
+            : [],
         );
         setMaterialesExcluir(
           Array.isArray(materialesExcluirRespuesta)
             ? materialesExcluirRespuesta.map(normalizarMaterialExcluir)
-            : []
+            : [],
         );
 
         if (operacionesNormalizadas.length > 0) {
@@ -332,28 +387,35 @@ function PlanificacionProduccion() {
             estadoAnterior.map((obra) => {
               const sector =
                 operacionesNormalizadas.find(
-                  (item) => String(item.id) === String(obra.sectorId)
+                  (item) => String(item.id) === String(obra.sectorId),
                 ) || null;
 
               if (!sector) {
                 return obra;
               }
 
+              if (obra.tiempoStdEspecifico) {
+                return {
+                  ...obra,
+                  tiempoStdBase: String(sector.tiempoStd ?? ""),
+                  totalHoras: calcularHoras(obra.cantidad, obra.tiempoStd),
+                };
+              }
+
               return {
                 ...obra,
                 tiempoStd: String(sector.tiempoStd ?? ""),
-                totalHoras: calcularHoras(
-                  obra.cantidad,
-                  sector.tiempoStd
-                ),
+                tiempoStdBase: String(sector.tiempoStd ?? ""),
+                tiempoStdEspecifico: false,
+                totalHoras: calcularHoras(obra.cantidad, sector.tiempoStd),
               };
-            })
+            }),
           );
         }
       } catch (error) {
         console.error("Error al cargar configuración:", error);
         setErrorGeneral(
-          `${error.message}. Verificá que el router esté montado en ${API_PLANIFICACION}.`
+          `${error.message}. Verificá que el router esté montado en ${API_PLANIFICACION}.`,
         );
       } finally {
         setCargandoConfiguracion(false);
@@ -364,19 +426,35 @@ function PlanificacionProduccion() {
   }, []);
 
   useEffect(() => {
+    if (!mesSeleccionado) {
+      return;
+    }
+
+    const estadoGuardado = leerLocalStorage(CLAVE_BORRADOR, {});
+
+    const planificaciones =
+      estadoGuardado?.planificaciones &&
+      typeof estadoGuardado.planificaciones === "object"
+        ? {
+            ...estadoGuardado.planificaciones,
+          }
+        : {};
+
+    // Guardamos exclusivamente la planificación
+    // correspondiente al mes actual.
+    planificaciones[mesSeleccionado] = obras;
+
     localStorage.setItem(
       CLAVE_BORRADOR,
       JSON.stringify({
         mesSeleccionado,
-        obras,
-      })
+        planificaciones,
+      }),
     );
   }, [mesSeleccionado, obras]);
 
   const recargarOperaciones = async () => {
-    const respuesta = await solicitarJson(
-      `${API_PLANIFICACION}/operaciones`
-    );
+    const respuesta = await solicitarJson(`${API_PLANIFICACION}/operaciones`);
 
     const operacionesNormalizadas = Array.isArray(respuesta)
       ? respuesta.map(normalizarOperacion)
@@ -388,25 +466,21 @@ function PlanificacionProduccion() {
 
   const recargarTiposMaterial = async () => {
     const respuesta = await solicitarJson(
-      `${API_PLANIFICACION}/tipos-material`
+      `${API_PLANIFICACION}/tipos-material`,
     );
 
     setTiposMaterialPorOperacion(
-      Array.isArray(respuesta)
-        ? respuesta.map(normalizarTipoMaterial)
-        : []
+      Array.isArray(respuesta) ? respuesta.map(normalizarTipoMaterial) : [],
     );
   };
 
   const recargarMaterialesExcluir = async () => {
     const respuesta = await solicitarJson(
-      `${API_PLANIFICACION}/materiales-excluir`
+      `${API_PLANIFICACION}/materiales-excluir`,
     );
 
     setMaterialesExcluir(
-      Array.isArray(respuesta)
-        ? respuesta.map(normalizarMaterialExcluir)
-        : []
+      Array.isArray(respuesta) ? respuesta.map(normalizarMaterialExcluir) : [],
     );
   };
 
@@ -425,18 +499,18 @@ function PlanificacionProduccion() {
         if (campo === "sectorId") {
           const sector = sectoresPorId[String(valor)];
 
-          actualizada.tiempoStd = sector
-            ? String(sector.tiempoStd ?? "")
-            : "";
+          actualizada.tiempoStd = sector ? String(sector.tiempoStd ?? "") : "";
+          actualizada.tiempoStdBase = actualizada.tiempoStd;
+          actualizada.tiempoStdEspecifico = false;
         }
 
         actualizada.totalHoras = calcularHoras(
           actualizada.cantidad,
-          actualizada.tiempoStd
+          actualizada.tiempoStd,
         );
 
         return actualizada;
-      })
+      }),
     );
   };
 
@@ -453,8 +527,8 @@ function PlanificacionProduccion() {
                 [claveFecha]: valor,
               },
             }
-          : obra
-      )
+          : obra,
+      ),
     );
   };
 
@@ -467,15 +541,109 @@ function PlanificacionProduccion() {
 
   const eliminarFila = (id) => {
     setObras((estadoAnterior) =>
-      estadoAnterior.filter((obra) => obra.id !== id)
+      estadoAnterior.filter((obra) => obra.id !== id),
     );
+  };
+
+  const cambiarMesPlanificacion = (nuevoMes) => {
+    if (!nuevoMes || nuevoMes === mesSeleccionado) {
+      return;
+    }
+
+    const estadoGuardado = leerLocalStorage(CLAVE_BORRADOR, {});
+
+    const planificaciones =
+      estadoGuardado?.planificaciones &&
+      typeof estadoGuardado.planificaciones === "object"
+        ? {
+            ...estadoGuardado.planificaciones,
+          }
+        : {};
+
+    // Antes de salir del mes actual,
+    // guardamos su planificación.
+    planificaciones[mesSeleccionado] = obras;
+
+    // Buscamos si el nuevo mes ya tiene planificación.
+    const planificacionNuevoMes = planificaciones[nuevoMes];
+
+    const nuevasObras =
+      Array.isArray(planificacionNuevoMes) && planificacionNuevoMes.length > 0
+        ? planificacionNuevoMes
+        : crearFilasIniciales();
+
+    localStorage.setItem(
+      CLAVE_BORRADOR,
+      JSON.stringify({
+        mesSeleccionado: nuevoMes,
+        planificaciones,
+      }),
+    );
+
+    setMesSeleccionado(nuevoMes);
+    setObras(nuevasObras);
+  };
+
+  const manejarEnterTablaObras = (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    const elementoActual = event.target;
+
+    // Solo actuar sobre inputs y selects
+    if (
+      elementoActual.tagName !== "INPUT" &&
+      elementoActual.tagName !== "SELECT"
+    ) {
+      return;
+    }
+
+    const celdaActual = elementoActual.closest("td");
+    const filaActual = elementoActual.closest("tr");
+
+    if (!celdaActual || !filaActual) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const indiceColumna = celdaActual.cellIndex;
+    let filaSiguiente = filaActual.nextElementSibling;
+
+    while (filaSiguiente) {
+      const celdaSiguiente = filaSiguiente.cells[indiceColumna];
+
+      if (celdaSiguiente) {
+        const siguienteCampo = celdaSiguiente.querySelector(
+          "input:not([disabled]), select:not([disabled])",
+        );
+
+        if (siguienteCampo) {
+          siguienteCampo.focus();
+
+          // Si es input, seleccionar el contenido para poder reemplazarlo
+          // directamente escribiendo.
+          if (
+            siguienteCampo.tagName === "INPUT" &&
+            typeof siguienteCampo.select === "function"
+          ) {
+            siguienteCampo.select();
+          }
+
+          return;
+        }
+      }
+
+      filaSiguiente = filaSiguiente.nextElementSibling;
+    }
   };
 
   const actualizarTiempoSectorLocal = (id, valor) => {
     setSectores((estadoAnterior) =>
       estadoAnterior.map((sector) =>
-        sector.id === id ? { ...sector, tiempoStd: valor } : sector
-      )
+        sector.id === id ? { ...sector, tiempoStd: valor } : sector,
+      ),
     );
 
     setObras((estadoAnterior) =>
@@ -484,12 +652,21 @@ function PlanificacionProduccion() {
           return obra;
         }
 
+        if (obra.tiempoStdEspecifico) {
+          return {
+            ...obra,
+            tiempoStdBase: valor,
+            totalHoras: calcularHoras(obra.cantidad, obra.tiempoStd),
+          };
+        }
+
         return {
           ...obra,
           tiempoStd: valor,
+          tiempoStdBase: valor,
           totalHoras: calcularHoras(obra.cantidad, valor),
         };
-      })
+      }),
     );
   };
 
@@ -497,20 +674,102 @@ function PlanificacionProduccion() {
     try {
       setErrorGeneral("");
 
-      await solicitarJson(
-        `${API_PLANIFICACION}/operaciones/${sector.id}`,
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            nombre: sector.nombre,
-            tiempo_std: convertirNumero(sector.tiempoStd),
-          }),
-        }
-      );
+      await solicitarJson(`${API_PLANIFICACION}/operaciones/${sector.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          nombre: sector.nombre,
+          tiempo_std: convertirNumero(sector.tiempoStd),
+        }),
+      });
 
       await recargarOperaciones();
     } catch (error) {
       console.error("Error al guardar tiempo estándar:", error);
+      setErrorGeneral(error.message);
+      window.alert(error.message);
+    }
+  };
+
+  const guardarTiempoStdObra = async (obra) => {
+    const obraVersion = String(obra.obra || "")
+      .trim()
+      .replace(",", ".");
+    const fase = Number(obra.fase);
+    const idOperacion = Number(obra.sectorId);
+    const tiempoStd = convertirNumero(obra.tiempoStd);
+
+    if (!obraVersion || !obraVersion.includes(".")) {
+      window.alert(
+        "Para guardar un STD específico, la fila debe tener Obra/Versión con formato OBRA.VERSION.",
+      );
+      return;
+    }
+
+    if (!Number.isInteger(fase)) {
+      window.alert(
+        "Para guardar un STD específico, la fila debe tener una fase válida.",
+      );
+      return;
+    }
+
+    if (!Number.isInteger(idOperacion)) {
+      window.alert(
+        "Para guardar un STD específico, la fila debe tener una operación válida.",
+      );
+      return;
+    }
+
+    if (tiempoStd < 0) {
+      window.alert("El tiempo STD no puede ser negativo.");
+      return;
+    }
+
+    try {
+      setErrorGeneral("");
+
+      const respuesta = await solicitarJson(
+        `${API_PLANIFICACION}/tiempos-obra`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            obraVersion,
+            fase,
+            id_operacion: idOperacion,
+            tiempo_std: tiempoStd,
+          }),
+        },
+      );
+
+      const tiempoBase = convertirNumero(respuesta?.tiempo_std_base);
+      const tiempoEspecifico = convertirNumero(respuesta?.tiempo_std);
+
+      setObras((estadoAnterior) =>
+        estadoAnterior.map((fila) => {
+          const mismaClave =
+            String(fila.obra || "")
+              .trim()
+              .replace(",", ".")
+              .toUpperCase() ===
+              String(respuesta?.obra_version || obraVersion).toUpperCase() &&
+            Number(fila.fase) === fase &&
+            Number(fila.sectorId) === idOperacion;
+
+          if (!mismaClave) {
+            return fila;
+          }
+
+          return {
+            ...fila,
+            obra: respuesta?.obra_version || obraVersion,
+            tiempoStd: String(tiempoEspecifico),
+            tiempoStdBase: String(tiempoBase),
+            tiempoStdEspecifico: Boolean(respuesta?.tiempo_std_especifico),
+            totalHoras: calcularHoras(fila.cantidad, tiempoEspecifico),
+          };
+        }),
+      );
+    } catch (error) {
+      console.error("Error al guardar STD específico:", error);
       setErrorGeneral(error.message);
       window.alert(error.message);
     }
@@ -545,13 +804,11 @@ function PlanificacionProduccion() {
 
   const eliminarSector = async (id) => {
     const sectorUsado = obras.some(
-      (obra) => String(obra.sectorId) === String(id)
+      (obra) => String(obra.sectorId) === String(id),
     );
 
     if (sectorUsado) {
-      window.alert(
-        "La operación está siendo utilizada en la planificación."
-      );
+      window.alert("La operación está siendo utilizada en la planificación.");
       return;
     }
 
@@ -560,12 +817,9 @@ function PlanificacionProduccion() {
     }
 
     try {
-      await solicitarJson(
-        `${API_PLANIFICACION}/operaciones/${id}`,
-        {
-          method: "DELETE",
-        }
-      );
+      await solicitarJson(`${API_PLANIFICACION}/operaciones/${id}`, {
+        method: "DELETE",
+      });
 
       await Promise.all([
         recargarOperaciones(),
@@ -588,25 +842,25 @@ function PlanificacionProduccion() {
   const actualizarFilaTipoMaterial = (id, campo, valor) => {
     setTiposMaterialPorOperacion((estadoAnterior) =>
       estadoAnterior.map((fila) =>
-        fila.id === id ? { ...fila, [campo]: valor } : fila
-      )
+        fila.id === id ? { ...fila, [campo]: valor } : fila,
+      ),
     );
   };
 
   const eliminarFilaTipoMaterial = (id) => {
     setTiposMaterialPorOperacion((estadoAnterior) =>
-      estadoAnterior.filter((fila) => fila.id !== id)
+      estadoAnterior.filter((fila) => fila.id !== id),
     );
   };
 
   const guardarTiposMaterial = async () => {
     const filasIncompletas = tiposMaterialPorOperacion.some(
-      (fila) => !fila.sectorId || !fila.tipo
+      (fila) => !fila.sectorId || !fila.tipo,
     );
 
     if (filasIncompletas) {
       window.alert(
-        "Todas las filas deben tener una operación y un tipo de material."
+        "Todas las filas deben tener una operación y un tipo de material.",
       );
       return;
     }
@@ -664,7 +918,7 @@ function PlanificacionProduccion() {
           ...fila,
           [campo]: valor,
         };
-      })
+      }),
     );
   };
 
@@ -684,15 +938,13 @@ function PlanificacionProduccion() {
               estado: "buscando",
               mensaje: "",
             }
-          : item
-      )
+          : item,
+      ),
     );
 
     try {
       const articulo = await solicitarJson(
-        `${API_PLANIFICACION}/articulos/codigo/${encodeURIComponent(
-          codigo
-        )}`
+        `${API_PLANIFICACION}/articulos/codigo/${encodeURIComponent(codigo)}`,
       );
 
       setMaterialesExcluir((estadoAnterior) =>
@@ -704,12 +956,10 @@ function PlanificacionProduccion() {
                 descripcion: String(articulo.descripcion || ""),
                 idArticulo: Number(articulo.id_articulo) || null,
                 estado: articulo.id_articulo ? "valido" : "inexistente",
-                mensaje: articulo.id_articulo
-                  ? ""
-                  : "El código no existe.",
+                mensaje: articulo.id_articulo ? "" : "El código no existe.",
               }
-            : item
-        )
+            : item,
+        ),
       );
     } catch (error) {
       setMaterialesExcluir((estadoAnterior) =>
@@ -719,35 +969,33 @@ function PlanificacionProduccion() {
                 ...item,
                 descripcion: "",
                 idArticulo: null,
-                estado:
-                  String(error.message).toLowerCase().includes("no encontrado")
-                    ? "inexistente"
-                    : "error",
+                estado: String(error.message)
+                  .toLowerCase()
+                  .includes("no encontrado")
+                  ? "inexistente"
+                  : "error",
                 mensaje: error.message,
               }
-            : item
-        )
+            : item,
+        ),
       );
     }
   };
 
   const eliminarFilaMaterialExcluir = (id) => {
     setMaterialesExcluir((estadoAnterior) =>
-      estadoAnterior.filter((fila) => fila.id !== id)
+      estadoAnterior.filter((fila) => fila.id !== id),
     );
   };
 
   const guardarMaterialesExcluir = async () => {
     const filasIncompletas = materialesExcluir.some(
-      (fila) =>
-        !fila.sectorId ||
-        !fila.idArticulo ||
-        fila.estado !== "valido"
+      (fila) => !fila.sectorId || !fila.idArticulo || fila.estado !== "valido",
     );
 
     if (filasIncompletas) {
       window.alert(
-        "Todas las filas deben tener operación y un código de artículo válido."
+        "Todas las filas deben tener operación y un código de artículo válido.",
       );
       return;
     }
@@ -755,18 +1003,15 @@ function PlanificacionProduccion() {
     try {
       setGuardandoConfiguracion(true);
 
-      await solicitarJson(
-        `${API_PLANIFICACION}/materiales-excluir`,
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            filas: materialesExcluir.map((fila) => ({
-              id_operacion: Number(fila.sectorId),
-              id_articulo: Number(fila.idArticulo),
-            })),
-          }),
-        }
-      );
+      await solicitarJson(`${API_PLANIFICACION}/materiales-excluir`, {
+        method: "PUT",
+        body: JSON.stringify({
+          filas: materialesExcluir.map((fila) => ({
+            id_operacion: Number(fila.sectorId),
+            id_articulo: Number(fila.idArticulo),
+          })),
+        }),
+      });
 
       await recargarMaterialesExcluir();
       setModalExcluirAbierto(false);
@@ -787,7 +1032,7 @@ function PlanificacionProduccion() {
 
     if (!obraVersion || !obraVersion.includes(".")) {
       window.alert(
-        "Ingrese Obra/Versión con el formato OBRA.VERSION, por ejemplo 12345.2."
+        "Ingrese Obra/Versión con el formato OBRA.VERSION, por ejemplo 12345.2.",
       );
       return;
     }
@@ -806,14 +1051,14 @@ function PlanificacionProduccion() {
           .trim()
           .replace(",", ".")
           .toUpperCase() === obraNormalizada &&
-        Number(obra.fase) === fase
+        Number(obra.fase) === fase,
     );
 
     if (yaExiste) {
       const continuar = window.confirm(
         `Ya existen operaciones cargadas para la obra ${obraVersion}, fase ${fase}.\n\n` +
           "Si continúa, se agregará un nuevo conjunto sin eliminar las filas existentes.\n\n" +
-          "¿Desea continuar?"
+          "¿Desea continuar?",
       );
 
       if (!continuar) {
@@ -833,73 +1078,54 @@ function PlanificacionProduccion() {
             obraVersion,
             fase,
           }),
-        }
+        },
       );
 
-      const operacionesRespuesta = Array.isArray(
-        respuesta?.operaciones
-      )
+      const operacionesRespuesta = Array.isArray(respuesta?.operaciones)
         ? respuesta.operaciones.filter((operacion) =>
             OPERACIONES_CARGA_AUTOMATICA.has(
-              normalizarTexto(operacion.operacion)
-            )
+              normalizarTexto(operacion.operacion),
+            ),
           )
         : [];
 
       if (operacionesRespuesta.length === 0) {
         window.alert(
-          "La consulta no devolvió ninguna de las operaciones habilitadas para carga automática."
+          "La consulta no devolvió ninguna de las operaciones habilitadas para carga automática.",
         );
         return;
       }
 
       setObras((estadoAnterior) => {
-        const siguienteIdInicial =
-          obtenerSiguienteId(estadoAnterior);
+        const siguienteIdInicial = obtenerSiguienteId(estadoAnterior);
 
-        const nuevasFilas = operacionesRespuesta.map(
-          (operacion, indice) => {
-            const cantidad = convertirNumero(
-              operacion.cantidad
-            );
-            const tiempoStd = convertirNumero(
-              operacion.tiempo_std
-            );
+        const nuevasFilas = operacionesRespuesta.map((operacion, indice) => {
+          const cantidad = convertirNumero(operacion.cantidad);
+          const tiempoStd = convertirNumero(operacion.tiempo_std);
 
-            return {
-              ...crearFilaVacia(
-                siguienteIdInicial + indice
-              ),
-              obra: respuesta.obraVersion || obraVersion,
-              sectorId: String(
-                operacion.id_operacion
-              ),
-              cantidad:
-                cantidad === 0 ? "0" : String(cantidad),
-              tiempoStd: String(tiempoStd),
-              totalHoras: calcularHoras(
-                cantidad,
-                tiempoStd
-              ),
-              fase: String(respuesta.fase ?? fase),
-            };
-          }
-        );
+          return {
+            ...crearFilaVacia(siguienteIdInicial + indice),
+            obra: respuesta.obraVersion || obraVersion,
+            sectorId: String(operacion.id_operacion),
+            cantidad: cantidad === 0 ? "0" : String(cantidad),
+            tiempoStd: String(tiempoStd),
+            tiempoStdBase: String(convertirNumero(operacion.tiempo_std_base)),
+            tiempoStdEspecifico: Boolean(operacion.tiempo_std_especifico),
+            totalHoras: calcularHoras(cantidad, tiempoStd),
+            fase: String(respuesta.fase ?? fase),
+          };
+        });
 
         const filaOrigenVacia =
           !filaOrigen.sectorId &&
           !filaOrigen.cantidad &&
           !filaOrigen.tiempoStd &&
           !filaOrigen.totalHoras &&
-          Object.keys(
-            filaOrigen.cantidadesPorDia || {}
-          ).length === 0;
+          Object.keys(filaOrigen.cantidadesPorDia || {}).length === 0;
 
         if (filaOrigenVacia) {
           return [
-            ...estadoAnterior.filter(
-              (obra) => obra.id !== filaOrigen.id
-            ),
+            ...estadoAnterior.filter((obra) => obra.id !== filaOrigen.id),
             ...nuevasFilas,
           ];
         }
@@ -907,25 +1133,233 @@ function PlanificacionProduccion() {
         return [...estadoAnterior, ...nuevasFilas];
       });
 
-      const ignorados =
-        respuesta?.materialesIgnorados?.length || 0;
-      const excluidos =
-        respuesta?.materialesExcluidos?.length || 0;
+      const ignorados = respuesta?.materialesIgnorados?.length || 0;
+      const excluidos = respuesta?.materialesExcluidos?.length || 0;
 
       window.alert(
         `Se agregaron ${operacionesRespuesta.length} operaciones.\n` +
           `Materiales ignorados: ${ignorados}.\n` +
-          `Materiales excluidos: ${excluidos}.`
+          `Materiales excluidos: ${excluidos}.`,
       );
     } catch (error) {
-      console.error(
-        "Error al cargar operaciones:",
-        error
-      );
+      console.error("Error al cargar operaciones:", error);
       setErrorGeneral(error.message);
       window.alert(error.message);
     } finally {
       setFilaCalculando(null);
+    }
+  };
+
+  const abrirModalExportar = () => {
+    const rango = obtenerRangoMes(mesSeleccionado);
+
+    setFechaInicioExportar(rango.inicio);
+    setFechaFinExportar(rango.fin);
+    setModalExportarAbierto(true);
+  };
+
+  const exportarOrdenesTrabajo = async () => {
+    if (!fechaInicioExportar || !fechaFinExportar) {
+      window.alert("Debe indicar fecha de inicio y fecha de fin.");
+      return;
+    }
+
+    if (fechaInicioExportar > fechaFinExportar) {
+      window.alert(
+        "La fecha de inicio no puede ser posterior a la fecha de fin.",
+      );
+      return;
+    }
+
+    try {
+      setExportandoOrdenes(true);
+      setErrorGeneral("");
+
+      const agrupadas = new Map();
+
+      for (const obra of obras) {
+        const obraVersion = String(obra.obra || "")
+          .trim()
+          .replace(",", ".");
+
+        const fase = Number(obra.fase);
+        const sector = sectoresPorId[String(obra.sectorId)];
+
+        for (const [fecha, cantidadRaw] of Object.entries(
+          obra.cantidadesPorDia || {},
+        )) {
+          const cantidad = convertirNumero(cantidadRaw);
+
+          if (
+            fecha < fechaInicioExportar ||
+            fecha > fechaFinExportar ||
+            cantidad <= 0
+          ) {
+            continue;
+          }
+
+          if (!obraVersion || !obraVersion.includes(".")) {
+            throw new Error(
+              `Hay una fila planificada para ${fecha} sin Obra/Versión válida.`,
+            );
+          }
+
+          if (!Number.isInteger(fase)) {
+            throw new Error(`La obra ${obraVersion} tiene una fase inválida.`);
+          }
+
+          if (!sector) {
+            throw new Error(
+              `La obra ${obraVersion} tiene una operación/sector inválido.`,
+            );
+          }
+
+          const clave = `${fecha}|${obraVersion.toUpperCase()}|${fase}|${sector.id}`;
+
+          const actual = agrupadas.get(clave) || {
+            fecha_planificada: fecha,
+            obra_version: obraVersion,
+            fase,
+            id_operacion: Number(sector.id),
+            operacion: sector.nombre,
+            cantidad_pedida: 0,
+          };
+
+          actual.cantidad_pedida += cantidad;
+          agrupadas.set(clave, actual);
+        }
+      }
+
+      const ordenesBase = Array.from(agrupadas.values());
+
+      if (!ordenesBase.length) {
+        window.alert(
+          "No hay cantidades planificadas dentro del rango seleccionado.",
+        );
+        return;
+      }
+
+      /*
+       * La planificación actualmente vive en el frontend.
+       * Para obtener materiales usamos la misma API que ya utiliza
+       * el botón Cargar, una sola vez por Obra/Versión + Fase.
+       */
+      const calculosPorObraFase = new Map();
+
+      const clavesCalculo = [
+        ...new Set(
+          ordenesBase.map(
+            (orden) => `${orden.obra_version.toUpperCase()}|${orden.fase}`,
+          ),
+        ),
+      ];
+
+      await Promise.all(
+        clavesCalculo.map(async (clave) => {
+          const [obraVersion, faseTexto] = clave.split("|");
+          const fase = Number(faseTexto);
+
+          const respuesta = await solicitarJson(
+            `${API_PLANIFICACION}/calcular-materiales`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                obraVersion,
+                fase,
+              }),
+            },
+          );
+
+          calculosPorObraFase.set(clave, respuesta);
+        }),
+      );
+
+      const ordenesConMateriales = ordenesBase.map((orden) => {
+        const clave = `${orden.obra_version.toUpperCase()}|${orden.fase}`;
+
+        const calculo = calculosPorObraFase.get(clave) || {};
+
+        const operacionCalculada = Array.isArray(calculo.operaciones)
+          ? calculo.operaciones.find(
+              (operacion) =>
+                Number(operacion.id_operacion) === Number(orden.id_operacion),
+            )
+          : null;
+
+        const cantidadOperacionCompleta = convertirNumero(
+          operacionCalculada?.cantidad,
+        );
+
+        /*
+         * Si se planificó sólo una parte de la operación para ese día,
+         * los materiales se prorratean en la misma proporción.
+         */
+        const proporcion =
+          cantidadOperacionCompleta > 0
+            ? orden.cantidad_pedida / cantidadOperacionCompleta
+            : 1;
+
+        const materiales = Array.isArray(calculo.materiales)
+          ? calculo.materiales
+              .filter((material) => {
+                if (material?.excluido) {
+                  return false;
+                }
+
+                return Array.isArray(material?.operaciones)
+                  ? material.operaciones.some(
+                      (operacionMaterial) =>
+                        Number(operacionMaterial.id_operacion) ===
+                        Number(orden.id_operacion),
+                    )
+                  : false;
+              })
+              .map((material) => ({
+                id_articulo: Number(material.id_articulo) || null,
+                codigo: material.codigo || "",
+                descripcion: material.descripcion || "",
+                tipo: material.tipo || "",
+                cantidad: Number(
+                  (convertirNumero(material.cantidad) * proporcion).toFixed(4),
+                ),
+              }))
+              .filter(
+                (material) =>
+                  Number.isFinite(material.cantidad) && material.cantidad > 0,
+              )
+          : [];
+
+        return {
+          ...orden,
+          cantidad_pedida: Number(orden.cantidad_pedida.toFixed(4)),
+          materiales,
+        };
+      });
+
+      const resultado = await solicitarJson("/api/ordenes-trabajo/exportar", {
+        method: "POST",
+        body: JSON.stringify({
+          fecha_inicio: fechaInicioExportar,
+          fecha_fin: fechaFinExportar,
+          ordenes: ordenesConMateriales,
+        }),
+      });
+
+      setModalExportarAbierto(false);
+
+      window.alert(
+        `Exportación finalizada.\n\n` +
+          `Creadas: ${resultado?.creadas || 0}\n` +
+          `Actualizadas: ${resultado?.actualizadas || 0}\n` +
+          `Omitidas: ${resultado?.omitidas || 0}`,
+      );
+    } catch (error) {
+      console.error("Error exportando órdenes de trabajo:", error);
+
+      setErrorGeneral(error.message);
+      window.alert(error.message);
+    } finally {
+      setExportandoOrdenes(false);
     }
   };
 
@@ -943,14 +1377,9 @@ function PlanificacionProduccion() {
       fechaGuardado: new Date().toISOString(),
     };
 
-    localStorage.setItem(
-      CLAVE_HISTORICOS,
-      JSON.stringify(historicos)
-    );
+    localStorage.setItem(CLAVE_HISTORICOS, JSON.stringify(historicos));
 
-    window.alert(
-      `La planificación de ${mesSeleccionado} fue guardada.`
-    );
+    window.alert(`La planificación de ${mesSeleccionado} fue guardada.`);
   };
 
   const cargarHistorico = () => {
@@ -958,17 +1387,13 @@ function PlanificacionProduccion() {
     const historico = historicos[mesHistorico];
 
     if (!historico) {
-      window.alert(
-        "No existe una planificación guardada para ese mes."
-      );
+      window.alert("No existe una planificación guardada para ese mes.");
       return;
     }
 
     setMesSeleccionado(historico.mesSeleccionado);
     setObras(
-      Array.isArray(historico.obras)
-        ? historico.obras
-        : crearFilasIniciales()
+      Array.isArray(historico.obras) ? historico.obras : crearFilasIniciales(),
     );
     setModalHistoricoAbierto(false);
   };
@@ -976,9 +1401,7 @@ function PlanificacionProduccion() {
   return (
     <section className="planificacion-produccion">
       <div className="planificacion-encabezado">
-        <h2 className="module-title">
-          Planificación de Producción
-        </h2>
+        <h2 className="module-title">Planificación de Producción</h2>
 
         <label className="selector-mes">
           <span>Mes de planificación</span>
@@ -986,17 +1409,13 @@ function PlanificacionProduccion() {
           <input
             type="month"
             value={mesSeleccionado}
-            onChange={(event) =>
-              setMesSeleccionado(event.target.value)
-            }
+            onChange={(event) => cambiarMesPlanificacion(event.target.value)}
           />
         </label>
       </div>
 
       {errorGeneral && (
-        <div className="mensaje-consulta error">
-          {errorGeneral}
-        </div>
+        <div className="mensaje-consulta error">{errorGeneral}</div>
       )}
 
       {cargandoConfiguracion && (
@@ -1006,10 +1425,7 @@ function PlanificacionProduccion() {
       )}
 
       <div className="planificacion-acciones">
-        <button
-          type="button"
-          onClick={() => setModalTiemposAbierto(true)}
-        >
+        <button type="button" onClick={() => setModalTiemposAbierto(true)}>
           Tiempos STD
         </button>
 
@@ -1023,10 +1439,7 @@ function PlanificacionProduccion() {
           Tipos de material
         </button>
 
-        <button
-          type="button"
-          onClick={() => setModalExcluirAbierto(true)}
-        >
+        <button type="button" onClick={() => setModalExcluirAbierto(true)}>
           Materiales a excluir
         </button>
 
@@ -1043,6 +1456,10 @@ function PlanificacionProduccion() {
         >
           Cargar histórico
         </button>
+
+        <button type="button" onClick={abrirModalExportar}>
+          Exportar a Órdenes de Trabajo
+        </button>
       </div>
 
       <div className="planificacion-bloque">
@@ -1050,10 +1467,7 @@ function PlanificacionProduccion() {
           <table className="tabla-planificacion tabla-sectores">
             <thead>
               <tr>
-                <th
-                  className="columna-sector columna-fija"
-                  rowSpan={2}
-                >
+                <th className="columna-sector columna-fija" rowSpan={2}>
                   Sectores
                 </th>
 
@@ -1127,19 +1541,16 @@ function PlanificacionProduccion() {
         </div>
 
         <div className="planificacion-scroll">
-          <table className="tabla-planificacion tabla-obras">
+          <table
+            className="tabla-planificacion tabla-obras"
+            onKeyDown={manejarEnterTablaObras}
+          >
             <thead>
               <tr>
-                <th
-                  className="columna-cargar"
-                  rowSpan={2}
-                >
+                <th className="columna-cargar" rowSpan={2}>
                   Cargar
                 </th>
-                <th
-                  className="columna-obra columna-fija-obra"
-                  rowSpan={2}
-                >
+                <th className="columna-obra columna-fija-obra" rowSpan={2}>
                   Obra
                 </th>
 
@@ -1176,10 +1587,7 @@ function PlanificacionProduccion() {
                   </th>
                 ))}
 
-                <th
-                  className="columna-acciones"
-                  rowSpan={2}
-                >
+                <th className="columna-acciones" rowSpan={2}>
                   Eliminar
                 </th>
               </tr>
@@ -1202,47 +1610,35 @@ function PlanificacionProduccion() {
 
             <tbody>
               {obras.map((obra) => (
-  <tr key={obra.id}>
-    <td className="celda-cargar">
-      <button
-        type="button"
-        className="boton-cargar-operaciones"
-        onClick={() =>
-          cargarOperacionesDeFila(obra)
-        }
-        disabled={filaCalculando !== null}
-        title="Cargar operaciones y materiales"
-      >
-        {filaCalculando === obra.id
-          ? "..."
-          : "Cargar"}
-      </button>
-    </td>
+                <tr key={obra.id}>
+                  <td className="celda-cargar">
+                    <button
+                      type="button"
+                      className="boton-cargar-operaciones"
+                      onClick={() => cargarOperacionesDeFila(obra)}
+                      disabled={filaCalculando !== null}
+                      title="Cargar operaciones y materiales"
+                    >
+                      {filaCalculando === obra.id ? "..." : "Cargar"}
+                    </button>
+                  </td>
 
-    <td className="columna-fija-obra">
-      <input
-        type="text"
-        value={obra.obra}
-        placeholder="Obra/Versión"
-        onChange={(event) =>
-          actualizarObra(
-            obra.id,
-            "obra",
-            event.target.value
-          )
-        }
-      />
-    </td>
+                  <td className="columna-fija-obra">
+                    <input
+                      type="text"
+                      value={obra.obra}
+                      placeholder="Obra/Versión"
+                      onChange={(event) =>
+                        actualizarObra(obra.id, "obra", event.target.value)
+                      }
+                    />
+                  </td>
 
                   <td>
                     <select
                       value={obra.sectorId}
                       onChange={(event) =>
-                        actualizarObra(
-                          obra.id,
-                          "sectorId",
-                          event.target.value
-                        )
+                        actualizarObra(obra.id, "sectorId", event.target.value)
                       }
                     >
                       <option value="">Seleccionar</option>
@@ -1262,11 +1658,7 @@ function PlanificacionProduccion() {
                       step="1"
                       value={obra.cantidad}
                       onChange={(event) =>
-                        actualizarObra(
-                          obra.id,
-                          "cantidad",
-                          event.target.value
-                        )
+                        actualizarObra(obra.id, "cantidad", event.target.value)
                       }
                     />
                   </td>
@@ -1274,10 +1666,29 @@ function PlanificacionProduccion() {
                   <td>
                     <input
                       type="number"
+                      min="0"
+                      step="0.01"
                       value={obra.tiempoStd}
-                      readOnly
-                      className="campo-calculado"
+                      className={
+                        obra.tiempoStdEspecifico
+                          ? "campo-tiempo-especifico"
+                          : ""
+                      }
+                      title={
+                        obra.tiempoStdEspecifico
+                          ? `STD específico de esta obra. STD general: ${obra.tiempoStdBase || "0"}`
+                          : "STD general de la operación. Podés editarlo para esta obra/fase."
+                      }
+                      onChange={(event) =>
+                        actualizarObra(obra.id, "tiempoStd", event.target.value)
+                      }
+                      onBlur={() => guardarTiempoStdObra(obra)}
                     />
+                    {obra.tiempoStdEspecifico && (
+                      <span className="etiqueta-tiempo-especifico">
+                        específico
+                      </span>
+                    )}
                   </td>
 
                   <td>
@@ -1295,11 +1706,7 @@ function PlanificacionProduccion() {
                       value={obra.fase}
                       placeholder="Fase"
                       onChange={(event) =>
-                        actualizarObra(
-                          obra.id,
-                          "fase",
-                          event.target.value
-                        )
+                        actualizarObra(obra.id, "fase", event.target.value)
                       }
                     />
                   </td>
@@ -1311,7 +1718,7 @@ function PlanificacionProduccion() {
 
                     const horasPlanificadas = calcularHoras(
                       cantidadPlanificada,
-                      obra.tiempoStd
+                      obra.tiempoStd,
                     );
 
                     return (
@@ -1333,7 +1740,7 @@ function PlanificacionProduccion() {
                               actualizarCantidadDia(
                                 obra.id,
                                 fecha,
-                                event.target.value
+                                event.target.value,
                               )
                             }
                           />
@@ -1363,6 +1770,96 @@ function PlanificacionProduccion() {
           </table>
         </div>
       </div>
+
+      {modalExportarAbierto && (
+        <div
+          className="planificacion-modal-overlay"
+          onMouseDown={() => {
+            if (!exportandoOrdenes) {
+              setModalExportarAbierto(false);
+            }
+          }}
+        >
+          <div
+            className="planificacion-modal planificacion-modal-pequeno"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="planificacion-modal-header">
+              <div>
+                <h3>Exportar Órdenes de Trabajo</h3>
+                <span>
+                  Seleccione el rango de fechas que desea enviar a Gestión de
+                  Producción.
+                </span>
+              </div>
+
+              <button
+                type="button"
+                className="planificacion-modal-cerrar"
+                onClick={() => setModalExportarAbierto(false)}
+                disabled={exportandoOrdenes}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="planificacion-modal-body">
+              <div className="exportar-ot-campos">
+                <label>
+                  <span>Fecha de inicio</span>
+
+                  <input
+                    type="date"
+                    value={fechaInicioExportar}
+                    onChange={(event) =>
+                      setFechaInicioExportar(event.target.value)
+                    }
+                    disabled={exportandoOrdenes}
+                  />
+                </label>
+
+                <label>
+                  <span>Fecha de fin</span>
+
+                  <input
+                    type="date"
+                    value={fechaFinExportar}
+                    onChange={(event) =>
+                      setFechaFinExportar(event.target.value)
+                    }
+                    disabled={exportandoOrdenes}
+                  />
+                </label>
+              </div>
+
+              <div className="exportar-ot-ayuda">
+                Se exportarán únicamente las celdas con cantidad planificada
+                mayor a cero. También se calcularán y guardarán los materiales
+                asociados a cada operación.
+              </div>
+            </div>
+
+            <div className="planificacion-modal-footer">
+              <button
+                type="button"
+                className="boton-secundario"
+                onClick={() => setModalExportarAbierto(false)}
+                disabled={exportandoOrdenes}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={exportarOrdenesTrabajo}
+                disabled={exportandoOrdenes}
+              >
+                {exportandoOrdenes ? "Exportando..." : "Exportar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {modalTiemposAbierto && (
         <div
@@ -1394,9 +1891,7 @@ function PlanificacionProduccion() {
                   type="text"
                   value={nuevoSector}
                   placeholder="Nueva operación"
-                  onChange={(event) =>
-                    setNuevoSector(event.target.value)
-                  }
+                  onChange={(event) => setNuevoSector(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
@@ -1434,12 +1929,10 @@ function PlanificacionProduccion() {
                             onChange={(event) =>
                               actualizarTiempoSectorLocal(
                                 sector.id,
-                                event.target.value
+                                event.target.value,
                               )
                             }
-                            onBlur={() =>
-                              guardarTiempoSector(sector)
-                            }
+                            onBlur={() => guardarTiempoSector(sector)}
                           />
                         </td>
 
@@ -1483,9 +1976,7 @@ function PlanificacionProduccion() {
             <div className="planificacion-modal-header">
               <div>
                 <h3>Tipos de material</h3>
-                <span>
-                  Relación entre operación y tipo de artículo
-                </span>
+                <span>Relación entre operación y tipo de artículo</span>
               </div>
 
               <button
@@ -1499,18 +1990,13 @@ function PlanificacionProduccion() {
 
             <div className="planificacion-modal-body">
               <div className="configuracion-modal-acciones">
-                <button
-                  type="button"
-                  onClick={agregarFilaTipoMaterial}
-                >
+                <button type="button" onClick={agregarFilaTipoMaterial}>
                   Agregar fila
                 </button>
               </div>
 
               {errorTipos && (
-                <div className="mensaje-consulta error">
-                  {errorTipos}
-                </div>
+                <div className="mensaje-consulta error">{errorTipos}</div>
               )}
 
               <div className="tabla-configuracion-wrapper">
@@ -1541,17 +2027,14 @@ function PlanificacionProduccion() {
                               actualizarFilaTipoMaterial(
                                 fila.id,
                                 "sectorId",
-                                event.target.value
+                                event.target.value,
                               )
                             }
                           >
                             <option value="">Seleccionar</option>
 
                             {sectores.map((sector) => (
-                              <option
-                                key={sector.id}
-                                value={sector.id}
-                              >
+                              <option key={sector.id} value={sector.id}>
                                 {sector.nombre}
                               </option>
                             ))}
@@ -1565,7 +2048,7 @@ function PlanificacionProduccion() {
                               actualizarFilaTipoMaterial(
                                 fila.id,
                                 "tipo",
-                                event.target.value
+                                event.target.value,
                               )
                             }
                           >
@@ -1583,9 +2066,7 @@ function PlanificacionProduccion() {
                           <button
                             type="button"
                             className="boton-eliminar-configuracion"
-                            onClick={() =>
-                              eliminarFilaTipoMaterial(fila.id)
-                            }
+                            onClick={() => eliminarFilaTipoMaterial(fila.id)}
                           >
                             Eliminar
                           </button>
@@ -1647,10 +2128,7 @@ function PlanificacionProduccion() {
 
             <div className="planificacion-modal-body">
               <div className="configuracion-modal-acciones">
-                <button
-                  type="button"
-                  onClick={agregarFilaMaterialExcluir}
-                >
+                <button type="button" onClick={agregarFilaMaterialExcluir}>
                   Agregar fila
                 </button>
               </div>
@@ -1685,17 +2163,14 @@ function PlanificacionProduccion() {
                               actualizarFilaMaterialExcluir(
                                 fila.id,
                                 "sectorId",
-                                event.target.value
+                                event.target.value,
                               )
                             }
                           >
                             <option value="">Seleccionar</option>
 
                             {sectores.map((sector) => (
-                              <option
-                                key={sector.id}
-                                value={sector.id}
-                              >
+                              <option key={sector.id} value={sector.id}>
                                 {sector.nombre}
                               </option>
                             ))}
@@ -1711,12 +2186,10 @@ function PlanificacionProduccion() {
                               actualizarFilaMaterialExcluir(
                                 fila.id,
                                 "codigo",
-                                event.target.value
+                                event.target.value,
                               )
                             }
-                            onBlur={() =>
-                              buscarMaterialExcluir(fila.id)
-                            }
+                            onBlur={() => buscarMaterialExcluir(fila.id)}
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
                                 event.preventDefault();
@@ -1755,9 +2228,7 @@ function PlanificacionProduccion() {
                           <button
                             type="button"
                             className="boton-eliminar-configuracion"
-                            onClick={() =>
-                              eliminarFilaMaterialExcluir(fila.id)
-                            }
+                            onClick={() => eliminarFilaMaterialExcluir(fila.id)}
                           >
                             Eliminar
                           </button>
@@ -1822,9 +2293,7 @@ function PlanificacionProduccion() {
                 <input
                   type="month"
                   value={mesHistorico}
-                  onChange={(event) =>
-                    setMesHistorico(event.target.value)
-                  }
+                  onChange={(event) => setMesHistorico(event.target.value)}
                 />
               </label>
             </div>

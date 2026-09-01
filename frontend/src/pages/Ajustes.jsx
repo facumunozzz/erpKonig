@@ -51,6 +51,7 @@ export default function Ajustes() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [gotoPage, setGotoPage] = useState("");
+  const [filtrosColumnas, setFiltrosColumnas] = useState({});
 
   const [totalRows, setTotalRows] = useState(0);
   const [serverTotalPages, setServerTotalPages] = useState(1);
@@ -460,8 +461,22 @@ export default function Ajustes() {
   });
 
   const filtrados = useMemo(() => {
-    return excel.rows;
-  }, [excel.rows]);
+    return excel.rows.filter((ajuste) =>
+      AJUSTE_COLUMNS.every(([key]) => {
+        const filtro = String(filtrosColumnas[key] ?? "")
+          .trim()
+          .toLowerCase();
+
+        if (!filtro) {
+          return true;
+        }
+
+        return String(getAjusteValue(ajuste, key) ?? "")
+          .toLowerCase()
+          .includes(filtro);
+      }),
+    );
+  }, [excel.rows, filtrosColumnas]);
 
   // PAGINADO DE AJUSTES
   const totalPages = paginacionServidor
@@ -578,8 +593,8 @@ export default function Ajustes() {
           </button>
 
           <button
-            type="button"
             onClick={() => {
+              setFiltrosColumnas({});
               excel.clearAllFilters();
               setCurrentPage(1);
             }}
@@ -858,6 +873,30 @@ export default function Ajustes() {
                     excel={excel}
                   />
                 </div>
+              </th>
+            ))}
+          </tr>
+          <tr>
+            {AJUSTE_COLUMNS.map(([key]) => (
+              <th key={`filtro-${key}`}>
+                <input
+                  type="text"
+                  value={filtrosColumnas[key] || ""}
+                  placeholder="Filtrar..."
+                  onChange={(e) => {
+                    setFiltrosColumnas((prev) => ({
+                      ...prev,
+                      [key]: e.target.value,
+                    }));
+
+                    setCurrentPage(1);
+                  }}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "5px 7px",
+                  }}
+                />
               </th>
             ))}
           </tr>

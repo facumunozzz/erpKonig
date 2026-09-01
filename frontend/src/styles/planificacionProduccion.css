@@ -1044,3 +1044,63 @@
   width: 65px;
   min-width: 65px;
 }
+
+
+/* =========================================================
+   EXPORTAR PLANIFICACIÓN A ÓRDENES DE TRABAJO
+   ========================================================= */
+
+.exportar-ot-campos {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.exportar-ot-campos label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.exportar-ot-campos label > span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.exportar-ot-campos input {
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 9px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2937;
+  outline: none;
+}
+
+.exportar-ot-campos input:focus {
+  border-color: #007acc;
+  box-shadow: 0 0 0 3px rgba(0, 122, 204, 0.12);
+}
+
+.exportar-ot-ayuda {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .exportar-ot-campos {
+    grid-template-columns: 1fr;
+  }
+
+  .exportar-ot-campos input {
+    min-height: 46px;
+    font-size: 16px;
+  }
+}

@@ -661,9 +661,12 @@ exports.consumir = async (req, res) => {
     });
   }
 
-  if (!ubicacion) {
+  if (
+    !Number.isInteger(idUbicacionRecorte) ||
+    idUbicacionRecorte <= 0
+  ) {
     return res.status(400).json({
-      error: "Debe indicar la ubicación.",
+      error: "Debe indicar una ubicación válida.",
     });
   }
 
@@ -680,7 +683,11 @@ exports.consumir = async (req, res) => {
     const result = await pool
       .request()
       .input("idRecorte", sql.Int, idRecorte)
-      .input("ubicacion", sql.VarChar(150), ubicacion)
+      .input(
+        "idUbicacionRecorte",
+        sql.Int,
+        idUbicacionRecorte
+      )
       .input("cantidad", sql.Decimal(18, 3), cantidad)
       .query(`
         SET NOCOUNT ON;
@@ -712,7 +719,7 @@ exports.consumir = async (req, res) => {
           cantidad
         FROM dbo.stock_recortes
         WHERE id_recorte = @idRecorte
-          AND UPPER(LTRIM(RTRIM(ubicacion))) = @ubicacion;
+          AND id_ubicacion_recorte = @idUbicacionRecorte;
       `);
 
     return res.json({

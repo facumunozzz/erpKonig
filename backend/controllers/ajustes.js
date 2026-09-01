@@ -3400,6 +3400,22 @@ exports.saveDraft = async (req, res) => {
 
       const ubicacion = String(item.ubicacion || "").trim();
 
+      const idRecorteRaw = item.id_recorte;
+      const idRecorte =
+        idRecorteRaw === null ||
+        idRecorteRaw === undefined ||
+        String(idRecorteRaw).trim() === ""
+          ? null
+          : asInt(idRecorteRaw);
+
+      const idUbicacionRaw = item.id_ubicacion;
+      const idUbicacion =
+        idUbicacionRaw === null ||
+        idUbicacionRaw === undefined ||
+        String(idUbicacionRaw).trim() === ""
+          ? null
+          : asInt(idUbicacionRaw);
+
       const cantidad = String(item.cantidad ?? "").trim();
 
       if (!codigo && !descripcion && !cantidad) {
@@ -3413,6 +3429,12 @@ exports.saveDraft = async (req, res) => {
         .input("proveedor", sql.NVarChar(255), proveedor || null)
         .input("stock", sql.NVarChar(50), stock || null)
         .input("stockTotal", sql.NVarChar(50), stockTotal || null)
+        .input("idRecorte", sql.Int, Number.isFinite(idRecorte) && idRecorte > 0 ? idRecorte : null)
+        .input(
+          "idUbicacion",
+          sql.Int,
+          Number.isFinite(idUbicacion) && idUbicacion > 0 ? idUbicacion : null,
+        )
         .input("ubicacion", sql.NVarChar(100), ubicacion || null)
         .input("cantidad", sql.NVarChar(50), cantidad || null)
         .input("orden", sql.Int, index).query(`
@@ -3424,6 +3446,8 @@ exports.saveDraft = async (req, res) => {
             proveedor,
             stock,
             stock_total,
+            id_recorte,
+            id_ubicacion,
             ubicacion,
             cantidad,
             orden
@@ -3436,6 +3460,8 @@ exports.saveDraft = async (req, res) => {
             @proveedor,
             @stock,
             @stockTotal,
+            @idRecorte,
+            @idUbicacion,
             @ubicacion,
             @cantidad,
             @orden
@@ -3465,6 +3491,7 @@ exports.saveDraft = async (req, res) => {
     });
   }
 };
+
 
 exports.getDraftById = async (req, res) => {
   try {
@@ -3505,6 +3532,8 @@ exports.getDraftById = async (req, res) => {
             proveedor,
             stock,
             stock_total,
+            id_recorte,
+            id_ubicacion,
             ubicacion,
             cantidad
 
@@ -3594,6 +3623,8 @@ exports.confirmDraft = async (req, res) => {
           SELECT
             codigo,
             descripcion,
+            id_recorte,
+            id_ubicacion,
             ubicacion,
             cantidad
 
@@ -3617,6 +3648,20 @@ exports.confirmDraft = async (req, res) => {
         return {
           cod_articulo: String(item.codigo).trim().toUpperCase(),
 
+          id_recorte:
+            item.id_recorte !== null &&
+            item.id_recorte !== undefined &&
+            Number.isFinite(Number(item.id_recorte))
+              ? Number(item.id_recorte)
+              : null,
+
+          id_ubicacion:
+            item.id_ubicacion !== null &&
+            item.id_ubicacion !== undefined &&
+            Number.isFinite(Number(item.id_ubicacion))
+              ? Number(item.id_ubicacion)
+              : null,
+
           ubicacion: String(item.ubicacion || "").trim(),
 
           cantidad:
@@ -3635,8 +3680,6 @@ exports.confirmDraft = async (req, res) => {
 
     req.body = {
       deposito_id: borrador.deposito_id,
-
-      id_ubicacion: null,
 
       motivo_id: borrador.motivo_id,
 
@@ -3700,6 +3743,7 @@ exports.confirmDraft = async (req, res) => {
     });
   }
 };
+
 
 // ========================================================
 // REVERSIÓN DE MOVIMIENTOS POR REFERENCIA

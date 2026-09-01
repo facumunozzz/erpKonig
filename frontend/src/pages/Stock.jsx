@@ -356,11 +356,29 @@ function Stock() {
 
   excelRef.current = excel;
 
+  const stockFiltradoPorInputs = useMemo(() => {
+    return excel.rows.filter((item) =>
+      STOCK_HEADERS.every(([key]) => {
+        const filtro = String(filtros[key] ?? "")
+          .trim()
+          .toLowerCase();
+
+        if (!filtro) {
+          return true;
+        }
+
+        return String(getStockFilterValue(item, key) ?? "")
+          .toLowerCase()
+          .includes(filtro);
+      }),
+    );
+  }, [excel.rows, filtros]);
+
   // ================= PAGINADO PRO =================
-  const totalItems = excel.rows.length;
+  const totalItems = stockFiltradoPorInputs.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
-  const paginated = excel.rows.slice(
+  const paginated = stockFiltradoPorInputs.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
@@ -960,6 +978,32 @@ function Stock() {
                       zIndex: 2,
                     }}
                     title="Arrastrar para cambiar ancho"
+                  />
+                </th>
+              ))}
+            </tr>
+
+            <tr>
+              {STOCK_HEADERS.map(([key]) => (
+                <th
+                  key={`filtro-${key}`}
+                  style={{
+                    width: `${colWidths[key] || 140}px`,
+                    maxWidth: `${colWidths[key] || 140}px`,
+                    boxSizing: "border-box",
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={filtros[key] || ""}
+                    placeholder="Filtrar..."
+                    onChange={(e) => handleFilter(e, key)}
+                    style={{
+                      width: "100%",
+                      minWidth: 0,
+                      boxSizing: "border-box",
+                      padding: "5px 7px",
+                    }}
                   />
                 </th>
               ))}

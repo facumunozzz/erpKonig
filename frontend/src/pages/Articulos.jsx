@@ -8,7 +8,10 @@ import ArticuloEditarModal from "../components/ArticuloEditarModal";
 import ArticuloEliminarModal from "../components/ArticuloEliminarModal";
 import UbicacionesModal from "../components/UbicacionesModal";
 import UbicacionAutocomplete from "./../components/UbicacionesAutocomplete";
-import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
+import {
+  useExcelFilters,
+  ExcelFilterButton,
+} from "../components/ExcelColumnFilter";
 
 const STORAGE_KEY = "articulos_col_widths_v1";
 const CAMPOS_OCULTOS = ["almacen", "cantidad", "traspasa"];
@@ -34,7 +37,6 @@ export default function Articulos() {
   const [openProv, setOpenProv] = useState(false);
   const [openFolio, setOpenFolio] = useState(false);
   const [openTipo, setOpenTipo] = useState(false);
-
 
   // ================= PAGINADO PRO =================
   const [currentPage, setCurrentPage] = useState(1);
@@ -336,7 +338,7 @@ export default function Articulos() {
         label: String(col).toUpperCase(),
         getValue: (row) => getCellValue(row, col),
       })),
-    [columnas]
+    [columnas],
   );
 
   const excel = useExcelFilters(articulos, excelColumns, {
@@ -345,11 +347,30 @@ export default function Articulos() {
 
   excelRef.current = excel;
 
+  const articulosFiltrados = useMemo(() => {
+    return excel.rows.filter((articulo) =>
+      Object.entries(filtros).every(([key, valor]) => {
+        const filtro = String(valor ?? "")
+          .trim()
+          .toLowerCase();
+
+        if (!filtro) {
+          return true;
+        }
+
+        return String(getCellValue(articulo, key) ?? "")
+          .toLowerCase()
+          .includes(filtro);
+      }),
+    );
+  }, [excel.rows, filtros]);
+
   // ================= PAGINADO PRO =================
-  const totalItems = excel.rows.length;
+  const totalItems = articulosFiltrados.length;
+
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
-  const paginated = excel.rows.slice(
+  const paginated = articulosFiltrados.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
@@ -381,7 +402,6 @@ export default function Articulos() {
   };
 
   const pageButtons = buildPageButtons();
-
 
   useEffect(() => {
     const wrap = tableWrapRef.current;
@@ -658,6 +678,25 @@ export default function Articulos() {
                 />
               </th>
             </tr>
+            <tr>
+              {columnas.map((col) => (
+                <th key={`filtro-${col}`}>
+                  <input
+                    type="text"
+                    value={filtros[col] || ""}
+                    placeholder="Filtrar..."
+                    onChange={(e) => handleFilter(e, col)}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: "5px 7px",
+                    }}
+                  />
+                </th>
+              ))}
+
+              <th />
+            </tr>
           </thead>
 
           <tbody>
@@ -685,7 +724,9 @@ export default function Articulos() {
                           value={a.ubicacion ?? ""}
                           ubicaciones={ubicaciones}
                           disabled={savingUbicacionId === a.id_articulo}
-                          onChange={(value) => actualizarUbicacionLocal(a.id_articulo, value)}
+                          onChange={(value) =>
+                            actualizarUbicacionLocal(a.id_articulo, value)
+                          }
                           onValidSave={(value) => guardarUbicacion(a, value)}
                           onCancel={() => fetchArticulos()}
                         />

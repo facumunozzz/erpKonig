@@ -4,7 +4,10 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axiosConfig";
 import "./../styles/transferencias.css";
 import ReferentesModal from "../components/ReferentesModal";
-import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
+import {
+  useExcelFilters,
+  ExcelFilterButton,
+} from "../components/ExcelColumnFilter";
 
 const TRANSFERENCIA_COLUMNS = [
   ["fecha", "Fecha"],
@@ -16,12 +19,11 @@ const TRANSFERENCIA_COLUMNS = [
   ["numero_transferencia", "Nro Transferencia"],
 ];
 
-
 function Transferencias() {
   const navigate = useNavigate();
 
   const [transferencias, setTransferencias] = useState([]);
-  const [filtro, setFiltro] = useState("");
+  const [filtros, setFiltros] = useState({});
   const [showReferentes, setShowReferentes] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -45,7 +47,9 @@ function Transferencias() {
     }
 
     if (key === "fecha_real") {
-      return t.fecha_real ? new Date(t.fecha_real).toLocaleDateString("es-AR") : "";
+      return t.fecha_real
+        ? new Date(t.fecha_real).toLocaleDateString("es-AR")
+        : "";
     }
 
     if (key === "numero_transferencia") {
@@ -62,7 +66,7 @@ function Transferencias() {
         label,
         getValue: (row) => getTransferenciaValue(row, key),
       })),
-    []
+    [],
   );
 
   const excel = useExcelFilters(transferencias, excelColumns, {
@@ -73,10 +77,19 @@ function Transferencias() {
   // Filtro global
   // ==========================
   const transferenciasFiltradas = excel.rows.filter((t) =>
-    !filtro ||
-    Object.values(t).some((val) =>
-      String(val ?? "").toLowerCase().includes(filtro.toLowerCase())
-    )
+    TRANSFERENCIA_COLUMNS.every(([key]) => {
+      const filtroColumna = String(filtros[key] ?? "")
+        .trim()
+        .toLowerCase();
+
+      if (!filtroColumna) {
+        return true;
+      }
+
+      return String(getTransferenciaValue(t, key) ?? "")
+        .toLowerCase()
+        .includes(filtroColumna);
+    }),
   );
 
   // ==========================
@@ -86,7 +99,7 @@ function Transferencias() {
 
   const paginated = transferenciasFiltradas.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
 
   const irPagina = (p) => {
@@ -95,9 +108,7 @@ function Transferencias() {
   };
 
   const from =
-    transferenciasFiltradas.length === 0
-      ? 0
-      : (currentPage - 1) * pageSize + 1;
+    transferenciasFiltradas.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
 
   const to = Math.min(currentPage * pageSize, transferenciasFiltradas.length);
 
@@ -110,29 +121,17 @@ function Transferencias() {
           Nueva transferencia
         </button>
 
-        <button onClick={() => setShowReferentes(true)}>
-          👤 Actuantes
-        </button>
+        <button onClick={() => setShowReferentes(true)}>👤 Actuantes</button>
 
         <button
           onClick={() => {
-            setFiltro("");
+            setFiltros({});
             excel.clearAllFilters();
             setCurrentPage(1);
           }}
         >
           Limpiar filtros
         </button>
-
-        <input
-          type="text"
-          placeholder="Filtrar transferencias"
-          value={filtro}
-          onChange={(e) => {
-            setFiltro(e.target.value);
-            setCurrentPage(1);
-          }}
-        />
       </div>
 
       <table className="tabla-transferencias">
@@ -149,12 +148,38 @@ function Transferencias() {
                   }}
                 >
                   <span>{label}</span>
+
                   <ExcelFilterButton
                     columnKey={key}
                     label={label}
                     excel={excel}
                   />
                 </div>
+              </th>
+            ))}
+          </tr>
+
+          <tr>
+            {TRANSFERENCIA_COLUMNS.map(([key]) => (
+              <th key={`filtro-${key}`}>
+                <input
+                  type="text"
+                  value={filtros[key] || ""}
+                  placeholder="Filtrar..."
+                  onChange={(e) => {
+                    setFiltros((prev) => ({
+                      ...prev,
+                      [key]: e.target.value,
+                    }));
+
+                    setCurrentPage(1);
+                  }}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "5px 7px",
+                  }}
+                />
               </th>
             ))}
           </tr>
@@ -171,7 +196,9 @@ function Transferencias() {
                 onClick={() => navigate(`/transferencias/${id}`)}
                 title="Ver detalle"
               >
-                <td>{t.fecha ? new Date(t.fecha).toLocaleString("es-AR") : ""}</td>
+                <td>
+                  {t.fecha ? new Date(t.fecha).toLocaleString("es-AR") : ""}
+                </td>
 
                 <td>
                   {t.fecha_real
@@ -256,9 +283,7 @@ function Transferencias() {
           {Array.from({ length: totalPages }, (_, i) => i + 1)
             .filter(
               (p) =>
-                p === 1 ||
-                p === totalPages ||
-                Math.abs(p - currentPage) <= 1
+                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
             )
             .map((p, i, arr) => (
               <React.Fragment key={p}>
