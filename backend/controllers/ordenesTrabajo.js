@@ -1,4 +1,8 @@
 const { sql, poolConnect, getPool } = require("../db");
+const { resolverOperacionUsuario } = require("../utils/operacionUsuario");
+const {
+  ocultarOrdenesFinalizadasCompletas: ejecutarOcultamientoFinalizadasCompletas,
+} = require("../services/ordenesTrabajoLimpieza");
 
 function texto(valor) {
   const resultado = String(valor ?? "").trim();
@@ -152,17 +156,23 @@ exports.getAll = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
+    const operacionUsuario = await resolverOperacionUsuario(pool, req);
+    const usuarioActual = obtenerUsuario(req);
+
+    // Si el usuario coincide con una operación, se restringe a esa operación.
+    // Si no coincide con ninguna, operacionUsuario queda en null y ve todas.
+
     const desde = fechaValida(req.query.desde) ? req.query.desde : null;
-
     const hasta = fechaValida(req.query.hasta) ? req.query.hasta : null;
-
     const estado = texto(req.query.estado);
 
     const result = await pool
       .request()
       .input("desde", sql.Date, desde)
       .input("hasta", sql.Date, hasta)
-      .input("estado", sql.VarChar(20), estado).query(`
+      .input("estado", sql.VarChar(20), estado)
+      .input("operacionUsuario", sql.NVarChar(150), operacionUsuario)
+      .input("usuarioActual", sql.NVarChar(255), usuarioActual).query(`
         SELECT
           ot.id_ot,
           ot.otid,
@@ -197,6 +207,7 @@ exports.getAll = async (req, res) => {
           ) AS inicio_indirecto_activo,
           ot.observacion,
           ot.estado,
+          ot.usuario_creacion,
           (
             SELECT COUNT(*)
             FROM dbo.ordenes_trabajo_materiales mat
@@ -212,6 +223,31 @@ exports.getAll = async (req, res) => {
           AND (@desde IS NULL OR ot.fecha_planificada >= @desde)
           AND (@hasta IS NULL OR ot.fecha_planificada <= @hasta)
           AND (@estado IS NULL OR ot.estado = @estado)
+          AND (
+            @operacionUsuario IS NULL
+            OR (
+              -- Indirecto independiente: pertenece al usuario que lo creó.
+              (
+                UPPER(LTRIM(RTRIM(ISNULL(ot.tipo_ot, 'PRODUCTIVA')))) = 'INDIRECTO'
+                AND ot.id_ot_origen IS NULL
+                AND LTRIM(RTRIM(ISNULL(ot.usuario_creacion, '')))
+                    COLLATE Latin1_General_100_CI_AI
+                  = LTRIM(RTRIM(ISNULL(@usuarioActual, '')))
+                    COLLATE Latin1_General_100_CI_AI
+              )
+              OR
+              -- OT productiva o indirecto generado al pausar una OT:
+              -- se conserva el filtro normal por operación.
+              (
+                CASE
+                  WHEN UPPER(LTRIM(RTRIM(ISNULL(ot.tipo_ot, 'PRODUCTIVA')))) = 'INDIRECTO'
+                    THEN origen.operacion
+                  ELSE ot.operacion
+                END
+              ) COLLATE Latin1_General_100_CI_AI
+                = @operacionUsuario COLLATE Latin1_General_100_CI_AI
+            )
+          )
         ORDER BY
           CASE WHEN ot.estado = 'EN_PROCESO' THEN 0
                WHEN ot.estado = 'PAUSADA' THEN 1
@@ -529,6 +565,151 @@ exports.agregarMaterial = async (req, res) => {
 
     return res.status(500).json({
       error: "Error al agregar el material a la orden de trabajo",
+      detalle: error.message,
+    });
+  }
+};
+
+
+// ============================================================
+// CREAR INDIRECTO INDEPENDIENTE
+// No necesita una OT productiva de origen.
+// Queda ligado al usuario autenticado mediante usuario_creacion.
+// ============================================================
+exports.crearIndirectoIndependiente = async (req, res) => {
+  let transaction;
+
+  try {
+    const motivo =
+      texto(req.body?.motivo) ||
+      texto(req.body?.motivo_indirecto) ||
+      texto(req.body?.actividad);
+
+    const operador = texto(req.body?.operador);
+    const usuario = texto(obtenerUsuario(req));
+
+    if (!usuario) {
+      return res.status(401).json({
+        error: "No se pudo identificar al usuario autenticado",
+      });
+    }
+
+    if (!operador) {
+      return res.status(400).json({
+        error: "Debe seleccionar un operador / actuante",
+      });
+    }
+
+    if (!motivo) {
+      return res.status(400).json({
+        error: "Debe indicar la actividad indirecta",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    const creado = await new sql.Request(transaction)
+      .input("motivo", sql.NVarChar(300), motivo)
+      .input("operador", sql.NVarChar(150), operador)
+      .input("usuario", sql.NVarChar(255), usuario)
+      .query(`
+        INSERT INTO dbo.ordenes_trabajo
+        (
+          otid,
+          fecha_planificada,
+          obra_version,
+          fase,
+          id_operacion,
+          operacion,
+          tipo_ot,
+          id_ot_origen,
+          id_ot_raiz,
+          motivo_indirecto,
+          cantidad_pedida,
+          cantidad_fabricada,
+          operador,
+          hora_inicio,
+          hora_fin,
+          inicio_real,
+          fin_real,
+          tiempo_indirecto_segundos,
+          estado,
+          usuario_creacion,
+          fecha_creacion,
+          fecha_modificacion
+        )
+        OUTPUT INSERTED.id_ot
+        VALUES
+        (
+          'IND_LIBRE_TEMP',
+          CONVERT(DATE, SYSDATETIME()),
+          'SIN OBRA',
+          NULL,
+          NULL,
+          @motivo,
+          'INDIRECTO',
+          NULL,
+          NULL,
+          @motivo,
+          0,
+          0,
+          @operador,
+          CONVERT(TIME(0), GETDATE()),
+          NULL,
+          SYSDATETIME(),
+          NULL,
+          0,
+          'EN_PROCESO',
+          @usuario,
+          SYSDATETIME(),
+          SYSDATETIME()
+        );
+      `);
+
+    const idIndirecto = Number(creado.recordset?.[0]?.id_ot);
+
+    if (!Number.isInteger(idIndirecto) || idIndirecto <= 0) {
+      throw new Error("No se pudo obtener el ID del indirecto creado");
+    }
+
+    await new sql.Request(transaction)
+      .input("id", sql.Int, idIndirecto)
+      .input("usuario", sql.NVarChar(255), usuario)
+      .query(`
+        UPDATE dbo.ordenes_trabajo
+        SET otid = CONCAT(
+          'IND_LIBRE_',
+          @id,
+          '_',
+          UPPER(REPLACE(REPLACE(LTRIM(RTRIM(@usuario)), ' ', '_'), '/', '_'))
+        )
+        WHERE id_ot = @id;
+      `);
+
+    await transaction.commit();
+    transaction = null;
+
+    return res.status(201).json({
+      ok: true,
+      mensaje: "Indirecto creado e iniciado correctamente",
+      id_ot: idIndirecto,
+      orden: await leerDetalle(pool, idIndirecto),
+    });
+  } catch (error) {
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch {}
+    }
+
+    console.error("ordenesTrabajo.crearIndirectoIndependiente:", error);
+
+    return res.status(500).json({
+      error: "Error al crear el indirecto",
       detalle: error.message,
     });
   }
@@ -2773,6 +2954,41 @@ exports.confirmarConsumoMaterial = async (req, res) => {
 
     return res.status(500).json({
       error: error.message || "Error al confirmar consumo de material",
+      detalle: error.message,
+    });
+  }
+};
+
+// ============================================================
+// OCULTAR EN LOTE CADENAS DE OT COMPLETAMENTE FINALIZADAS
+// La misma función será reutilizada luego por el job de los viernes.
+// ============================================================
+exports.ocultarFinalizadasCompletas = async (req, res) => {
+  try {
+    if (!req.user?.is_admin) {
+      return res.status(403).json({
+        error: "Sólo un administrador puede ejecutar la limpieza masiva de OTs",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const resultado = await ejecutarOcultamientoFinalizadasCompletas(pool);
+
+    return res.json({
+      ok: true,
+      ...resultado,
+      mensaje:
+        resultado.total_cards_ocultadas > 0
+          ? `Se ocultaron ${resultado.total_cards_ocultadas} cards correspondientes a ${resultado.cadenas_ocultadas} cadenas completamente finalizadas.`
+          : "No se encontraron OTs completamente finalizadas para ocultar.",
+    });
+  } catch (error) {
+    console.error("ordenesTrabajo.ocultarFinalizadasCompletas:", error);
+
+    return res.status(500).json({
+      error: "Error al ocultar las OTs completamente finalizadas",
       detalle: error.message,
     });
   }

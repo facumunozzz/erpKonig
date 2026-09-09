@@ -1,4 +1,5 @@
 // app.js
+
 require("dotenv").config();
 
 const express = require("express");
@@ -11,12 +12,14 @@ const app = express();
 // =====================
 // MIDDLEWARES BASE
 // =====================
+
 app.use(cors());
 app.use(express.json());
 
 // =====================
 // FRONTEND DIST PATH
 // =====================
+
 const distPath = path.join(__dirname, "..", "frontend", "dist");
 
 // Servir archivos estáticos del frontend
@@ -25,9 +28,10 @@ app.use(express.static(distPath));
 // ======================================================
 // IMPORTANTE:
 // Si el navegador pide una página HTML, devolvemos React.
-// Esto evita que al actualizar /stock, /admin, /articulos, etc.
-// Express responda JSON del backend.
+// Esto evita que al actualizar /stock, /admin, /articulos,
+// etc. Express responda JSON del backend.
 // ======================================================
+
 app.get("*", (req, res, next) => {
   const accept = req.headers.accept || "";
 
@@ -55,6 +59,7 @@ app.get("*", (req, res, next) => {
 // =====================
 // ROUTERS BACKEND
 // =====================
+
 const articulosRouter = require("./routes/articulos");
 const depositosRouter = require("./routes/depositos");
 const stockRouter = require("./routes/stock");
@@ -85,6 +90,7 @@ const ordenesTrabajoRoutes = require("./routes/ordenesTrabajo");
 // =====================
 // BACKEND ROUTES
 // =====================
+
 app.use("/dropbox", dropboxMetaUsers);
 app.use("/articulos", articulosRouter);
 app.use("/depositos", depositosRouter);
@@ -102,43 +108,73 @@ app.use("/articulo-clasificaciones", articuloClasifRouter);
 app.use("/clasificaciones", clasificacionesRouter);
 app.use("/remitos", remitosRouter);
 app.use("/ubicaciones", ubicacionesRouter);
+
 app.use("/catalogos", require("./routes/catalogos"));
+
 app.use("/api/dropbox", dropboxRegistroRoutes);
 app.use("/api/dashboard-obras", dashboardObrasRoutes);
 app.use("/api/estado-resumen", estadoResumenRoutes);
+
 app.use("/referentes", referentesRoutes);
+
 app.use("/api/stock-recortes", stockRecortesRoutes);
 app.use("/dropbox-recortes", dropboxRecortesRoutes);
-app.use("/api/planificacion-produccion",planificacionProduccionRoutes);
+
+app.use(
+  "/api/planificacion-produccion",
+  planificacionProduccionRoutes,
+);
+
 app.use("/observaciones", observacionesRouter);
-app.use("/api/ordenes-trabajo", ordenesTrabajoRoutes);
+
+app.use(
+  "/api/ordenes-trabajo",
+  ordenesTrabajoRoutes,
+);
+
+// =====================
+// RUTAS TÉCNICAS
+// =====================
 
 app.get("/__routes", (req, res) => {
   res.json(listEndpoints(app));
 });
 
 app.get("/articulos/codigo/direct/:cod?", (req, res) => {
-  res.json({ direct: true, cod: req.params.cod ?? null });
+  res.json({
+    direct: true,
+    cod: req.params.cod ?? null,
+  });
 });
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+  });
 });
 
 app.get("/__test500", (_req, res) => {
-  res.status(500).json({ ok: false, detalle: "funciona" });
+  res.status(500).json({
+    ok: false,
+    detalle: "funciona",
+  });
 });
 
 // =====================
 // FALLBACK FINAL PARA REACT
 // =====================
+
 // Este queda como segunda protección.
 // Si no encontró API y no es archivo, devuelve React.
+
 app.get("*", (req, res) => {
-  const esArchivo = path.extname(req.path) !== "";
+  const esArchivo =
+    path.extname(req.path) !== "";
 
   if (!esArchivo) {
-    return res.sendFile(path.join(distPath, "index.html"));
+    return res.sendFile(
+      path.join(distPath, "index.html"),
+    );
   }
 
   return res.status(404).json({
@@ -150,8 +186,12 @@ app.get("*", (req, res) => {
 // =====================
 // MANEJO GLOBAL DE ERRORES
 // =====================
+
 app.use((err, req, res, _next) => {
-  console.log("[GLOBAL ERROR]", err?.message || err);
+  console.log(
+    "[GLOBAL ERROR]",
+    err?.message || err,
+  );
 
   return res.status(500).json({
     error: "Error interno",
@@ -162,14 +202,19 @@ app.use((err, req, res, _next) => {
 // =====================
 // SERVER
 // =====================
-const PORT = process.env.PORT || 3000;
+
+const PORT =
+  process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Servidor corriendo en http://0.0.0.0:${PORT}`);
+  console.log(
+    `Servidor corriendo en http://0.0.0.0:${PORT}`,
+  );
 
   // ==========================================
   // JOB: CONSUMO DE PRODUCCIÓN
   // ==========================================
+
   try {
     const {
       startConsumoProduccionJobs,
@@ -186,6 +231,7 @@ app.listen(PORT, "0.0.0.0", () => {
   // ==========================================
   // JOB: CONSUMO DE RECORTES
   // ==========================================
+
   try {
     const {
       startConsumoRecortesJobs,
@@ -195,6 +241,26 @@ app.listen(PORT, "0.0.0.0", () => {
   } catch (e) {
     console.error(
       "[JOB] No se pudo iniciar consumoRecortes:",
+      e.message,
+    );
+  }
+
+  // ==========================================
+  // JOB: OCULTAR OTs COMPLETAMENTE FINALIZADAS
+  // VIERNES 15:30 - HORA ARGENTINA
+  // ==========================================
+
+  try {
+    const {
+      startOrdenesTrabajoLimpiezaJob,
+    } = require(
+      "./jobs/ordenesTrabajoLimpieza.job"
+    );
+
+    startOrdenesTrabajoLimpiezaJob();
+  } catch (e) {
+    console.error(
+      "[JOB] No se pudo iniciar limpieza de OTs:",
       e.message,
     );
   }

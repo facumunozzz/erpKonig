@@ -22,8 +22,20 @@ export default function CambiarUtilidades() {
       label: "Planificación de Producción",
     },
     {
+      key: "OrdenesTrabajo",
+      label: "Órdenes de Trabajo",
+    },
+    {
+      key: "DatosProduccion",
+      label: "Datos",
+    },
+    {
       key: "Observaciones",
       label: "Observaciones",
+    },
+    {
+      key: "Indicadores",
+      label: "Indicadores",
     },
     {
       key: "Artículos",
@@ -59,20 +71,11 @@ export default function CambiarUtilidades() {
     try {
       const res = await api.get("/utilidades");
 
-      setUsuarios(
-        Array.isArray(res.data)
-          ? res.data
-          : [],
-      );
+      setUsuarios(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
-      console.error(
-        "Error cargando usuarios:",
-        err,
-      );
+      console.error("Error cargando usuarios:", err);
 
-      toast.error(
-        "Error al cargar usuarios",
-      );
+      toast.error("Error al cargar usuarios");
 
       setUsuarios([]);
     }
@@ -91,24 +94,13 @@ export default function CambiarUtilidades() {
     setLoading(true);
 
     try {
-      const res = await api.get(
-        `/utilidades/${id}`,
-      );
+      const res = await api.get(`/utilidades/${id}`);
 
-      setUtilidades(
-        Array.isArray(res.data)
-          ? res.data
-          : [],
-      );
+      setUtilidades(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
-      console.error(
-        "Error obteniendo utilidades:",
-        err,
-      );
+      console.error("Error obteniendo utilidades:", err);
 
-      toast.error(
-        "Error al obtener utilidades del usuario",
-      );
+      toast.error("Error al obtener utilidades del usuario");
 
       setUtilidades([]);
     } finally {
@@ -123,15 +115,10 @@ export default function CambiarUtilidades() {
   const toggleUtilidad = (nombre) => {
     setUtilidades((prev) => {
       if (prev.includes(nombre)) {
-        return prev.filter(
-          (u) => u !== nombre,
-        );
+        return prev.filter((u) => u !== nombre);
       }
 
-      return [
-        ...prev,
-        nombre,
-      ];
+      return [...prev, nombre];
     });
   };
 
@@ -147,16 +134,11 @@ export default function CambiarUtilidades() {
     setLoading(true);
 
     try {
-      const res = await api.post(
-        `/utilidades/${selectedUser}`,
-        {
-          utilidades,
-        },
-      );
+      const res = await api.post(`/utilidades/${selectedUser}`, {
+        utilidades,
+      });
 
-      toast.success(
-        "✅ Utilidades actualizadas",
-      );
+      toast.success("✅ Utilidades actualizadas");
 
       // Actualizar cantidad de utilidades
       // en la lista principal
@@ -178,15 +160,9 @@ export default function CambiarUtilidades() {
       setSelectedUser(null);
       setUtilidades([]);
     } catch (err) {
-      console.error(
-        "Error guardando utilidades:",
-        err,
-      );
+      console.error("Error guardando utilidades:", err);
 
-      toast.error(
-        err.response?.data?.error ||
-          "Error al guardar cambios",
-      );
+      toast.error(err.response?.data?.error || "Error al guardar cambios");
     } finally {
       setLoading(false);
     }
@@ -203,9 +179,7 @@ export default function CambiarUtilidades() {
 
   return (
     <div className="articulos-container">
-      <h2 className="module-title">
-        Utilidades por Usuario
-      </h2>
+      <h2 className="module-title">Utilidades por Usuario</h2>
 
       {/* ====================================== */}
       {/* LISTA DE USUARIOS */}
@@ -213,35 +187,21 @@ export default function CambiarUtilidades() {
 
       {!selectedUser && (
         <div className="nt-card">
-          <h4>
-            Seleccione un usuario:
-          </h4>
+          <h4>Seleccione un usuario:</h4>
 
           {usuarios.length === 0 ? (
-            <p>
-              No hay usuarios para mostrar.
-            </p>
+            <p>No hay usuarios para mostrar.</p>
           ) : (
             <ul>
               {usuarios.map((u) => (
-                <li
-                  key={u.id_usuario}
-                >
+                <li key={u.id_usuario}>
                   <button
                     type="button"
                     className="btn-secundario"
-                    onClick={() =>
-                      handleSelectUser(
-                        u.id_usuario,
-                      )
-                    }
+                    onClick={() => handleSelectUser(u.id_usuario)}
                   >
-                    {u.username} —{" "}
-                    {u.nombre ||
-                      "Sin nombre"}{" "}
-                    (
-                    {u.utilidades ?? 0}{" "}
-                    utilidades)
+                    {u.username} — {u.nombre || "Sin nombre"} (
+                    {u.utilidades ?? 0} utilidades)
                   </button>
                 </li>
               ))}
@@ -256,43 +216,25 @@ export default function CambiarUtilidades() {
 
       {selectedUser && (
         <div className="nt-card">
-          <h4>
-            Editar utilidades de usuario
-          </h4>
+          <h4>Editar utilidades de usuario</h4>
 
-          {loading && (
-            <p>Cargando...</p>
-          )}
+          {loading && <p>Cargando...</p>}
 
           {!loading && (
             <>
               <ul>
-                {ALL_UTILIDADES.map(
-                  (item) => (
-                    <li
-                      key={item.key}
-                    >
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={
-                            utilidades.includes(
-                              item.key,
-                            )
-                          }
-                          onChange={() =>
-                            toggleUtilidad(
-                              item.key,
-                            )
-                          }
-                        />
-
-                        {" "}
-                        {item.label}
-                      </label>
-                    </li>
-                  ),
-                )}
+                {ALL_UTILIDADES.map((item) => (
+                  <li key={item.key}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={utilidades.includes(item.key)}
+                        onChange={() => toggleUtilidad(item.key)}
+                      />{" "}
+                      {item.label}
+                    </label>
+                  </li>
+                ))}
               </ul>
 
               <div
@@ -303,9 +245,7 @@ export default function CambiarUtilidades() {
                 <button
                   type="button"
                   className="btn-primario"
-                  onClick={
-                    saveChanges
-                  }
+                  onClick={saveChanges}
                   disabled={loading}
                 >
                   Guardar cambios
@@ -317,9 +257,7 @@ export default function CambiarUtilidades() {
                   style={{
                     marginLeft: 10,
                   }}
-                  onClick={
-                    volverAUsuarios
-                  }
+                  onClick={volverAUsuarios}
                   disabled={loading}
                 >
                   Volver

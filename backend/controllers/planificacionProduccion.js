@@ -1377,3 +1377,160 @@ exports.calcularMaterialesObra = async (req, res) => {
     });
   }
 };
+
+// ============================================================
+// PLANIFICACIÓN MENSUAL COMPARTIDA
+// ============================================================
+
+function mesPlanificacionValido(valor) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(valor || "").trim());
+}
+
+exports.getPlanificacionCompartida = async (req, res) => {
+  try {
+    const mes = String(req.query?.mes || "").trim();
+
+    if (!mesPlanificacionValido(mes)) {
+      return res.status(400).json({
+        error: "Debe indicar un mes válido con formato AAAA-MM",
+      });
+    }
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input("mes", sql.Char(7), mes)
+      .query(`
+        SELECT TOP 1
+          mes,
+          contenido_json,
+          usuario_creacion,
+          fecha_creacion,
+          usuario_modificacion,
+          fecha_modificacion
+        FROM dbo.planificacion_produccion_mensual WITH (NOLOCK)
+        WHERE mes = @mes;
+      `);
+
+    if (!result.recordset.length) {
+      return res.json({
+        existe: false,
+        mes,
+        obras: [],
+        usuario_modificacion: null,
+        fecha_modificacion: null,
+      });
+    }
+
+    const fila = result.recordset[0];
+    let contenido = {};
+
+    try {
+      contenido = JSON.parse(String(fila.contenido_json || "{}"));
+    } catch {
+      contenido = {};
+    }
+
+    return res.json({
+      existe: true,
+      mes: fila.mes,
+      obras: Array.isArray(contenido?.obras) ? contenido.obras : [],
+      usuario_creacion: fila.usuario_creacion || null,
+      fecha_creacion: fila.fecha_creacion || null,
+      usuario_modificacion: fila.usuario_modificacion || null,
+      fecha_modificacion: fila.fecha_modificacion || null,
+    });
+  } catch (error) {
+    console.error("getPlanificacionCompartida:", error);
+
+    return res.status(500).json({
+      error: "Error al obtener la planificación compartida",
+      detalle: error.message,
+    });
+  }
+};
+
+exports.savePlanificacionCompartida = async (req, res) => {
+  try {
+    const mes = String(req.body?.mes || "").trim();
+    const obras = Array.isArray(req.body?.obras) ? req.body.obras : null;
+
+    if (!mesPlanificacionValido(mes)) {
+      return res.status(400).json({
+        error: "Debe indicar un mes válido con formato AAAA-MM",
+      });
+    }
+
+    if (!obras) {
+      return res.status(400).json({
+        error: "La planificación debe contener un arreglo de filas",
+      });
+    }
+
+    const contenidoJson = JSON.stringify({
+      mes,
+      obras,
+    });
+
+    const usuario = usuarioAuditoria(req);
+
+    await poolConnect;
+    const pool = await getPool();
+
+    const result = await pool
+      .request()
+      .input("mes", sql.Char(7), mes)
+      .input("contenido_json", sql.NVarChar(sql.MAX), contenidoJson)
+      .input("usuario", sql.NVarChar(150), usuario)
+      .query(`
+        MERGE dbo.planificacion_produccion_mensual AS destino
+        USING (
+          SELECT @mes AS mes
+        ) AS origen
+          ON destino.mes = origen.mes
+        WHEN MATCHED THEN
+          UPDATE SET
+            contenido_json = @contenido_json,
+            usuario_modificacion = @usuario,
+            fecha_modificacion = SYSDATETIME()
+        WHEN NOT MATCHED THEN
+          INSERT (
+            mes,
+            contenido_json,
+            usuario_creacion,
+            usuario_modificacion
+          )
+          VALUES (
+            @mes,
+            @contenido_json,
+            @usuario,
+            @usuario
+          );
+
+        SELECT
+          mes,
+          usuario_creacion,
+          fecha_creacion,
+          usuario_modificacion,
+          fecha_modificacion
+        FROM dbo.planificacion_produccion_mensual
+        WHERE mes = @mes;
+      `);
+
+    return res.json({
+      ok: true,
+      message: `Planificación ${mes} guardada para todos los usuarios`,
+      ...(result.recordset?.[0] || {}),
+    });
+  } catch (error) {
+    console.error("savePlanificacionCompartida:", error);
+
+    return res.status(500).json({
+      error: "Error al guardar la planificación compartida",
+      detalle: error.message,
+    });
+  }
+};
+

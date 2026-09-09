@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useAuth } from "../context/AuthContext";
 import "../styles/indicadoresProduccion.css";
 
 const API = "/api/ordenes-trabajo";
@@ -39,15 +40,21 @@ function claveFila(fila) {
   return `${fila.id_ot}-${fila.tipo_registro}`;
 }
 
-async function solicitarJson(url, opciones = {}) {
+async function solicitarJson(url, opciones = {}, token = null) {
   const respuesta = await fetch(url, {
     credentials: "include",
+    ...opciones,
     headers: {
       "Content-Type": "application/json",
+      ...(token
+        ? {
+            Authorization: `Bearer ${token}`,
+          }
+        : {}),
       ...(opciones.headers || {}),
     },
-    ...opciones,
   });
+
   const cuerpo = await respuesta.json().catch(() => ({}));
 
   if (!respuesta.ok) {
@@ -124,6 +131,8 @@ function CampoSelect({ valor, opciones, onChange, placeholder = "Seleccionar" })
 }
 
 function DatosProduccion() {
+  const { token } = useAuth();
+
   const [filtros, setFiltros] = useState({
     desde: inicioAnio(),
     hasta: fechaIso(),
@@ -162,7 +171,11 @@ function DatosProduccion() {
       }
       if (filtrosConsulta.obra) parametros.append("obra", filtrosConsulta.obra);
 
-      const datos = await solicitarJson(`${API}/datos?${parametros.toString()}`);
+      const datos = await solicitarJson(
+        `${API}/datos?${parametros.toString()}`,
+        {},
+        token,
+      );
       setFilas(Array.isArray(datos) ? datos : []);
     } catch (consultaError) {
       setError(consultaError.message);
@@ -173,7 +186,11 @@ function DatosProduccion() {
   };
 
   const cargarOpciones = async () => {
-    const datosOpciones = await solicitarJson(`${API}/indicadores/opciones`);
+    const datosOpciones = await solicitarJson(
+      `${API}/indicadores/opciones`,
+      {},
+      token,
+    );
     setOpciones({
       operadores: datosOpciones.operadores || [],
       obras: datosOpciones.obras || [],
@@ -182,6 +199,8 @@ function DatosProduccion() {
   };
 
   useEffect(() => {
+    if (!token) return;
+
     const iniciar = async () => {
       try {
         await cargarOpciones();
@@ -193,9 +212,10 @@ function DatosProduccion() {
     };
 
     iniciar();
-    // La consulta inicial debe ejecutarse una sola vez.
+
+    // Se ejecuta cuando el contexto de autenticación dispone del token.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [token]);
 
   const totales = useMemo(
     () =>
@@ -240,10 +260,14 @@ function DatosProduccion() {
     setMensaje("");
 
     try {
-      await solicitarJson(`${API}/datos/${fila.id_ot}/${fila.tipo_registro}`, {
-        method: "PUT",
-        body: JSON.stringify(borrador),
-      });
+      await solicitarJson(
+        `${API}/datos/${fila.id_ot}/${fila.tipo_registro}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(borrador),
+        },
+        token,
+      );
 
       setMensaje("Dato guardado correctamente.");
       cancelarEdicion();
@@ -268,9 +292,13 @@ function DatosProduccion() {
     setMensaje("");
 
     try {
-      await solicitarJson(`${API}/datos/${fila.id_ot}/${fila.tipo_registro}`, {
-        method: "DELETE",
-      });
+      await solicitarJson(
+        `${API}/datos/${fila.id_ot}/${fila.tipo_registro}`,
+        {
+          method: "DELETE",
+        },
+        token,
+      );
 
       setMensaje("Dato restaurado al valor original.");
       cancelarEdicion();

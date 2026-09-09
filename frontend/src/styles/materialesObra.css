@@ -1,0 +1,229 @@
+.materiales-obra-page {
+  width: 100%;
+  padding: 22px;
+  box-sizing: border-box;
+}
+
+.materiales-obra-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.materiales-obra-header h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.materiales-obra-header p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.materiales-obra-filtros {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px;
+  margin-bottom: 14px;
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.materiales-obra-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.materiales-obra-campo label {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.materiales-obra-campo input {
+  width: 150px;
+  height: 36px;
+  padding: 6px 9px;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: 13px;
+  outline: none;
+}
+
+.materiales-obra-campo input:focus {
+  border-color: #64748b;
+}
+
+.materiales-obra-acciones {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.materiales-obra-btn-primary,
+.materiales-obra-btn-secondary {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.materiales-obra-btn-primary {
+  border: 1px solid #1e3a5f;
+  background: #1e3a5f;
+  color: #ffffff;
+}
+
+.materiales-obra-btn-secondary {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #475569;
+}
+
+.materiales-obra-btn-primary:disabled,
+.materiales-obra-btn-secondary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.materiales-obra-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  min-height: 38px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+}
+
+.materiales-obra-info strong {
+  color: #1e293b;
+}
+
+.materiales-obra-error {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.materiales-obra-tabla-contenedor {
+  width: 100%;
+  max-height: calc(100vh - 285px);
+  overflow: auto;
+  border: 1px solid #dbe3ec;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.materiales-obra-tabla {
+  width: 100%;
+  min-width: 1300px;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 12px;
+}
+
+.materiales-obra-tabla thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.materiales-obra-tabla th {
+  padding: 9px 10px;
+  border-right: 1px solid #dbe3ec;
+  border-bottom: 1px solid #cbd5e1;
+  background: #edf2f7;
+  color: #334155;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.materiales-obra-tabla td {
+  padding: 7px 10px;
+  border-right: 1px solid #edf2f7;
+  border-bottom: 1px solid #edf2f7;
+  color: #334155;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.materiales-obra-tabla tbody tr:hover {
+  background: #f8fafc;
+}
+
+.materiales-obra-tabla td.numero {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.materiales-obra-referencia {
+  font-weight: 700;
+}
+
+.materiales-obra-descripcion {
+  min-width: 250px;
+  white-space: normal !important;
+}
+
+.materiales-obra-faltante {
+  background: #fff1f2;
+  color: #be123c !important;
+  font-weight: 700;
+}
+
+.materiales-obra-vacio {
+  height: 110px;
+  color: #64748b !important;
+  text-align: center !important;
+  font-size: 13px;
+}
+
+@media (max-width: 800px) {
+  .materiales-obra-page {
+    padding: 12px;
+  }
+
+  .materiales-obra-filtros {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .materiales-obra-campo input {
+    width: 100%;
+  }
+
+  .materiales-obra-acciones {
+    width: 100%;
+  }
+
+  .materiales-obra-btn-primary,
+  .materiales-obra-btn-secondary {
+    flex: 1;
+  }
+}

@@ -1,7 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useAuth } from "../context/AuthContext";
 import "../styles/planificacionProduccion.css";
 
 const API_PLANIFICACION = "/api/planificacion-produccion";
+
+// Sólo se usan para recuperar datos viejos que todavía puedan existir
+// en el navegador. A partir de esta versión, la planificación oficial
+// se guarda en SQL Server y es compartida.
+const CLAVE_BORRADOR_LEGACY = "planificacionProduccion_borrador_v4";
+const CLAVE_HISTORICOS_LEGACY = "planificacionProduccion_historicos_v4";
 
 function normalizarTexto(valor) {
   return String(valor ?? "")
@@ -23,8 +30,95 @@ const OPERACIONES_CARGA_AUTOMATICA = new Set([
   "MOSQUITERO",
 ]);
 
-const CLAVE_BORRADOR = "planificacionProduccion_borrador_v4";
-const CLAVE_HISTORICOS = "planificacionProduccion_historicos_v4";
+// ============================================================
+// CONFIGURACIÓN VISUAL DE LA TABLA DE PLANIFICACIÓN
+// ============================================================
+// Se usan los mismos anchos definidos actualmente en el CSS para
+// poder inmovilizar columnas sin que se superpongan.
+const ANCHO_OBRA_FIJA = 145;
+const ANCHO_FASE_FIJA = 125;
+const ANCHO_SECTOR_FIJO = 180;
+const ALTO_CABECERA_FECHA = 32;
+
+const estiloCabeceraFechaDia = {
+  position: "sticky",
+  top: 0,
+  zIndex: 8,
+  background: "#f4f4f4",
+};
+
+const estiloCabeceraFecha = {
+  position: "sticky",
+  top: ALTO_CABECERA_FECHA,
+  zIndex: 8,
+  background: "#f8fafc",
+};
+
+const estiloCabeceraObra = {
+  position: "sticky",
+  left: 0,
+  top: 0,
+  zIndex: 11,
+  width: ANCHO_OBRA_FIJA,
+  minWidth: ANCHO_OBRA_FIJA,
+  background: "#eef2f6",
+  boxShadow: "2px 0 5px rgba(15, 23, 42, 0.08)",
+};
+
+const estiloCabeceraFase = {
+  position: "sticky",
+  left: ANCHO_OBRA_FIJA,
+  top: 0,
+  zIndex: 11,
+  width: ANCHO_FASE_FIJA,
+  minWidth: ANCHO_FASE_FIJA,
+  background: "#eef2f6",
+};
+
+const estiloCabeceraSector = {
+  position: "sticky",
+  left: ANCHO_OBRA_FIJA + ANCHO_FASE_FIJA,
+  top: 0,
+  zIndex: 11,
+  width: ANCHO_SECTOR_FIJO,
+  minWidth: ANCHO_SECTOR_FIJO,
+  background: "#eef2f6",
+  boxShadow: "2px 0 5px rgba(15, 23, 42, 0.10)",
+};
+
+const estiloCeldaObra = {
+  position: "sticky",
+  left: 0,
+  zIndex: 4,
+  width: ANCHO_OBRA_FIJA,
+  minWidth: ANCHO_OBRA_FIJA,
+  background: "#ffffff",
+};
+
+const estiloCeldaFase = {
+  position: "sticky",
+  left: ANCHO_OBRA_FIJA,
+  zIndex: 4,
+  width: ANCHO_FASE_FIJA,
+  minWidth: ANCHO_FASE_FIJA,
+  background: "#ffffff",
+};
+
+const estiloCeldaSector = {
+  position: "sticky",
+  left: ANCHO_OBRA_FIJA + ANCHO_FASE_FIJA,
+  zIndex: 4,
+  width: ANCHO_SECTOR_FIJO,
+  minWidth: ANCHO_SECTOR_FIJO,
+  background: "#ffffff",
+  boxShadow: "2px 0 5px rgba(15, 23, 42, 0.10)",
+};
+
+const estiloScrollTablaObras = {
+  maxHeight: "68vh",
+  overflow: "auto",
+  position: "relative",
+};
 
 function obtenerSiguienteId(filas) {
   if (!Array.isArray(filas) || filas.length === 0) {
@@ -70,7 +164,7 @@ function crearFilaMaterialExcluir(id) {
 }
 
 function crearFilasIniciales() {
-  return Array.from({ length: 12 }, (_, indice) => crearFilaVacia(indice + 1));
+  return [crearFilaVacia(1)];
 }
 
 function obtenerMesActual() {
@@ -158,23 +252,49 @@ function calcularHoras(cantidad, tiempoStd) {
   return ((cantidadNumero * tiempoNumero) / 60).toFixed(2);
 }
 
-function leerLocalStorage(clave, valorPredeterminado) {
+function leerLocalStorageLegacy(clave) {
   try {
     const contenido = localStorage.getItem(clave);
-
-    return contenido ? JSON.parse(contenido) : valorPredeterminado;
+    return contenido ? JSON.parse(contenido) : null;
   } catch {
-    return valorPredeterminado;
+    return null;
   }
+}
+
+function obtenerPlanificacionLegacy(mes) {
+  const borrador = leerLocalStorageLegacy(CLAVE_BORRADOR_LEGACY);
+
+  const desdeBorrador = borrador?.planificaciones?.[mes];
+
+  if (Array.isArray(desdeBorrador) && desdeBorrador.length > 0) {
+    return desdeBorrador;
+  }
+
+  if (
+    borrador?.mesSeleccionado === mes &&
+    Array.isArray(borrador?.obras) &&
+    borrador.obras.length > 0
+  ) {
+    return borrador.obras;
+  }
+
+  const historicos = leerLocalStorageLegacy(CLAVE_HISTORICOS_LEGACY);
+  const historico = historicos?.[mes];
+
+  if (Array.isArray(historico?.obras) && historico.obras.length > 0) {
+    return historico.obras;
+  }
+
+  return null;
 }
 
 async function solicitarJson(url, opciones = {}) {
   const respuesta = await fetch(url, {
+    ...opciones,
     headers: {
       "Content-Type": "application/json",
       ...(opciones.headers || {}),
     },
-    ...opciones,
   });
 
   let contenido = null;
@@ -226,35 +346,14 @@ function normalizarMaterialExcluir(fila, indice) {
 }
 
 function PlanificacionProduccion() {
-  const borradorInicial = leerLocalStorage(CLAVE_BORRADOR, null);
-
-  const mesInicial = borradorInicial?.mesSeleccionado || obtenerMesActual();
-
-  const obtenerObrasIniciales = () => {
-    // Nueva estructura: planificación separada por mes
-    const planificacionMes = borradorInicial?.planificaciones?.[mesInicial];
-
-    if (Array.isArray(planificacionMes) && planificacionMes.length > 0) {
-      return planificacionMes;
-    }
-
-    // Compatibilidad con el formato anterior.
-    // Así no perdemos la planificación que ya tenías cargada.
-    if (
-      Array.isArray(borradorInicial?.obras) &&
-      borradorInicial.obras.length > 0
-    ) {
-      return borradorInicial.obras;
-    }
-
-    return crearFilasIniciales();
-  };
+  const { token } = useAuth();
+  const mesInicial = obtenerMesActual();
 
   const [mesSeleccionado, setMesSeleccionado] = useState(mesInicial);
 
   const [sectores, setSectores] = useState([]);
 
-  const [obras, setObras] = useState(obtenerObrasIniciales);
+  const [obras, setObras] = useState(crearFilasIniciales);
 
   const [tiposMaterialPorOperacion, setTiposMaterialPorOperacion] = useState(
     [],
@@ -264,6 +363,8 @@ function PlanificacionProduccion() {
 
   const [cargandoConfiguracion, setCargandoConfiguracion] = useState(true);
   const [guardandoConfiguracion, setGuardandoConfiguracion] = useState(false);
+  const [cargandoPlanificacion, setCargandoPlanificacion] = useState(true);
+  const [guardandoPlanificacion, setGuardandoPlanificacion] = useState(false);
   const [filaCalculando, setFilaCalculando] = useState(null);
   const [errorGeneral, setErrorGeneral] = useState("");
   const [errorTipos, setErrorTipos] = useState("");
@@ -276,9 +377,7 @@ function PlanificacionProduccion() {
   const [modalExportarAbierto, setModalExportarAbierto] = useState(false);
   const [exportandoOrdenes, setExportandoOrdenes] = useState(false);
 
-  const rangoExportacionInicial = obtenerRangoMes(
-    borradorInicial?.mesSeleccionado || obtenerMesActual(),
-  );
+  const rangoExportacionInicial = obtenerRangoMes(mesInicial);
 
   const [fechaInicioExportar, setFechaInicioExportar] = useState(
     rangoExportacionInicial.inicio,
@@ -340,6 +439,56 @@ function PlanificacionProduccion() {
 
     return totales;
   }, [obras]);
+
+  const cargarPlanificacionCompartida = async (mes, opciones = {}) => {
+    const { avisarSiNoExiste = false } = opciones;
+
+    if (!mes) {
+      return false;
+    }
+
+    try {
+      setCargandoPlanificacion(true);
+      setErrorGeneral("");
+
+      const respuesta = await solicitarJson(
+        `${API_PLANIFICACION}/planificacion?mes=${encodeURIComponent(mes)}`,
+      );
+
+      if (!respuesta?.existe) {
+        const planificacionLegacy = obtenerPlanificacionLegacy(mes);
+
+        if (Array.isArray(planificacionLegacy) && planificacionLegacy.length > 0) {
+          setObras(planificacionLegacy);
+
+          return false;
+        }
+
+        setObras(crearFilasIniciales());
+
+        if (avisarSiNoExiste) {
+          window.alert(`No existe una planificación guardada para ${mes}.`);
+        }
+
+        return false;
+      }
+
+      setObras(
+        Array.isArray(respuesta.obras) && respuesta.obras.length > 0
+          ? respuesta.obras
+          : crearFilasIniciales(),
+      );
+
+      return true;
+    } catch (error) {
+      console.error("Error al cargar planificación compartida:", error);
+      setErrorGeneral(error.message);
+      window.alert(error.message);
+      return false;
+    } finally {
+      setCargandoPlanificacion(false);
+    }
+  };
 
   useEffect(() => {
     const cargarConfiguracionInicial = async () => {
@@ -426,32 +575,10 @@ function PlanificacionProduccion() {
   }, []);
 
   useEffect(() => {
-    if (!mesSeleccionado) {
-      return;
-    }
-
-    const estadoGuardado = leerLocalStorage(CLAVE_BORRADOR, {});
-
-    const planificaciones =
-      estadoGuardado?.planificaciones &&
-      typeof estadoGuardado.planificaciones === "object"
-        ? {
-            ...estadoGuardado.planificaciones,
-          }
-        : {};
-
-    // Guardamos exclusivamente la planificación
-    // correspondiente al mes actual.
-    planificaciones[mesSeleccionado] = obras;
-
-    localStorage.setItem(
-      CLAVE_BORRADOR,
-      JSON.stringify({
-        mesSeleccionado,
-        planificaciones,
-      }),
-    );
-  }, [mesSeleccionado, obras]);
+    cargarPlanificacionCompartida(mesInicial);
+    // La carga inicial de la planificación compartida debe ejecutarse una vez.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const recargarOperaciones = async () => {
     const respuesta = await solicitarJson(`${API_PLANIFICACION}/operaciones`);
@@ -545,43 +672,18 @@ function PlanificacionProduccion() {
     );
   };
 
-  const cambiarMesPlanificacion = (nuevoMes) => {
+  const cambiarMesPlanificacion = async (nuevoMes) => {
     if (!nuevoMes || nuevoMes === mesSeleccionado) {
       return;
     }
 
-    const estadoGuardado = leerLocalStorage(CLAVE_BORRADOR, {});
-
-    const planificaciones =
-      estadoGuardado?.planificaciones &&
-      typeof estadoGuardado.planificaciones === "object"
-        ? {
-            ...estadoGuardado.planificaciones,
-          }
-        : {};
-
-    // Antes de salir del mes actual,
-    // guardamos su planificación.
-    planificaciones[mesSeleccionado] = obras;
-
-    // Buscamos si el nuevo mes ya tiene planificación.
-    const planificacionNuevoMes = planificaciones[nuevoMes];
-
-    const nuevasObras =
-      Array.isArray(planificacionNuevoMes) && planificacionNuevoMes.length > 0
-        ? planificacionNuevoMes
-        : crearFilasIniciales();
-
-    localStorage.setItem(
-      CLAVE_BORRADOR,
-      JSON.stringify({
-        mesSeleccionado: nuevoMes,
-        planificaciones,
-      }),
-    );
-
     setMesSeleccionado(nuevoMes);
-    setObras(nuevasObras);
+
+    const rango = obtenerRangoMes(nuevoMes);
+    setFechaInicioExportar(rango.inicio);
+    setFechaFinExportar(rango.fin);
+
+    await cargarPlanificacionCompartida(nuevoMes);
   };
 
   const manejarEnterTablaObras = (event) => {
@@ -1338,6 +1440,7 @@ function PlanificacionProduccion() {
 
       const resultado = await solicitarJson("/api/ordenes-trabajo/exportar", {
         method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: JSON.stringify({
           fecha_inicio: fechaInicioExportar,
           fecha_fin: fechaFinExportar,
@@ -1363,38 +1466,60 @@ function PlanificacionProduccion() {
     }
   };
 
-  const guardarHistorico = () => {
+  const guardarPlanificacion = async () => {
     if (!mesSeleccionado) {
       window.alert("Debe seleccionar un mes.");
       return;
     }
 
-    const historicos = leerLocalStorage(CLAVE_HISTORICOS, {});
+    try {
+      setGuardandoPlanificacion(true);
+      setErrorGeneral("");
 
-    historicos[mesSeleccionado] = {
-      mesSeleccionado,
-      obras,
-      fechaGuardado: new Date().toISOString(),
-    };
+      const respuesta = await solicitarJson(
+        `${API_PLANIFICACION}/planificacion`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            mes: mesSeleccionado,
+            obras,
+          }),
+        },
+      );
 
-    localStorage.setItem(CLAVE_HISTORICOS, JSON.stringify(historicos));
-
-    window.alert(`La planificación de ${mesSeleccionado} fue guardada.`);
+      window.alert(
+        respuesta?.message ||
+          `La planificación de ${mesSeleccionado} fue guardada para todos los usuarios.`,
+      );
+    } catch (error) {
+      console.error("Error guardando planificación compartida:", error);
+      setErrorGeneral(error.message);
+      window.alert(error.message);
+    } finally {
+      setGuardandoPlanificacion(false);
+    }
   };
 
-  const cargarHistorico = () => {
-    const historicos = leerLocalStorage(CLAVE_HISTORICOS, {});
-    const historico = historicos[mesHistorico];
-
-    if (!historico) {
-      window.alert("No existe una planificación guardada para ese mes.");
+  const cargarHistorico = async () => {
+    if (!mesHistorico) {
+      window.alert("Debe seleccionar un mes.");
       return;
     }
 
-    setMesSeleccionado(historico.mesSeleccionado);
-    setObras(
-      Array.isArray(historico.obras) ? historico.obras : crearFilasIniciales(),
-    );
+    const encontrada = await cargarPlanificacionCompartida(mesHistorico, {
+      avisarSiNoExiste: true,
+    });
+
+    if (!encontrada) {
+      return;
+    }
+
+    setMesSeleccionado(mesHistorico);
+
+    const rango = obtenerRangoMes(mesHistorico);
+    setFechaInicioExportar(rango.inicio);
+    setFechaFinExportar(rango.fin);
+
     setModalHistoricoAbierto(false);
   };
 
@@ -1410,6 +1535,7 @@ function PlanificacionProduccion() {
             type="month"
             value={mesSeleccionado}
             onChange={(event) => cambiarMesPlanificacion(event.target.value)}
+            disabled={cargandoPlanificacion || guardandoPlanificacion}
           />
         </label>
       </div>
@@ -1421,6 +1547,12 @@ function PlanificacionProduccion() {
       {cargandoConfiguracion && (
         <div className="mensaje-consulta">
           Cargando operaciones y configuraciones...
+        </div>
+      )}
+
+      {cargandoPlanificacion && (
+        <div className="mensaje-consulta">
+          Cargando planificación compartida...
         </div>
       )}
 
@@ -1443,8 +1575,12 @@ function PlanificacionProduccion() {
           Materiales a excluir
         </button>
 
-        <button type="button" onClick={guardarHistorico}>
-          Guardar
+        <button
+          type="button"
+          onClick={guardarPlanificacion}
+          disabled={guardandoPlanificacion}
+        >
+          {guardandoPlanificacion ? "Guardando..." : "Guardar"}
         </button>
 
         <button
@@ -1454,7 +1590,7 @@ function PlanificacionProduccion() {
             setModalHistoricoAbierto(true);
           }}
         >
-          Cargar histórico
+          Cargar planificación
         </button>
 
         <button type="button" onClick={abrirModalExportar}>
@@ -1540,7 +1676,10 @@ function PlanificacionProduccion() {
           </button>
         </div>
 
-        <div className="planificacion-scroll">
+        <div
+          className="planificacion-scroll"
+          style={estiloScrollTablaObras}
+        >
           <table
             className="tabla-planificacion tabla-obras"
             onKeyDown={manejarEnterTablaObras}
@@ -1550,11 +1689,28 @@ function PlanificacionProduccion() {
                 <th className="columna-cargar" rowSpan={2}>
                   Cargar
                 </th>
-                <th className="columna-obra columna-fija-obra" rowSpan={2}>
+
+                <th
+                  className="columna-obra columna-fija-obra"
+                  rowSpan={2}
+                  style={estiloCabeceraObra}
+                >
                   Obra
                 </th>
 
-                <th className="columna-sector-obra" rowSpan={2}>
+                <th
+                  className="columna-fase"
+                  rowSpan={2}
+                  style={estiloCabeceraFase}
+                >
+                  Fase
+                </th>
+
+                <th
+                  className="columna-sector-obra"
+                  rowSpan={2}
+                  style={estiloCabeceraSector}
+                >
                   Sector
                 </th>
 
@@ -1570,10 +1726,6 @@ function PlanificacionProduccion() {
                   Total horas
                 </th>
 
-                <th className="columna-fase" rowSpan={2}>
-                  Fase
-                </th>
-
                 {diasHabiles.map((fecha, indice) => (
                   <th
                     key={crearClaveFecha(fecha)}
@@ -1582,6 +1734,7 @@ function PlanificacionProduccion() {
                         ? "inicio-semana"
                         : ""
                     }
+                    style={estiloCabeceraFechaDia}
                   >
                     {formatearDia(fecha)}
                   </th>
@@ -1601,6 +1754,7 @@ function PlanificacionProduccion() {
                         ? "inicio-semana"
                         : ""
                     }
+                    style={estiloCabeceraFecha}
                   >
                     {formatearFecha(fecha)}
                   </th>
@@ -1623,7 +1777,10 @@ function PlanificacionProduccion() {
                     </button>
                   </td>
 
-                  <td className="columna-fija-obra">
+                  <td
+                    className="columna-fija-obra"
+                    style={estiloCeldaObra}
+                  >
                     <input
                       type="text"
                       value={obra.obra}
@@ -1634,7 +1791,18 @@ function PlanificacionProduccion() {
                     />
                   </td>
 
-                  <td>
+                  <td style={estiloCeldaFase}>
+                    <input
+                      type="text"
+                      value={obra.fase}
+                      placeholder="Fase"
+                      onChange={(event) =>
+                        actualizarObra(obra.id, "fase", event.target.value)
+                      }
+                    />
+                  </td>
+
+                  <td style={estiloCeldaSector}>
                     <select
                       value={obra.sectorId}
                       onChange={(event) =>
@@ -1650,6 +1818,7 @@ function PlanificacionProduccion() {
                       ))}
                     </select>
                   </td>
+
 
                   <td>
                     <input
@@ -1700,16 +1869,6 @@ function PlanificacionProduccion() {
                     />
                   </td>
 
-                  <td>
-                    <input
-                      type="text"
-                      value={obra.fase}
-                      placeholder="Fase"
-                      onChange={(event) =>
-                        actualizarObra(obra.id, "fase", event.target.value)
-                      }
-                    />
-                  </td>
 
                   {diasHabiles.map((fecha, indice) => {
                     const claveFecha = crearClaveFecha(fecha);
@@ -2273,8 +2432,8 @@ function PlanificacionProduccion() {
           >
             <div className="planificacion-modal-header">
               <div>
-                <h3>Cargar histórico</h3>
-                <span>Seleccione el mes y el año</span>
+                <h3>Cargar planificación</h3>
+                <span>Seleccione el mes compartido a cargar</span>
               </div>
 
               <button

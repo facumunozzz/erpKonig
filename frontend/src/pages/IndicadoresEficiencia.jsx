@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "../context/AuthContext";
 import "../styles/indicadoresProduccion.css";
 
 const API = "/api/ordenes-trabajo";
@@ -46,8 +47,17 @@ function dividir(numerador, denominador) {
   return divisor > 0 ? (Number(numerador) || 0) / divisor : null;
 }
 
-async function leerJson(url) {
-  const respuesta = await fetch(url, { credentials: "include" });
+async function leerJson(url, token = "") {
+  const headers = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const respuesta = await fetch(url, {
+    credentials: "include",
+    headers,
+  });
   const cuerpo = await respuesta.json().catch(() => ({}));
 
   if (!respuesta.ok) {
@@ -562,6 +572,10 @@ function VistaObras({ filas }) {
 }
 
 function IndicadoresEficiencia() {
+  const { token } = useAuth();
+
+  const leerApi = (url) => leerJson(url, token);
+
   const [pestana, setPestana] = useState("eficiencia");
   const [filtros, setFiltros] = useState({
     desde: inicioMes(),
@@ -587,7 +601,7 @@ function IndicadoresEficiencia() {
       );
       filtrosConsulta.obras.forEach((item) => parametros.append("obra", item));
 
-      const datos = await leerJson(`${API}/datos?${parametros.toString()}`);
+      const datos = await leerApi(`${API}/datos?${parametros.toString()}`);
       setFilas(Array.isArray(datos) ? datos : []);
     } catch (consultaError) {
       setError(consultaError.message);
@@ -598,9 +612,13 @@ function IndicadoresEficiencia() {
   };
 
   useEffect(() => {
+    if (!token) {
+      return;
+    }
+
     const iniciar = async () => {
       try {
-        const datosOpciones = await leerJson(`${API}/indicadores/opciones`);
+        const datosOpciones = await leerApi(`${API}/indicadores/opciones`);
         setOpciones({
           operadores: datosOpciones.operadores || [],
           obras: datosOpciones.obras || [],
@@ -614,7 +632,7 @@ function IndicadoresEficiencia() {
 
     iniciar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [token]);
 
   const actualizar = (campo, valor) => {
     setFiltros((actual) => ({ ...actual, [campo]: valor }));

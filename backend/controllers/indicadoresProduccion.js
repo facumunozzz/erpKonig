@@ -1,4 +1,5 @@
 const { sql, poolConnect, getPool } = require("../db");
+const { resolverOperacionUsuario } = require("../utils/operacionUsuario");
 
 function fechaValida(valor) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(valor || ""));
@@ -51,6 +52,15 @@ function usuarioAuditoria(req) {
   );
 }
 
+function usuarioActual(req) {
+  return (
+    texto(req.user?.username, 255) ||
+    texto(req.user?.email, 255) ||
+    texto(req.user?.name, 255) ||
+    null
+  );
+}
+
 function agregarFiltroLista(request, columna, valores, prefijo) {
   if (!valores.length) {
     return "";
@@ -65,66 +75,182 @@ function agregarFiltroLista(request, columna, valores, prefijo) {
   return ` AND ${columna} IN (${parametros.join(", ")}) `;
 }
 
-exports.getOpciones = async (_req, res) => {
+exports.getOpciones = async (req, res) => {
   try {
     await poolConnect;
     const pool = await getPool();
 
+    const operacionUsuario = await resolverOperacionUsuario(pool, req);
+
+    // Si NO coincide con una operación, conserva el comportamiento general:
+    // puede ver todos los operadores, obras y operaciones.
+    if (!operacionUsuario) {
+      const [operadoresResult, obrasResult, operacionesResult] =
+        await Promise.all([
+          pool.request().query(`
+            SELECT operador
+            FROM
+            (
+              SELECT LTRIM(RTRIM(nombre)) AS operador
+              FROM dbo.referentes WITH (NOLOCK)
+              WHERE activo = 1
+                AND LTRIM(RTRIM(nombre)) <> ''
+
+              UNION
+
+              SELECT LTRIM(RTRIM(operador)) AS operador
+              FROM dbo.ordenes_trabajo WITH (NOLOCK)
+              WHERE operador IS NOT NULL
+                AND LTRIM(RTRIM(operador)) <> ''
+
+              UNION
+
+              SELECT LTRIM(RTRIM(operador_ajustado)) AS operador
+              FROM dbo.produccion_datos_ajustes WITH (NOLOCK)
+              WHERE operador_ajustado IS NOT NULL
+                AND LTRIM(RTRIM(operador_ajustado)) <> ''
+            ) opciones
+            ORDER BY operador;
+          `),
+          pool.request().query(`
+            SELECT obra_version
+            FROM
+            (
+              SELECT DISTINCT
+                LTRIM(RTRIM(obra_version)) AS obra_version
+              FROM dbo.ordenes_trabajo WITH (NOLOCK)
+              WHERE tipo_ot <> 'INDIRECTO'
+                AND obra_version IS NOT NULL
+                AND LTRIM(RTRIM(obra_version)) <> ''
+
+              UNION
+
+              SELECT LTRIM(RTRIM(obra_version_ajustada)) AS obra_version
+              FROM dbo.produccion_datos_ajustes WITH (NOLOCK)
+              WHERE obra_version_ajustada IS NOT NULL
+                AND LTRIM(RTRIM(obra_version_ajustada)) <> ''
+            ) opciones
+            ORDER BY obra_version;
+          `),
+          pool.request().query(`
+            SELECT
+              id_operacion,
+              LTRIM(RTRIM(nombre)) AS nombre,
+              tiempo_std
+            FROM dbo.planificacion_operaciones WITH (NOLOCK)
+            WHERE activa = 1
+            ORDER BY nombre;
+          `),
+        ]);
+
+      return res.json({
+        operadores: (operadoresResult.recordset || []).map((fila) =>
+          String(fila.operador || "").trim(),
+        ),
+        obras: (obrasResult.recordset || []).map((fila) =>
+          String(fila.obra_version || "").trim(),
+        ),
+        operaciones: operacionesResult.recordset || [],
+        operacionUsuario: null,
+        restringidoPorOperacion: false,
+      });
+    }
+
+    // Si SÍ coincide con una operación, opciones y datos quedan restringidos
+    // a esa operación. Los indirectos independientes del usuario también
+    // forman parte de sus horas indirectas.
+    const usuario = usuarioActual(req);
+
+    const operadoresRequest = pool
+      .request()
+      .input("operacionUsuario", sql.NVarChar(150), operacionUsuario)
+      .input("usuarioActual", sql.NVarChar(255), usuario);
+
+    const obrasRequest = pool
+      .request()
+      .input("operacionUsuario", sql.NVarChar(150), operacionUsuario)
+      .input("usuarioActual", sql.NVarChar(255), usuario);
+
+    const operacionesRequest = pool
+      .request()
+      .input("operacionUsuario", sql.NVarChar(150), operacionUsuario);
+
     const [operadoresResult, obrasResult, operacionesResult] =
       await Promise.all([
-        pool.request().query(`
+        operadoresRequest.query(`
           SELECT operador
           FROM
           (
-            SELECT LTRIM(RTRIM(nombre)) AS operador
-            FROM dbo.referentes WITH (NOLOCK)
-            WHERE activo = 1
-              AND LTRIM(RTRIM(nombre)) <> ''
-
-            UNION
-
-            SELECT LTRIM(RTRIM(operador)) AS operador
-            FROM dbo.ordenes_trabajo WITH (NOLOCK)
-            WHERE operador IS NOT NULL
-              AND LTRIM(RTRIM(operador)) <> ''
-
-            UNION
-
-            SELECT LTRIM(RTRIM(operador_ajustado)) AS operador
-            FROM dbo.produccion_datos_ajustes WITH (NOLOCK)
-            WHERE operador_ajustado IS NOT NULL
-              AND LTRIM(RTRIM(operador_ajustado)) <> ''
+            SELECT DISTINCT
+              LTRIM(RTRIM(COALESCE(aj.operador_ajustado, ot.operador))) AS operador
+            FROM dbo.ordenes_trabajo ot WITH (NOLOCK)
+            LEFT JOIN dbo.ordenes_trabajo origen WITH (NOLOCK)
+              ON origen.id_ot = ot.id_ot_origen
+            LEFT JOIN dbo.produccion_datos_ajustes aj WITH (NOLOCK)
+              ON aj.id_ot = ot.id_ot
+            WHERE COALESCE(aj.operador_ajustado, ot.operador) IS NOT NULL
+              AND LTRIM(RTRIM(COALESCE(aj.operador_ajustado, ot.operador))) <> ''
+              AND (
+                (
+                  UPPER(LTRIM(RTRIM(ISNULL(ot.tipo_ot, 'PRODUCTIVA')))) = 'INDIRECTO'
+                  AND ot.id_ot_origen IS NULL
+                  AND LTRIM(RTRIM(ISNULL(ot.usuario_creacion, '')))
+                      COLLATE Latin1_General_100_CI_AI
+                    = LTRIM(RTRIM(ISNULL(@usuarioActual, '')))
+                      COLLATE Latin1_General_100_CI_AI
+                )
+                OR
+                (
+                  CASE
+                    WHEN UPPER(LTRIM(RTRIM(ISNULL(ot.tipo_ot, 'PRODUCTIVA')))) = 'INDIRECTO'
+                      THEN origen.operacion
+                    ELSE ot.operacion
+                  END
+                ) COLLATE Latin1_General_100_CI_AI
+                  = @operacionUsuario COLLATE Latin1_General_100_CI_AI
+              )
           ) opciones
           ORDER BY operador;
         `),
-        pool.request().query(`
+        obrasRequest.query(`
           SELECT obra_version
           FROM
           (
             SELECT DISTINCT
-              LTRIM(RTRIM(obra_version)) AS obra_version
-            FROM dbo.ordenes_trabajo WITH (NOLOCK)
-            WHERE tipo_ot <> 'INDIRECTO'
-              AND obra_version IS NOT NULL
-              AND LTRIM(RTRIM(obra_version)) <> ''
-
-            UNION
-
-            SELECT LTRIM(RTRIM(obra_version_ajustada)) AS obra_version
-            FROM dbo.produccion_datos_ajustes WITH (NOLOCK)
-            WHERE obra_version_ajustada IS NOT NULL
-              AND LTRIM(RTRIM(obra_version_ajustada)) <> ''
+              LTRIM(RTRIM(COALESCE(aj.obra_version_ajustada, ot.obra_version)))
+                AS obra_version
+            FROM dbo.ordenes_trabajo ot WITH (NOLOCK)
+            LEFT JOIN dbo.ordenes_trabajo origen WITH (NOLOCK)
+              ON origen.id_ot = ot.id_ot_origen
+            LEFT JOIN dbo.produccion_datos_ajustes aj WITH (NOLOCK)
+              ON aj.id_ot = ot.id_ot
+            WHERE COALESCE(aj.obra_version_ajustada, ot.obra_version) IS NOT NULL
+              AND LTRIM(RTRIM(COALESCE(aj.obra_version_ajustada, ot.obra_version))) <> ''
+              AND NOT (
+                UPPER(LTRIM(RTRIM(ISNULL(ot.tipo_ot, 'PRODUCTIVA')))) = 'INDIRECTO'
+                AND ot.id_ot_origen IS NULL
+              )
+              AND (
+                CASE
+                  WHEN UPPER(LTRIM(RTRIM(ISNULL(ot.tipo_ot, 'PRODUCTIVA')))) = 'INDIRECTO'
+                    THEN origen.operacion
+                  ELSE ot.operacion
+                END
+              ) COLLATE Latin1_General_100_CI_AI
+                = @operacionUsuario COLLATE Latin1_General_100_CI_AI
           ) opciones
           ORDER BY obra_version;
         `),
-        pool.request().query(`
-          SELECT
+        operacionesRequest.query(`
+          SELECT TOP 1
             id_operacion,
             LTRIM(RTRIM(nombre)) AS nombre,
             tiempo_std
           FROM dbo.planificacion_operaciones WITH (NOLOCK)
           WHERE activa = 1
-          ORDER BY nombre;
+            AND nombre COLLATE Latin1_General_100_CI_AI
+              = @operacionUsuario COLLATE Latin1_General_100_CI_AI
+          ORDER BY id_operacion;
         `),
       ]);
 
@@ -135,7 +261,12 @@ exports.getOpciones = async (_req, res) => {
       obras: (obrasResult.recordset || []).map((fila) =>
         String(fila.obra_version || "").trim(),
       ),
-      operaciones: operacionesResult.recordset || [],
+      operaciones:
+        operacionesResult.recordset?.length
+          ? operacionesResult.recordset
+          : [{ id_operacion: null, nombre: operacionUsuario, tiempo_std: null }],
+      operacionUsuario,
+      restringidoPorOperacion: true,
     });
   } catch (error) {
     console.error("indicadoresProduccion.getOpciones:", error);
@@ -156,10 +287,19 @@ exports.getDatos = async (req, res) => {
 
     await poolConnect;
     const pool = await getPool();
+
+    const operacionUsuario = await resolverOperacionUsuario(pool, req);
+    const usuario = usuarioActual(req);
+
+    // Si coincide con una operación, filtramos por ella.
+    // Si no coincide con ninguna, operacionUsuario queda null y ve todas.
+
     const request = pool
       .request()
       .input("desde", sql.Date, desde)
-      .input("hasta", sql.Date, hasta);
+      .input("hasta", sql.Date, hasta)
+      .input("operacionUsuario", sql.NVarChar(150), operacionUsuario)
+      .input("usuarioActual", sql.NVarChar(255), usuario);
 
     const filtroOperadores = agregarFiltroLista(
       request,
@@ -203,8 +343,32 @@ exports.getDatos = async (req, res) => {
             ELSE DATEDIFF_BIG(SECOND, ot.inicio_real, ot.fin_real)
           END AS segundos_transcurridos
         FROM dbo.ordenes_trabajo ot WITH (NOLOCK)
+        LEFT JOIN dbo.ordenes_trabajo origen WITH (NOLOCK)
+          ON origen.id_ot = ot.id_ot_origen
         WHERE ot.inicio_real IS NOT NULL
           AND ot.fin_real IS NOT NULL
+          AND (
+            @operacionUsuario IS NULL
+            OR (
+              (
+                UPPER(LTRIM(RTRIM(ISNULL(ot.tipo_ot, 'PRODUCTIVA')))) = 'INDIRECTO'
+                AND ot.id_ot_origen IS NULL
+                AND LTRIM(RTRIM(ISNULL(ot.usuario_creacion, '')))
+                    COLLATE Latin1_General_100_CI_AI
+                  = LTRIM(RTRIM(ISNULL(@usuarioActual, '')))
+                    COLLATE Latin1_General_100_CI_AI
+              )
+              OR
+              (
+                CASE
+                  WHEN UPPER(LTRIM(RTRIM(ISNULL(ot.tipo_ot, 'PRODUCTIVA')))) = 'INDIRECTO'
+                    THEN origen.operacion
+                  ELSE ot.operacion
+                END
+              ) COLLATE Latin1_General_100_CI_AI
+                = @operacionUsuario COLLATE Latin1_General_100_CI_AI
+            )
+          )
       ),
       base AS
       (

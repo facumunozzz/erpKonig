@@ -18,12 +18,13 @@ function Navbar() {
   const puedeVerProduccion =
     isAdmin ||
     hasUtilidad("PlanificacionProduccion") ||
+    hasUtilidad("OrdenesTrabajo") ||
+    hasUtilidad("DatosProduccion") ||
     hasUtilidad("Observaciones");
 
   const puedeVerIndicadores =
     isAdmin ||
-    hasUtilidad("Indicadores") ||
-    hasUtilidad("PlanificacionProduccion");
+    hasUtilidad("Indicadores");
 
   const obtenerOpcionesModulo = useCallback(
     (modulo) => {
@@ -91,12 +92,12 @@ function Navbar() {
             {
               texto: "Órdenes de Trabajo",
               ruta: "/produccion/ordenes-trabajo",
-              visible: isAdmin || hasUtilidad("PlanificacionProduccion"),
+              visible: isAdmin || hasUtilidad("OrdenesTrabajo"),
             },
             {
               texto: "Datos",
               ruta: "/produccion/datos",
-              visible: isAdmin || hasUtilidad("PlanificacionProduccion"),
+              visible: isAdmin || hasUtilidad("DatosProduccion"),
             },
             {
               texto: "Observaciones",

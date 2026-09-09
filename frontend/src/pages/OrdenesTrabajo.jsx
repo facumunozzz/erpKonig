@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useAuth } from "../context/AuthContext";
 import "../styles/ordenesTrabajo.css";
 
 const API_ORDENES = "/api/ordenes-trabajo";
@@ -129,13 +130,19 @@ function tiempoEfectivo(orden, ahora) {
   );
 }
 
-async function solicitarJson(url, opciones = {}) {
+async function solicitarJson(url, opciones = {}, token = "") {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(opciones.headers || {}),
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const respuesta = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(opciones.headers || {}),
-    },
     ...opciones,
+    headers,
   });
 
   let contenido = null;
@@ -181,6 +188,11 @@ function claseEstado(orden) {
 }
 
 export default function OrdenesTrabajo() {
+  const { token, isAdmin } = useAuth();
+
+  const solicitarApi = (url, opciones = {}) =>
+    solicitarJson(url, opciones, token);
+
   const [ordenes, setOrdenes] = useState([]);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
@@ -196,10 +208,16 @@ export default function OrdenesTrabajo() {
   const [modalAbierto, setModalAbierto] = useState(false);
   const [ordenEditando, setOrdenEditando] = useState(null);
   const [guardando, setGuardando] = useState(false);
+  const [ocultandoFinalizadas, setOcultandoFinalizadas] = useState(false);
 
   const [modalInicioAbierto, setModalInicioAbierto] = useState(false);
   const [ordenIniciando, setOrdenIniciando] = useState(null);
   const [operadorInicio, setOperadorInicio] = useState("");
+
+  const [modalCrearIndirectoAbierto, setModalCrearIndirectoAbierto] =
+    useState(false);
+  const [operadorIndirecto, setOperadorIndirecto] = useState("");
+  const [actividadIndirecto, setActividadIndirecto] = useState("");
 
   const [modalFinalizarIndirectoAbierto, setModalFinalizarIndirectoAbierto] =
     useState(false);
@@ -315,7 +333,7 @@ export default function OrdenesTrabajo() {
 
   const cargarOperadores = async () => {
     try {
-      const respuesta = await solicitarJson(`${API_ORDENES}/operadores`);
+      const respuesta = await solicitarApi(`${API_ORDENES}/operadores`);
 
       const lista = Array.isArray(respuesta)
         ? respuesta
@@ -358,7 +376,7 @@ export default function OrdenesTrabajo() {
         params.set("estado", estado);
       }
 
-      const respuesta = await solicitarJson(
+      const respuesta = await solicitarApi(
         `${API_ORDENES}?${params.toString()}`,
       );
 
@@ -373,10 +391,14 @@ export default function OrdenesTrabajo() {
   };
 
   useEffect(() => {
+    if (!token) {
+      return;
+    }
+
     cargarOrdenes();
     cargarOperadores();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [token]);
 
   const resumen = useMemo(() => {
     return ordenes.reduce(
@@ -411,7 +433,7 @@ export default function OrdenesTrabajo() {
     try {
       setError("");
 
-      const respuesta = await solicitarJson(`${API_ORDENES}/${id}`);
+      const respuesta = await solicitarApi(`${API_ORDENES}/${id}`);
 
       setOrdenEditando({
         ...respuesta,
@@ -525,7 +547,7 @@ export default function OrdenesTrabajo() {
       setBuscandoArticuloMaterial(true);
       setArticuloMaterialEncontrado(null);
 
-      const articulo = await solicitarJson(
+      const articulo = await solicitarApi(
         `${API_ORDENES}/materiales/buscar-articulo/${encodeURIComponent(codigo)}`,
       );
 
@@ -583,7 +605,7 @@ export default function OrdenesTrabajo() {
     try {
       setGuardandoMaterialNuevo(true);
 
-      const respuesta = await solicitarJson(
+      const respuesta = await solicitarApi(
         `${API_ORDENES}/${ordenEditando.id_ot}/materiales`,
         {
           method: "POST",
@@ -687,7 +709,7 @@ export default function OrdenesTrabajo() {
     try {
       setConfirmandoMaterialId(Number(material.id_ot_material));
 
-      const respuesta = await solicitarJson(
+      const respuesta = await solicitarApi(
         `${API_ORDENES}/${ordenEditando.id_ot}/materiales/${material.id_ot_material}/confirmar-consumo`,
         {
           method: "POST",
@@ -754,7 +776,7 @@ export default function OrdenesTrabajo() {
     }
 
     try {
-      const respuesta = await solicitarJson(
+      const respuesta = await solicitarApi(
         `${API_ORDENES}/${ordenEditando.id_ot}/materiales/${material.id_ot_material}/recortes`,
       );
 
@@ -883,7 +905,7 @@ export default function OrdenesTrabajo() {
     try {
       setGuardandoRecorte(true);
 
-      const respuesta = await solicitarJson(
+      const respuesta = await solicitarApi(
         `${API_ORDENES}/${ordenEditando.id_ot}/materiales/${materialRecorte.id_ot_material}/consumir-recorte`,
         {
           method: "POST",
@@ -938,7 +960,7 @@ export default function OrdenesTrabajo() {
     try {
       setGuardando(true);
 
-      await solicitarJson(`${API_ORDENES}/${ordenEditando.id_ot}`, {
+      await solicitarApi(`${API_ORDENES}/${ordenEditando.id_ot}`, {
         method: "PUT",
         body: JSON.stringify({
           operador: String(ordenEditando.operador || "").trim() || null,
@@ -954,6 +976,59 @@ export default function OrdenesTrabajo() {
       await Promise.all([cargarOrdenes(), cargarOperadores()]);
     } catch (errorGuardado) {
       window.alert(errorGuardado.message);
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  const abrirCrearIndirecto = () => {
+    setOperadorIndirecto("");
+    setActividadIndirecto("");
+    setModalCrearIndirectoAbierto(true);
+  };
+
+  const cerrarCrearIndirecto = () => {
+    if (guardando) {
+      return;
+    }
+
+    setModalCrearIndirectoAbierto(false);
+    setOperadorIndirecto("");
+    setActividadIndirecto("");
+  };
+
+  const crearIndirectoIndependiente = async () => {
+    const operador = String(operadorIndirecto || "").trim();
+    const motivo = String(actividadIndirecto || "").trim();
+
+    if (!operador) {
+      window.alert("Debe seleccionar un operador / actuante.");
+      return;
+    }
+
+    if (!motivo) {
+      window.alert("Debe indicar la actividad indirecta.");
+      return;
+    }
+
+    try {
+      setGuardando(true);
+
+      await solicitarApi(`${API_ORDENES}/indirectos`, {
+        method: "POST",
+        body: JSON.stringify({
+          operador,
+          motivo,
+        }),
+      });
+
+      setModalCrearIndirectoAbierto(false);
+      setOperadorIndirecto("");
+      setActividadIndirecto("");
+
+      await Promise.all([cargarOrdenes(), cargarOperadores()]);
+    } catch (errorCrearIndirecto) {
+      window.alert(errorCrearIndirecto.message);
     } finally {
       setGuardando(false);
     }
@@ -992,7 +1067,7 @@ export default function OrdenesTrabajo() {
     try {
       setGuardando(true);
 
-      await solicitarJson(`${API_ORDENES}/${ordenIniciando.id_ot}/iniciar`, {
+      await solicitarApi(`${API_ORDENES}/${ordenIniciando.id_ot}/iniciar`, {
         method: "POST",
         body: JSON.stringify({
           operador,
@@ -1017,7 +1092,7 @@ export default function OrdenesTrabajo() {
     try {
       setGuardando(true);
 
-      await solicitarJson(`${API_ORDENES}/${orden.id_ot}/pausar`, {
+      await solicitarApi(`${API_ORDENES}/${orden.id_ot}/pausar`, {
         method: "POST",
         body: JSON.stringify({}),
       });
@@ -1034,7 +1109,7 @@ export default function OrdenesTrabajo() {
     event?.stopPropagation();
 
     try {
-      await solicitarJson(`${API_ORDENES}/${orden.id_ot}/reanudar`, {
+      await solicitarApi(`${API_ORDENES}/${orden.id_ot}/reanudar`, {
         method: "POST",
         body: JSON.stringify({}),
       });
@@ -1049,7 +1124,9 @@ export default function OrdenesTrabajo() {
     event?.stopPropagation();
 
     setIndirectoFinalizando(orden);
-    setMotivoIndirecto("");
+    setMotivoIndirecto(
+      String(orden.motivo_indirecto || orden.operacion || "").trim(),
+    );
     setModalFinalizarIndirectoAbierto(true);
   };
 
@@ -1068,7 +1145,7 @@ export default function OrdenesTrabajo() {
     try {
       setGuardando(true);
 
-      await solicitarJson(
+      await solicitarApi(
         `${API_ORDENES}/${indirectoFinalizando.id_ot}/finalizar`,
         {
           method: "POST",
@@ -1128,7 +1205,7 @@ export default function OrdenesTrabajo() {
 
       const idOrdenFinalizada = ordenFinalizando.id_ot;
 
-      const respuesta = await solicitarJson(
+      const respuesta = await solicitarApi(
         `${API_ORDENES}/${idOrdenFinalizada}/finalizar`,
         {
           method: "POST",
@@ -1166,6 +1243,42 @@ export default function OrdenesTrabajo() {
     }
   };
 
+  const ocultarFinalizadasCompletas = async () => {
+    const confirmado = window.confirm(
+      "¿Ocultar todas las OTs cuya cadena productiva ya esté completamente finalizada?\n\n" +
+        "No se ocultarán OTs pendientes, en proceso, pausadas ni cadenas con un faltante todavía abierto.",
+    );
+
+    if (!confirmado) {
+      return;
+    }
+
+    try {
+      setOcultandoFinalizadas(true);
+
+      const resultado = await solicitarApi(
+        `${API_ORDENES}/ocultar-finalizadas-completas`,
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+      );
+
+      window.alert(
+        `${resultado?.mensaje || "Proceso terminado."}\n\n` +
+          `Cadenas completas: ${resultado?.cadenas_ocultadas || 0}\n` +
+          `OT productivas ocultadas: ${resultado?.productivas_ocultadas || 0}\n` +
+          `Indirectos vinculados ocultados: ${resultado?.indirectos_vinculados_ocultados || 0}`,
+      );
+
+      await cargarOrdenes();
+    } catch (errorOcultar) {
+      window.alert(errorOcultar.message);
+    } finally {
+      setOcultandoFinalizadas(false);
+    }
+  };
+
   const ocultarOrden = async (orden, event) => {
     event?.stopPropagation();
 
@@ -1179,7 +1292,7 @@ export default function OrdenesTrabajo() {
     }
 
     try {
-      await solicitarJson(`${API_ORDENES}/${orden.id_ot}`, {
+      await solicitarApi(`${API_ORDENES}/${orden.id_ot}`, {
         method: "DELETE",
       });
 
@@ -1318,6 +1431,53 @@ export default function OrdenesTrabajo() {
           color: #64748b !important;
         }
 
+        .ot-encabezado-acciones {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .ot-boton-limpiar-finalizadas {
+          border: 0;
+          border-radius: 9px;
+          padding: 11px 16px;
+          background: #475569;
+          color: #ffffff;
+          font-weight: 800;
+          cursor: pointer;
+          box-shadow: 0 5px 14px rgba(71, 85, 105, 0.18);
+        }
+
+        .ot-boton-limpiar-finalizadas:hover {
+          filter: brightness(0.96);
+        }
+
+        .ot-boton-limpiar-finalizadas:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .ot-boton-crear-indirecto {
+          border: 0;
+          border-radius: 9px;
+          padding: 11px 16px;
+          background: #7c3aed;
+          color: #ffffff;
+          font-weight: 800;
+          cursor: pointer;
+          box-shadow: 0 5px 14px rgba(124, 58, 237, 0.22);
+        }
+
+        .ot-boton-crear-indirecto:hover {
+          filter: brightness(0.96);
+        }
+
+        .ot-boton-crear-indirecto:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
         @media (max-width: 700px) {
           .ot-recorte-overlay {
             align-items: flex-start !important;
@@ -1360,8 +1520,19 @@ export default function OrdenesTrabajo() {
           <h2 className="module-title">Órdenes de Trabajo</h2>
 
           <p>
-            Tareas productivas e indirectas generadas desde la planificación.
+            Tareas productivas e indirectas, vinculadas o independientes.
           </p>
+        </div>
+
+        <div className="ot-encabezado-acciones">
+          <button
+            type="button"
+            className="ot-boton-crear-indirecto"
+            onClick={abrirCrearIndirecto}
+            disabled={guardando || !token}
+          >
+            + CREAR INDIRECTO
+          </button>
         </div>
 
         <div className="ot-resumen">
@@ -1520,6 +1691,12 @@ export default function OrdenesTrabajo() {
                 {indirecta && orden.ot_origen_otid && (
                   <span>
                     OT origen: <strong>{orden.ot_origen_otid}</strong>
+                  </span>
+                )}
+
+                {indirecta && !orden.id_ot_origen && orden.usuario_creacion && (
+                  <span>
+                    Creado por: <strong>{orden.usuario_creacion}</strong>
                   </span>
                 )}
 
@@ -2367,6 +2544,83 @@ export default function OrdenesTrabajo() {
                     </option>
                   ))}
                 </select>
+              </label>
+
+              {operadores.length === 0 && (
+                <div className="ot-aviso-modal">
+                  No hay referentes / actuantes activos disponibles.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalCrearIndirectoAbierto && (
+        <div className="ot-modal-overlay" onMouseDown={cerrarCrearIndirecto}>
+          <div
+            className="ot-modal ot-modal-pequeno"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="ot-modal-barra">
+              <button
+                type="button"
+                onClick={cerrarCrearIndirecto}
+                disabled={guardando}
+              >
+                Cancelar
+              </button>
+
+              <strong>Crear indirecto</strong>
+
+              <button
+                type="button"
+                className="ot-boton-guardar"
+                onClick={crearIndirectoIndependiente}
+                disabled={guardando}
+              >
+                {guardando ? "Creando..." : "Crear e iniciar"}
+              </button>
+            </div>
+
+            <div className="ot-modal-contenido">
+              <div className="ot-aviso-modal">
+                Este indirecto no necesita una OT de origen. Quedará ligado al
+                usuario que está conectado y comenzará a medir tiempo al crearlo.
+              </div>
+
+              <label className="ot-campo">
+                <span>Operador / actuante</span>
+
+                <select
+                  autoFocus
+                  value={operadorIndirecto}
+                  onChange={(event) => setOperadorIndirecto(event.target.value)}
+                  disabled={guardando}
+                >
+                  <option value="">Seleccionar operador</option>
+
+                  {operadores.map((item) => (
+                    <option
+                      key={item.id_referente ?? item.operador}
+                      value={item.operador}
+                    >
+                      {item.operador}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="ot-campo">
+                <span>Actividad indirecta</span>
+
+                <input
+                  type="text"
+                  placeholder="Ej.: limpieza, orden, capacitación, espera..."
+                  value={actividadIndirecto}
+                  onChange={(event) => setActividadIndirecto(event.target.value)}
+                  disabled={guardando}
+                />
               </label>
 
               {operadores.length === 0 && (
