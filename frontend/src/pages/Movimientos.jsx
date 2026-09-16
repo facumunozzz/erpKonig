@@ -6,12 +6,20 @@ import {
   useMovimientosSqlFilters as useExcelFilters,
   MovimientosSqlFilterButton as ExcelFilterButton,
 } from "../components/MovimientosSqlFilter";
-import movimientosLocalDb from "../services/movimientosLocalDb";
 
 const STORAGE_KEY_MOVIMIENTOS = "movimientos_preferencias_v2";
-const MOTIVO_CONSUMO_DROPBOX = "CONSUMO PRODUCCIÓN (DROPBOX)";
-const LOAD_BATCH_SIZE = 500;
-const LOAD_CONCURRENCY = 3;
+
+const MOTIVOS_DROPBOX_OCULTOS = [
+  "CONSUMO PRODUCCIÓN (DROPBOX)",
+  "CONSUMO RECORTES (DROPBOX)",
+];
+
+const FILTROS_INICIALES_MOVIMIENTOS = {
+  motivo: {
+    mode: "notIn",
+    values: [...MOTIVOS_DROPBOX_OCULTOS],
+  },
+};
 
 function cargarPageSizeGuardado() {
   try {
@@ -53,23 +61,10 @@ function Movimientos() {
   const [currentPage, setCurrentPage] = useState(1);
 
   const [pageSize, setPageSize] = useState(() => cargarPageSizeGuardado());
-  const [gotoPage, setGotoPage] = useState("");
-  const [filtrosColumnas, setFiltrosColumnas] = useState({});
 
   const [loading, setLoading] = useState(false);
-  const [loadedRows, setLoadedRows] = useState(0);
-  const [expectedRows, setExpectedRows] = useState(0);
   const [totalRows, setTotalRows] = useState(0);
   const [reloadToken, setReloadToken] = useState(0);
-  const [engineStatus, setEngineStatus] = useState({
-    ready: false,
-    storageMode: "not-initialized",
-    syncing: false,
-    bootstrapComplete: false,
-    localRows: 0,
-    serverTotal: 0,
-    lastError: "",
-  });
 
   const [showEdit, setShowEdit] = useState(false);
   const [movEdit, setMovEdit] = useState(null);
@@ -85,6 +80,8 @@ function Movimientos() {
   const topScrollRef = useRef(null);
   const topScrollInnerRef = useRef(null);
   const tableRef = useRef(null);
+  const queryVersionRef = useRef(0);
+  const queryAbortRef = useRef(null);
 
   const formatFecha = (value) => {
     if (!value) return "";
@@ -101,84 +98,112 @@ function Movimientos() {
       {
         key: "id_movimiento",
         label: "ID Movimiento",
+        filterKind: "search",
+        inputMode: "startsWith",
       },
       {
         key: "numero_transaccion",
         label: "Número de transacción",
+        filterKind: "search",
+        inputMode: "startsWith",
       },
       {
         key: "fecha",
         label: "Fecha",
         type: "date",
+        filterKind: "date",
       },
       {
         key: "fecha_real",
         label: "Fecha Real",
         type: "date",
+        filterKind: "date",
       },
       {
         key: "codigo",
         label: "Código",
+        filterKind: "search",
+        inputMode: "startsWith",
       },
       {
         key: "descripcion",
         label: "Descripción",
+        filterKind: "search",
+        inputMode: "contains",
       },
       {
         key: "cantidad",
         label: "Cantidad",
+        type: "number",
+        filterKind: "number",
       },
       {
         key: "deposito_origen",
         label: "Depósito Origen",
+        filterKind: "list",
       },
       {
         key: "ubicacion_origen",
         label: "Ubicación Origen",
+        filterKind: "list",
       },
       {
         key: "deposito_destino",
         label: "Depósito Destino",
+        filterKind: "list",
       },
       {
         key: "ubicacion_destino",
         label: "Ubicación Destino",
+        filterKind: "list",
       },
       {
         key: "tipo_transaccion",
         label: "Tipo de transacción",
+        filterKind: "list",
       },
       {
         key: "motivo",
         label: "Motivo",
+        filterKind: "list",
       },
       {
         key: "remito_referencia",
         label: "Remito/Referencia",
+        filterKind: "search",
+        inputMode: "startsWith",
       },
       {
         key: "obra",
         label: "Obra",
+        filterKind: "search",
+        inputMode: "startsWith",
       },
       {
         key: "version",
         label: "Versión",
+        filterKind: "search",
+        inputMode: "startsWith",
       },
       {
         key: "referente",
         label: "Actuante",
+        filterKind: "list",
       },
       {
         key: "proveedor",
         label: "Proveedor",
+        filterKind: "list",
       },
       {
         key: "ingreso_egreso",
         label: "E/I",
+        filterKind: "list",
       },
       {
         key: "usuario",
         label: "Usuario",
+        filterKind: "list",
       },
     ],
     [],
@@ -194,49 +219,122 @@ function Movimientos() {
   );
 
   const excel = useExcelFilters(rows, excelColumns, {
+    initialFilters: FILTROS_INICIALES_MOVIMIENTOS,
     onChange: () => setCurrentPage(1),
-    getTextFilters: () => filtrosColumnas,
   });
 
-  /*
-   * Movimientos ya no descarga todo el historial al abrir la pantalla.
-   * Consulta únicamente la página visible en la SQLite local persistente.
-   */
+  const getQuickFilterValue = (col) => {
+    const filter = excel.filters[col.key];
+    if (!filter) return "";
+
+    if (col.filterKind === "date") {
+      if (
+        filter.mode === "dateRange" &&
+        filter.from &&
+        filter.from === filter.to
+      ) {
+        return filter.from;
+      }
+      return "";
+    }
+
+    if (col.filterKind === "number") {
+      return filter.mode === "numberEq" ? String(filter.value ?? "") : "";
+    }
+
+    if (filter.mode === "contains" || filter.mode === "startsWith") {
+      return String(filter.value ?? "");
+    }
+
+    return "";
+  };
+
+  const cambiarFiltroRapido = (col, value) => {
+    const text = String(value ?? "");
+
+    if (!text.trim()) {
+      excel.clearColumnFilter(col.key);
+      return;
+    }
+
+    if (col.filterKind === "date") {
+      excel.setColumnFilter(col.key, {
+        mode: "dateRange",
+        from: text,
+        to: text,
+      });
+      return;
+    }
+
+    if (col.filterKind === "number") {
+      excel.setColumnFilter(col.key, {
+        mode: "numberEq",
+        value: text,
+      });
+      return;
+    }
+
+    excel.setColumnFilter(col.key, {
+      mode: col.inputMode === "contains" ? "contains" : "startsWith",
+      value: text,
+    });
+  };
+
+  /* Consulta únicamente la página visible directamente en SQL Server. */
   const cargarMovimientos = async ({ silent = false } = {}) => {
+    const queryVersion = ++queryVersionRef.current;
+
+    queryAbortRef.current?.abort();
+    const controller = new AbortController();
+    queryAbortRef.current = controller;
+
     try {
       if (!silent) {
         setLoading(true);
       }
 
-      await movimientosLocalDb.start();
-
-      const resultado = await movimientosLocalDb.queryMovimientos({
-        page: currentPage,
-        pageSize,
-        textFilters: filtrosColumnas,
-        excelFilters: excel.filters,
-        sort: excel.sort,
+      const response = await api.get("/movimientos", {
+        params: {
+          page: currentPage,
+          pageSize,
+          filters: JSON.stringify(excel.filters),
+          sortKey: excel.sort?.key || "",
+          sortDir: excel.sort?.dir || "",
+        },
+        signal: controller.signal,
+        timeout: 120000,
       });
 
-      const data = Array.isArray(resultado?.data) ? resultado.data : [];
-      const total = Number(resultado?.total || 0);
-      const pages = Number(resultado?.totalPages || 1);
+      if (queryVersion !== queryVersionRef.current) {
+        return;
+      }
 
-      if (currentPage > pages) {
-        setCurrentPage(pages);
+      const resultado = response.data || {};
+      const data = Array.isArray(resultado?.data) ? resultado.data : [];
+      const totalProvisorio = Number(resultado?.total || 0);
+      const pagesProvisorias = Math.max(Number(resultado?.totalPages || 1), 1);
+
+      if (currentPage > pagesProvisorias) {
+        setCurrentPage(pagesProvisorias);
         return;
       }
 
       setRows(data);
-      setTotalRows(total);
-
-      const status = movimientosLocalDb.getStatus();
-
-      setLoadedRows(Number(status.localRows || 0));
-      setExpectedRows(Number(status.serverTotal || 0));
-      setEngineStatus(status);
+      setTotalRows(totalProvisorio);
     } catch (err) {
-      console.error("Error cargando movimientos desde SQLite local:", err);
+      if (
+        controller.signal.aborted ||
+        err?.code === "ERR_CANCELED" ||
+        err?.name === "CanceledError"
+      ) {
+        return;
+      }
+
+      if (queryVersion !== queryVersionRef.current) {
+        return;
+      }
+
+      console.error("Error cargando movimientos desde SQL Server:", err);
 
       setRows([]);
       setTotalRows(0);
@@ -248,23 +346,19 @@ function Movimientos() {
           "Error cargando movimientos.",
       );
     } finally {
-      if (!silent) {
+      if (queryAbortRef.current === controller) {
+        queryAbortRef.current = null;
+      }
+
+      if (queryVersion === queryVersionRef.current && !silent) {
         setLoading(false);
       }
     }
   };
 
-  const actualizarMovimientos = async () => {
-    setFiltrosColumnas({});
+  const actualizarMovimientos = () => {
     excel.clearAllFilters();
     setCurrentPage(1);
-
-    try {
-      await movimientosLocalDb.syncNow();
-    } catch (err) {
-      console.error("Error actualizando caché local de movimientos:", err);
-    }
-
     setReloadToken((value) => value + 1);
   };
 
@@ -298,60 +392,35 @@ function Movimientos() {
   }, [pageSize]);
 
   /*
-   * El motor puede estar sincronizando desde que arrancó el ERP, aunque esta
-   * pantalla nunca se haya abierto. Nos suscribimos únicamente para reflejar
-   * progreso y refrescar la página visible cuando entra un lote nuevo.
+   * Consulta la API con debounce. Al cambiar filtros/orden/página se invalida
+   * inmediatamente cualquier respuesta anterior y se vacía la grilla.
+   * Así nunca quedan visibles filas de la consulta previa mientras entra la nueva.
    */
   useEffect(() => {
-    let refreshTimer = null;
+    queryVersionRef.current += 1;
+    queryAbortRef.current?.abort();
+    setRows([]);
 
-    const unsubscribe = movimientosLocalDb.subscribe((status) => {
-      setEngineStatus(status);
-      setLoadedRows(Number(status.localRows || 0));
-      setExpectedRows(Number(status.serverTotal || 0));
-
-      clearTimeout(refreshTimer);
-
-      refreshTimer = setTimeout(() => {
-        setReloadToken((value) => value + 1);
-      }, 350);
-    });
-
-    movimientosLocalDb.start().catch((err) => {
-      console.error("No se pudo iniciar SQLite local de movimientos:", err);
-    });
-
-    return () => {
-      clearTimeout(refreshTimer);
-      unsubscribe();
-    };
-  }, []);
-
-  /*
-   * Solo se vuelve a consultar SQLite local cuando cambia la página,
-   * el tamaño, un filtro, el orden o entra una sincronización.
-   */
-  useEffect(() => {
     const timer = setTimeout(() => {
       cargarMovimientos();
-    }, 120);
+    }, 350);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      queryAbortRef.current?.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     currentPage,
     pageSize,
-    filtrosColumnas,
     excel.filters,
     excel.sort,
     reloadToken,
   ]);
 
   const limpiarFiltros = () => {
-    setFiltrosColumnas({});
     excel.clearAllFilters();
     setCurrentPage(1);
-    setGotoPage("");
   };
 
   const abrirEdicion = (r) => {
@@ -385,7 +454,6 @@ function Movimientos() {
       setShowEdit(false);
       setMovEdit(null);
 
-      await movimientosLocalDb.syncNow();
       setReloadToken((value) => value + 1);
     } catch (err) {
       alert(
@@ -482,7 +550,6 @@ function Movimientos() {
       setMovsMasivo([]);
       setMasivoEdit(null);
 
-      await movimientosLocalDb.syncNow();
       setReloadToken((value) => value + 1);
 
       alert("Transacción actualizada correctamente.");
@@ -495,12 +562,27 @@ function Movimientos() {
     }
   };
 
-  /*
-   * La SQLite local ya devuelve la página filtrada. No recorremos en React
-   * cientos de miles de objetos para filtrar ni para paginar.
-   */
+  /* SQL Server ya devuelve la página filtrada. */
   const totalPages = Math.ceil(totalRows / pageSize) || 1;
   const paginated = rows;
+
+  /*
+   * Evita crear un array de miles de páginas en cada tecla escrita cuando el
+   * historial completo ya está cargado. Solo se calculan los botones visibles.
+   */
+  const visiblePageNumbers = useMemo(() => {
+    const candidates = [
+      1,
+      currentPage - 1,
+      currentPage,
+      currentPage + 1,
+      totalPages,
+    ];
+
+    return Array.from(
+      new Set(candidates.filter((page) => page >= 1 && page <= totalPages)),
+    ).sort((a, b) => a - b);
+  }, [currentPage, totalPages]);
 
   const irPagina = (p) => {
     const n = Number(p);
@@ -554,7 +636,7 @@ function Movimientos() {
     } else {
       f.motivo = {
         mode: "notIn",
-        values: [MOTIVO_CONSUMO_DROPBOX],
+        values: [...MOTIVOS_DROPBOX_OCULTOS],
       };
     }
 
@@ -864,18 +946,9 @@ function Movimientos() {
           Editar transacción completa
         </button>
 
-        {(loading ||
-          engineStatus.syncing ||
-          !engineStatus.bootstrapComplete) && (
+        {loading && (
           <span style={{ padding: "6px 10px" }}>
-            {loading
-              ? "Consultando movimientos..."
-              : engineStatus.syncing
-                ? "Sincronizando movimientos..."
-                : "Completando historial local..."}
-            {loadedRows > 0 ? ` ${loadedRows}` : ""}
-            {expectedRows > 0 ? ` de ${expectedRows}` : ""}
-            {engineStatus.storageMode ? ` · ${engineStatus.storageMode}` : ""}
+            Consultando movimientos...
           </span>
         )}
       </div>
@@ -920,28 +993,41 @@ function Movimientos() {
             </tr>
 
             <tr>
-              {columnas.map((col) => (
-                <th key={`filtro-${col.key}`}>
-                  <input
-                    type="text"
-                    value={filtrosColumnas[col.key] || ""}
-                    placeholder="Filtrar..."
-                    onChange={(event) => {
-                      setFiltrosColumnas((prev) => ({
-                        ...prev,
-                        [col.key]: event.target.value,
-                      }));
-                      setCurrentPage(1);
-                    }}
-                    style={{
-                      width: "100%",
-                      minWidth: 0,
-                      boxSizing: "border-box",
-                      padding: "5px 7px",
-                    }}
-                  />
-                </th>
-              ))}
+              {columnas.map((col) => {
+                const quickValue = getQuickFilterValue(col);
+                const inputType =
+                  col.filterKind === "date"
+                    ? "date"
+                    : col.filterKind === "number"
+                      ? "number"
+                      : "text";
+
+                const placeholder =
+                  col.filterKind === "number"
+                    ? "="
+                    : col.inputMode === "contains"
+                      ? "Contiene..."
+                      : "Empieza...";
+
+                return (
+                  <th key={`filtro-${col.key}`}>
+                    <input
+                      type={inputType}
+                      value={quickValue}
+                      placeholder={inputType === "date" ? "" : placeholder}
+                      onChange={(event) =>
+                        cambiarFiltroRapido(col, event.target.value)
+                      }
+                      style={{
+                        width: "100%",
+                        minWidth: 0,
+                        boxSizing: "border-box",
+                        padding: "5px 7px",
+                      }}
+                    />
+                  </th>
+                );
+              })}
 
               <th />
             </tr>
@@ -1027,23 +1113,6 @@ function Movimientos() {
           </select>
         </div>
 
-        <div className="paginado-goto">
-          Ir a:
-          <input
-            type="number"
-            min="1"
-            max={totalPages}
-            value={gotoPage}
-            onChange={(e) => setGotoPage(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                irPagina(Number(gotoPage));
-                setGotoPage("");
-              }
-            }}
-          />
-        </div>
-
         <div className="paginado-botones">
           <button
             className="pg-btn"
@@ -1061,25 +1130,20 @@ function Movimientos() {
             ◀
           </button>
 
-          {Array.from({ length: totalPages }, (_, i) => i + 1)
-            .filter(
-              (p) =>
-                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
-            )
-            .map((p, i, arr) => (
-              <React.Fragment key={p}>
-                {i > 0 && p - arr[i - 1] > 1 && (
-                  <span className="pg-dots">…</span>
-                )}
+          {visiblePageNumbers.map((p, i, arr) => (
+            <React.Fragment key={p}>
+              {i > 0 && p - arr[i - 1] > 1 && (
+                <span className="pg-dots">…</span>
+              )}
 
-                <button
-                  className={`pg-btn ${currentPage === p ? "activo" : ""}`}
-                  onClick={() => irPagina(p)}
-                >
-                  {p}
-                </button>
-              </React.Fragment>
-            ))}
+              <button
+                className={`pg-btn ${currentPage === p ? "activo" : ""}`}
+                onClick={() => irPagina(p)}
+              >
+                {p}
+              </button>
+            </React.Fragment>
+          ))}
 
           <button
             className="pg-btn"
@@ -1093,6 +1157,7 @@ function Movimientos() {
             className="pg-btn"
             onClick={() => irPagina(totalPages)}
             disabled={currentPage === totalPages}
+            title="Ir a la última página"
           >
             ⏭
           </button>
@@ -1155,7 +1220,7 @@ function Movimientos() {
                     "Motivo",
                     "motivo",
                     exportOptions.motivo,
-                    "Todos excepto CONSUMO PRODUCCIÓN (DROPBOX)",
+                    "Todos excepto CONSUMO PRODUCCIÓN (DROPBOX) y CONSUMO RECORTES (DROPBOX)",
                   )}
 
                   {renderExportCheckboxGroup(

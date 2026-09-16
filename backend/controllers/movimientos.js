@@ -1,4 +1,3 @@
-// backend/controllers/movimientos.js
 const { sql, poolConnect, getPool } = require("../db");
 
 function toInt(v, def) {
@@ -51,29 +50,96 @@ const ALLOWED_SORT_COLUMNS = new Set([
   "usuario",
 ]);
 
-const FILTER_COLUMNS = {
-  orden_movimiento: "movimientos.orden_movimiento",
-  id_movimiento: "movimientos.id_movimiento",
-  numero_transaccion: "movimientos.numero_transaccion",
-  fecha: "movimientos.fecha",
-  fecha_real: "movimientos.fecha_real",
-  codigo: "movimientos.codigo",
-  descripcion: "movimientos.descripcion",
-  cantidad: "movimientos.cantidad",
-  deposito_origen: "movimientos.deposito_origen",
-  ubicacion_origen: "movimientos.ubicacion_origen",
-  deposito_destino: "movimientos.deposito_destino",
-  ubicacion_destino: "movimientos.ubicacion_destino",
-  tipo_transaccion: "movimientos.tipo_transaccion",
-  motivo: "movimientos.motivo",
-  remito_referencia: "movimientos.remito_referencia",
-  obra: "movimientos.obra",
-  version: "movimientos.version",
-  referente: "movimientos.referente",
-  proveedor: "movimientos.proveedor",
-  ingreso_egreso: "movimientos.ingreso_egreso",
-  usuario: "movimientos.usuario",
+const FILTER_DEFINITIONS = {
+  orden_movimiento: {
+    sql: "movimientos.orden_movimiento",
+    type: "bigint",
+  },
+  id_movimiento: {
+    sql: "movimientos.id_movimiento",
+    type: "text",
+  },
+  numero_transaccion: {
+    sql: "movimientos.numero_transaccion",
+    type: "text",
+  },
+  fecha: {
+    sql: "movimientos.fecha",
+    type: "date",
+  },
+  fecha_real: {
+    sql: "movimientos.fecha_real",
+    type: "date",
+  },
+  codigo: {
+    sql: "movimientos.codigo",
+    type: "text",
+  },
+  descripcion: {
+    sql: "movimientos.descripcion",
+    type: "text",
+  },
+  cantidad: {
+    sql: "movimientos.cantidad",
+    type: "number",
+  },
+  deposito_origen: {
+    sql: "movimientos.deposito_origen",
+    type: "text",
+  },
+  ubicacion_origen: {
+    sql: "movimientos.ubicacion_origen",
+    type: "text",
+  },
+  deposito_destino: {
+    sql: "movimientos.deposito_destino",
+    type: "text",
+  },
+  ubicacion_destino: {
+    sql: "movimientos.ubicacion_destino",
+    type: "text",
+  },
+  tipo_transaccion: {
+    sql: "movimientos.tipo_transaccion",
+    type: "text",
+  },
+  motivo: {
+    sql: "movimientos.motivo",
+    type: "text",
+  },
+  remito_referencia: {
+    sql: "movimientos.remito_referencia",
+    type: "text",
+  },
+  obra: {
+    sql: "movimientos.obra",
+    type: "text",
+  },
+  version: {
+    sql: "movimientos.version",
+    type: "text",
+  },
+  referente: {
+    sql: "movimientos.referente",
+    type: "text",
+  },
+  proveedor: {
+    sql: "movimientos.proveedor",
+    type: "text",
+  },
+  ingreso_egreso: {
+    sql: "movimientos.ingreso_egreso",
+    type: "text",
+  },
+  usuario: {
+    sql: "movimientos.usuario",
+    type: "text",
+  },
 };
+
+const FILTER_COLUMNS = Object.fromEntries(
+  Object.entries(FILTER_DEFINITIONS).map(([key, def]) => [key, def.sql]),
+);
 
 function getOrderBy(sortKey, sortDir) {
   const key = ALLOWED_SORT_COLUMNS.has(sortKey) ? sortKey : "";
@@ -108,183 +174,221 @@ function getOrderBy(sortKey, sortDir) {
   `;
 }
 
-function addFilter(request, where, filters, key, columnSql) {
-  const raw = filters[key];
+function addTypedInput(request, paramName, definition, value) {
+  if (definition.type === "date") {
+    request.input(paramName, sql.Date, value);
+    return;
+  }
 
-  if (raw === undefined || raw === null || raw === "") {
+  if (definition.type === "number") {
+    request.input(paramName, sql.Int, Number(value));
+    return;
+  }
+
+  if (definition.type === "bigint") {
+    request.input(paramName, sql.BigInt, String(value));
     return;
   }
 
   /*
-   * Compatibilidad con filtros antiguos enviados
-   * directamente como texto.
+   * Se usa VARCHAR para no forzar la conversión de las columnas históricas
+   * que provienen mayormente de CAST(... AS VARCHAR(...)). Esto permite que
+   * SQL Server tenga más posibilidades de aprovechar índices.
+   */
+  request.input(paramName, sql.VarChar(1000), String(value));
+}
+
+function isEmptyToken(value) {
+  return value === "__EMPTY__" || value === "";
+}
+
+function addFilter(request, where, filters, key, columnSql, prefix = "f") {
+  const raw = filters?.[key];
+  const definition = FILTER_DEFINITIONS[key];
+
+  if (!definition || raw === undefined || raw === null || raw === "") {
+    return;
+  }
+
+  /*
+   * Compatibilidad con el filtro antiguo que enviaba strings directamente.
+   * Para texto se evita CAST de la columna. Para número/fecha se conserva
+   * únicamente como compatibilidad; el frontend nuevo envía modos tipados.
    */
   if (typeof raw === "string") {
     const value = safeText(raw);
+    if (!value) return;
 
-    if (!value) {
+    const paramName = `${prefix}_${key}_legacy`;
+
+    if (definition.type === "text") {
+      request.input(paramName, sql.VarChar(1000), `%${value}%`);
+      where.push(`${columnSql} LIKE @${paramName}`);
       return;
     }
 
-    const paramName = `f_${key}`;
-
-    request.input(paramName, sql.NVarChar, `%${value}%`);
-
-    /*
-     * Los filtros de texto libre siguen siendo
-     * búsquedas parciales.
-     */
-    where.push(`CAST(${columnSql} AS NVARCHAR(MAX)) LIKE @${paramName}`);
-
+    request.input(paramName, sql.VarChar(1000), `%${value}%`);
+    where.push(`CAST(${columnSql} AS VARCHAR(100)) LIKE @${paramName}`);
     return;
   }
 
-  /*
-   * Selección exacta de uno o varios valores.
-   *
-   * Ejemplo:
-   *
-   * {
-   *   mode: "in",
-   *   values: ["AJUSTE", "TRANSFERENCIA"]
-   * }
-   */
-  if (typeof raw === "object" && raw.mode === "in") {
+  if (typeof raw !== "object") return;
+
+  // ============================================
+  // LISTA EXCEL: IN / NOT IN
+  // ============================================
+  if (raw.mode === "in" || raw.mode === "notIn") {
     const values = Array.isArray(raw.values)
       ? raw.values.map((x) => String(x ?? "").trim())
       : [];
 
     if (!values.length) {
+      if (raw.mode === "in") where.push("1 = 0");
       return;
     }
 
-    const orParts = [];
+    const parts = [];
 
     values.forEach((value, index) => {
-      const paramName = `f_${key}_${index}`;
+      if (isEmptyToken(value)) {
+        if (definition.type === "text") {
+          parts.push(
+            raw.mode === "in"
+              ? `(${columnSql} IS NULL OR ${columnSql} = '')`
+              : `(${columnSql} IS NOT NULL AND ${columnSql} <> '')`,
+          );
+        } else {
+          parts.push(
+            raw.mode === "in"
+              ? `${columnSql} IS NULL`
+              : `${columnSql} IS NOT NULL`,
+          );
+        }
+        return;
+      }
 
-      if (value === "__EMPTY__" || value === "") {
-        orParts.push(`(${columnSql} IS NULL OR ${columnSql} = '')`);
+      const paramName = `${prefix}_${key}_${raw.mode}_${index}`;
+      addTypedInput(request, paramName, definition, value);
+
+      if (raw.mode === "in") {
+        parts.push(`${columnSql} = @${paramName}`);
       } else {
-        request.input(paramName, sql.NVarChar, value);
-
-        orParts.push(`${columnSql} = @${paramName}`);
+        parts.push(`(${columnSql} IS NULL OR ${columnSql} <> @${paramName})`);
       }
     });
 
-    where.push(`(${orParts.join(" OR ")})`);
-
-    return;
-  }
-
-  /*
-   * Exclusión exacta de uno o varios valores.
-   *
-   * Ejemplo:
-   *
-   * {
-   *   mode: "notIn",
-   *   values: ["CONSUMO PRODUCCIÓN (DROPBOX)"]
-   * }
-   */
-  if (typeof raw === "object" && raw.mode === "notIn") {
-    const values = Array.isArray(raw.values)
-      ? raw.values.map((x) => String(x ?? "").trim()).filter(Boolean)
-      : [];
-
-    if (!values.length) {
-      return;
+    if (parts.length) {
+      where.push(
+        `(${parts.join(raw.mode === "in" ? " OR " : " AND ")})`,
+      );
     }
-
-    const andParts = [];
-
-    values.forEach((value, index) => {
-      const paramName = `f_${key}_not_${index}`;
-
-      if (value === "__EMPTY__" || value === "") {
-        andParts.push(`(${columnSql} IS NOT NULL AND ${columnSql} <> '')`);
-      } else {
-        request.input(paramName, sql.NVarChar, value);
-
-        andParts.push(
-          `(${columnSql} IS NULL OR ${columnSql} <> @${paramName})`,
-        );
-      }
-    });
-
-    where.push(`(${andParts.join(" AND ")})`);
-
     return;
   }
 
-  /*
-   * Filtro por rango de fechas.
-   *
-   * La fecha final se trata como límite exclusivo
-   * del día siguiente.
-   *
-   * Esto permite evitar CONVERT sobre la columna.
-   */
-  if (typeof raw === "object" && raw.mode === "dateRange") {
+  // ============================================
+  // TEXTO
+  // ============================================
+  if (raw.mode === "startsWith" || raw.mode === "contains") {
+    const value = safeText(raw.value);
+    if (!value) return;
+
+    const paramName = `${prefix}_${key}_${raw.mode}`;
+    const parameterValue =
+      raw.mode === "startsWith" ? `${value}%` : `%${value}%`;
+
+    if (definition.type === "text") {
+      request.input(paramName, sql.VarChar(1000), parameterValue);
+      where.push(`${columnSql} LIKE @${paramName}`);
+    } else {
+      request.input(paramName, sql.VarChar(1000), parameterValue);
+      where.push(`CAST(${columnSql} AS VARCHAR(100)) LIKE @${paramName}`);
+    }
+    return;
+  }
+
+  // ============================================
+  // FECHAS
+  // ============================================
+  if (raw.mode === "dateRange") {
     const from = safeText(raw.from);
     const to = safeText(raw.to);
 
-    if (!from && !to) {
-      return;
-    }
+    if (!from && !to) return;
 
     if (from) {
-      const paramNameFrom = `f_${key}_from`;
-
-      request.input(paramNameFrom, sql.Date, from);
-
-      where.push(`${columnSql} >= @${paramNameFrom}`);
+      const paramName = `${prefix}_${key}_from`;
+      request.input(paramName, sql.Date, from);
+      where.push(`${columnSql} >= @${paramName}`);
     }
 
     if (to) {
-      const paramNameTo = `f_${key}_to`;
-
-      request.input(paramNameTo, sql.Date, to);
-
-      where.push(`${columnSql} < DATEADD(DAY, 1, @${paramNameTo})`);
+      const paramName = `${prefix}_${key}_to`;
+      request.input(paramName, sql.Date, to);
+      where.push(`${columnSql} < DATEADD(DAY, 1, @${paramName})`);
     }
-
     return;
   }
 
-  /*
-   * Búsqueda parcial.
-   *
-   * Se mantiene para descripción, códigos y campos
-   * donde el usuario puede buscar parte del contenido.
-   */
-  if (typeof raw === "object" && raw.mode === "contains") {
-    const value = safeText(raw.value);
+  // ============================================
+  // NÚMEROS
+  // ============================================
+  const numberModes = {
+    numberEq: "=",
+    numberGt: ">",
+    numberGte: ">=",
+    numberLt: "<",
+    numberLte: "<=",
+  };
 
-    if (!value) {
-      return;
+  if (numberModes[raw.mode]) {
+    const value = Number(raw.value);
+    if (!Number.isFinite(value)) return;
+
+    const paramName = `${prefix}_${key}_${raw.mode}`;
+    request.input(paramName, sql.Int, value);
+    where.push(`${columnSql} ${numberModes[raw.mode]} @${paramName}`);
+    return;
+  }
+
+  if (raw.mode === "numberBetween") {
+    const from = raw.from === "" || raw.from == null ? null : Number(raw.from);
+    const to = raw.to === "" || raw.to == null ? null : Number(raw.to);
+
+    if (from !== null && Number.isFinite(from)) {
+      const paramName = `${prefix}_${key}_num_from`;
+      request.input(paramName, sql.Int, from);
+      where.push(`${columnSql} >= @${paramName}`);
     }
 
-    const paramName = `f_${key}`;
-
-    request.input(paramName, sql.NVarChar, `%${value}%`);
-
-    where.push(`CAST(${columnSql} AS NVARCHAR(MAX)) LIKE @${paramName}`);
+    if (to !== null && Number.isFinite(to)) {
+      const paramName = `${prefix}_${key}_num_to`;
+      request.input(paramName, sql.Int, to);
+      where.push(`${columnSql} <= @${paramName}`);
+    }
   }
 }
 
-function buildWhere(filters, request, exceptKey = null) {
+function buildWhere(filters, request, exceptKey = null, prefix = "f") {
   const where = [];
 
   Object.entries(FILTER_COLUMNS).forEach(([key, columnSql]) => {
-    if (key === exceptKey) {
-      return;
-    }
-
-    addFilter(request, where, filters, key, columnSql);
+    if (key === exceptKey) return;
+    addFilter(request, where, filters || {}, key, columnSql, prefix);
   });
 
   return where.length ? `WHERE ${where.join(" AND ")}` : "";
+}
+
+function combineWhere(...whereGroups) {
+  const parts = whereGroups
+    .filter(Boolean)
+    .map((where) => where.replace(/^WHERE\s+/i, ""));
+
+  if (!parts.length) {
+    return "";
+  }
+
+  return `WHERE ${parts.map((part) => `(${part})`).join(" AND ")}`;
 }
 
 /*
@@ -1448,11 +1552,19 @@ exports.getAll = async (req, res) => {
 
     const pageSizeRaw = Math.max(toInt(req.query.pageSize, 50), 1);
 
-    const pageSize = Math.min(pageSizeRaw, 100);
+    /*
+     * Tu frontend permite 500.
+     * El controller actual corta en 100.
+     */
+    const pageSize = Math.min(pageSizeRaw, 500);
 
     const offset = (page - 1) * pageSize;
 
     const filters = parseFilters(req.query.filters);
+
+    const textFilters = parseFilters(req.query.textFilters);
+
+    const excelFilters = parseFilters(req.query.excelFilters);
 
     const sortKey = safeText(req.query.sortKey);
 
@@ -1464,40 +1576,60 @@ exports.getAll = async (req, res) => {
 
     request.input("offset", sql.Int, offset);
 
-    request.input("pageSize", sql.Int, pageSize);
+    request.input("pageSizePlusOne", sql.Int, pageSize + 1);
 
     const sqlBase = buildMovimientosHistorialBase();
 
-    const where = buildWhere(filters, request);
+    const whereUnified = buildWhere(filters, request, null, "f");
+
+    const whereText = buildWhere(textFilters, request, null, "txt");
+
+    const whereExcel = buildWhere(excelFilters, request, null, "xls");
+
+    const where = combineWhere(whereUnified, whereText, whereExcel);
 
     const orderBy = getOrderBy(sortKey, sortDir);
 
+    /*
+     * La página se obtiene sin COUNT(*) OVER(). Ese conteo obligaba a SQL
+     * Server a procesar todas las coincidencias antes de responder, aunque el
+     * navegador sólo necesitara 25/50 filas. La fila adicional indica si hay
+     * una página siguiente.
+     */
     const sqlFinal = `
-      SELECT
-        COUNT(*) OVER()
-          AS total_registros,
-
-        movimientos.*
-
+      SELECT movimientos.*
       ${sqlBase}
-
       ${where}
-
       ${orderBy}
-
       OFFSET @offset ROWS
-
-      FETCH NEXT @pageSize
-      ROWS ONLY;
+      FETCH NEXT @pageSizePlusOne ROWS ONLY;
     `;
 
     const result = await request.query(sqlFinal);
 
-    const registros = result.recordset || [];
+    const fetched = result.recordset || [];
+    const hasMore = fetched.length > pageSize;
+    const data = hasMore ? fetched.slice(0, pageSize) : fetched;
 
-    const total = Number(registros[0]?.total_registros || 0);
+    let total;
+    let totalExact;
 
-    const data = registros.map(({ total_registros, ...fila }) => fila);
+    if (!where) {
+      const countResult = await pool.request().query(`
+        SELECT COUNT_BIG(*) AS total
+        FROM dbo.movimientos_historial
+        WHERE eliminado = 0;
+      `);
+
+      total = Number(countResult.recordset?.[0]?.total || 0);
+      totalExact = true;
+    } else if (!hasMore) {
+      total = offset + data.length;
+      totalExact = true;
+    } else {
+      total = offset + data.length + 1;
+      totalExact = false;
+    }
 
     const tiempo = Date.now() - inicio;
 
@@ -1507,11 +1639,10 @@ exports.getAll = async (req, res) => {
 
     return res.json({
       data,
-
       total,
-
+      totalExact,
+      hasMore,
       page,
-
       pageSize,
 
       totalPages: Math.ceil(total / pageSize) || 1,
@@ -1828,14 +1959,10 @@ exports.getDistinctValues = async (req, res) => {
     await poolConnect;
 
     const pool = await getPool();
-
     const column = safeText(req.query.column);
-
     const search = safeText(req.query.search);
-
-    const filters = parseFilters(req.query.filters);
-
-    const columnSql = FILTER_COLUMNS[column];
+    const definition = FILTER_DEFINITIONS[column];
+    const columnSql = definition?.sql;
 
     if (!columnSql) {
       return res.status(400).json({
@@ -1843,59 +1970,72 @@ exports.getDistinctValues = async (req, res) => {
       });
     }
 
+    const filters = parseFilters(req.query.filters);
+    const textFilters = parseFilters(req.query.textFilters);
+    const excelFilters = parseFilters(req.query.excelFilters);
+    /*
+     * El menú Excel debe mostrar los valores posibles según los demás filtros,
+     * pero sin aplicarse a sí mismo.
+     */
+    delete filters[column];
+    delete textFilters[column];
+    delete excelFilters[column];
     const request = pool.request();
-
     request.timeout = 120000;
 
     const sqlBase = buildMovimientosHistorialBase();
 
-    const filtersWithoutCurrent = {
-      ...filters,
-    };
-
-    delete filtersWithoutCurrent[column];
+    const whereUnified = buildWhere(filters, request, column, "fDistinct");
+    const whereText = buildWhere(textFilters, request, column, "txtDistinct");
+    const whereExcel = buildWhere(excelFilters, request, column, "xlsDistinct");
 
     const whereParts = [];
 
-    const whereOther = buildWhere(filtersWithoutCurrent, request);
-
-    if (whereOther) {
-      whereParts.push(whereOther.replace(/^WHERE\s+/i, ""));
-    }
+    [whereUnified, whereText, whereExcel].forEach((where) => {
+      if (where) whereParts.push(where.replace(/^WHERE\s+/i, ""));
+    });
 
     if (search) {
-      request.input("search", sql.NVarChar, `%${search}%`);
+      const paramName = "distinctSearch";
 
-      whereParts.push(`CAST(${columnSql} AS NVARCHAR(MAX)) LIKE @search`);
+      if (definition.type === "text") {
+        request.input(paramName, sql.VarChar(1000), `%${search}%`);
+        whereParts.push(`${columnSql} LIKE @${paramName}`);
+      } else {
+        request.input(paramName, sql.VarChar(1000), `%${search}%`);
+        whereParts.push(
+          `CAST(${columnSql} AS VARCHAR(100)) LIKE @${paramName}`,
+        );
+      }
     }
 
     const whereFinal = whereParts.length
-      ? `WHERE ${whereParts.join(" AND ")}`
+      ? `WHERE ${whereParts.map((part) => `(${part})`).join(" AND ")}`
       : "";
 
+    const limit = 501;
+    request.input("distinctLimit", sql.Int, limit);
+
+    let valueExpression;
+
+    if (definition.type === "date") {
+      valueExpression = `COALESCE(CONVERT(VARCHAR(10), ${columnSql}, 23), '')`;
+    } else if (definition.type === "number" || definition.type === "bigint") {
+      valueExpression = `COALESCE(CONVERT(VARCHAR(100), ${columnSql}), '')`;
+    } else {
+      valueExpression = `COALESCE(${columnSql}, '')`;
+    }
+
+    /*
+     * Este endpoint queda reservado para columnas de baja cardinalidad.
+     * Código, descripción, transacción, obra, etc. ya no llaman a DISTINCT
+     * al abrir el menú; usan búsqueda directa startsWith/contains.
+     */
     const query = `
-      SELECT TOP 300
-        value
-
-      FROM
-      (
-        SELECT DISTINCT
-          CASE
-            WHEN ${columnSql} IS NULL
-              THEN ''
-
-            ELSE CAST(
-              ${columnSql}
-              AS NVARCHAR(500)
-            )
-          END AS value
-
-        ${sqlBase}
-
-        ${whereFinal}
-      ) valores
-
-      ORDER BY value;
+      SELECT DISTINCT TOP (@distinctLimit)
+        ${valueExpression} AS value
+      ${sqlBase}
+      ${whereFinal};
     `;
 
     const result = await request.query(query);
@@ -1903,7 +2043,6 @@ exports.getDistinctValues = async (req, res) => {
     return res.json(
       (result.recordset || []).map((row) => ({
         value: row.value ?? "",
-
         label:
           row.value === null || row.value === undefined || row.value === ""
             ? "(Vacíos)"
@@ -1915,7 +2054,6 @@ exports.getDistinctValues = async (req, res) => {
 
     return res.status(500).json({
       error: "Error al obtener valores del filtro",
-
       detalle: err.message,
     });
   }

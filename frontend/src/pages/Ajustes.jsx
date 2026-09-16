@@ -48,7 +48,7 @@ export default function Ajustes() {
   const [loadingAjustes, setLoadingAjustes] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(100);
+  const [pageSize, setPageSize] = useState(25);
   const [gotoPage, setGotoPage] = useState("");
   const [filtrosColumnas, setFiltrosColumnas] = useState({});
   const [filtrosServidor, setFiltrosServidor] = useState({});
@@ -80,6 +80,9 @@ export default function Ajustes() {
         params: {
           page: currentPage,
           pageSize,
+          // Oculto por defecto. Al escribir algo en el filtro Motivo,
+          // el backend vuelve a incluir Dropbox y aplica ese filtro.
+          incluirDropbox: filtrosServidor.motivo ? 1 : 0,
           estado: filtrosServidor.estado || undefined,
           fecha: filtrosServidor.fecha || undefined,
           fecha_real: filtrosServidor.fecha_real || undefined,
@@ -172,7 +175,9 @@ export default function Ajustes() {
       alert(
         `Proceso finalizado.\n\nAjustados: ${
           response.data?.ajustados || 0
-        }\nFallidos: ${response.data?.fallidos || 0}`,
+        }\nFallidos: ${response.data?.fallidos || 0}\nYa procesados (sin reintento): ${
+          response.data?.omitidos_ya_procesados || 0
+        }`,
       );
 
       await fetchAjustes();
@@ -809,21 +814,18 @@ export default function Ajustes() {
                     background: "#fafbfc",
                   }}
                 >
-                  <label
+                  <div
                     style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
                       padding: "9px 10px",
                       border: "1px solid #d7dce2",
                       borderRadius: 5,
                       background: "#ffffff",
+                      fontSize: 13,
                     }}
-                    title="Los consumos Dropbox se muestran siempre en la tabla."
                   >
-                    <input type="checkbox" checked disabled readOnly />
-                    Mostrar consumos Dropbox
-                  </label>
+                    Los consumos Dropbox están ocultos por defecto. Para verlos,
+                    usá el filtro de la columna Motivo.
+                  </div>
 
                   <button
                     type="button"

@@ -25,6 +25,7 @@ class MovimientosLocalDb {
       serverTotal: 0,
       lastSyncVersion: "0000000000000000",
       lastError: "",
+      dataRevision: 0,
     };
   }
 
@@ -189,14 +190,19 @@ class MovimientosLocalDb {
     const meta = engine?.meta || {};
 
     if (String(meta.bootstrapComplete || "0") === "1") {
-      this.emitStatus({ bootstrapComplete: true });
+      this.emitStatus({
+        bootstrapComplete: true,
+      });
+
       return;
     }
 
     const beforeId = Number(meta.bootstrapBeforeId || 0) || undefined;
     const includeMeta = meta.bootstrapWatermark ? 0 : 1;
 
-    this.emitStatus({ syncing: true });
+    this.emitStatus({
+      syncing: true,
+    });
 
     const response = await api.get("/movimientos/bootstrap", {
       params: {
@@ -215,11 +221,6 @@ class MovimientosLocalDb {
     if (payload.watermark) {
       nextMeta.bootstrapWatermark = payload.watermark;
 
-      /*
-       * El live-sync arranca desde el watermark tomado al iniciar la copia.
-       * Así las modificaciones nuevas se reciben aunque la carga histórica
-       * todavía esté avanzando hacia atrás.
-       */
       if (!meta.lastSyncVersion) {
         nextMeta.lastSyncVersion = payload.watermark;
       }
@@ -243,6 +244,12 @@ class MovimientosLocalDb {
       meta: nextMeta,
     });
 
+    const bootstrapFinished = nextMeta.bootstrapComplete === "1";
+    const isFirstBatch = !meta.bootstrapBeforeId;
+
+    const shouldRefreshGrid =
+      rows.length > 0 && (isFirstBatch || bootstrapFinished);
+
     const estimatedLocalRows = Math.min(
       Number(this.status.serverTotal || nextMeta.serverTotal || 0) ||
         Number.MAX_SAFE_INTEGER,
@@ -251,13 +258,24 @@ class MovimientosLocalDb {
 
     this.emitStatus({
       syncing: false,
+
       bootstrapComplete: nextMeta.bootstrapComplete === "1",
+
       serverTotal: Number(nextMeta.serverTotal || this.status.serverTotal || 0),
+
       localRows:
         estimatedLocalRows === Number.MAX_SAFE_INTEGER
           ? Number(this.status.localRows || 0) + rows.length
           : estimatedLocalRows,
+
       lastSyncVersion: nextMeta.lastSyncVersion || this.status.lastSyncVersion,
+
+      // IMPORTANTE:
+      // solamente cambia si realmente entraron movimientos.
+      dataRevision: shouldRefreshGrid
+        ? Number(this.status.dataRevision || 0) + 1
+        : Number(this.status.dataRevision || 0),
+
       lastError: "",
     });
 
@@ -283,11 +301,15 @@ class MovimientosLocalDb {
   async syncNow() {
     await this.start();
 
-    if (this.liveSyncPromise) return this.liveSyncPromise;
+    if (this.liveSyncPromise) {
+      return this.liveSyncPromise;
+    }
 
     this.liveSyncPromise = (async () => {
       try {
-        this.emitStatus({ syncing: true });
+        this.emitStatus({
+          syncing: true,
+        });
 
         let continueSync = true;
         let rounds = 0;
@@ -297,13 +319,16 @@ class MovimientosLocalDb {
 
           const engine = await this.request("getStatus");
           const meta = engine?.meta || {};
+
           const since = meta.lastSyncVersion || meta.bootstrapWatermark;
 
           /*
-           * Antes de obtener el primer watermark no existe un punto seguro
-           * desde el cual pedir cambios. El bootstrap lo obtiene en su primer lote.
+           * Hasta que el bootstrap no tenga watermark
+           * no existe un punto seguro de sincronización.
            */
-          if (!since) break;
+          if (!since) {
+            break;
+          }
 
           const response = await api.get("/movimientos/sync", {
             params: {
@@ -314,7 +339,9 @@ class MovimientosLocalDb {
           });
 
           const payload = response.data || {};
+
           const rows = Array.isArray(payload.data) ? payload.data : [];
+
           const nextVersion = payload.nextVersion || since;
 
           await this.request("applySyncBatch", {
@@ -324,8 +351,23 @@ class MovimientosLocalDb {
             },
           });
 
+          /*
+           * MUY IMPORTANTE:
+           *
+           * lastSyncVersion puede cambiar aunque no haya
+           * ningún movimiento para mostrar.
+           *
+           * dataRevision solamente cambia cuando realmente
+           * recibimos filas.
+           */
           this.emitStatus({
             lastSyncVersion: nextVersion,
+
+            dataRevision:
+              rows.length > 0
+                ? Number(this.status.dataRevision || 0) + 1
+                : Number(this.status.dataRevision || 0),
+
             lastError: "",
           });
 
@@ -348,7 +390,13 @@ class MovimientosLocalDb {
 
         throw err;
       } finally {
-        this.emitStatus({ syncing: false });
+        /*
+         * Este cambio de syncing ya NO producirá una
+         * recarga de la tabla.
+         */
+        this.emitStatus({
+          syncing: false,
+        });
       }
     })().finally(() => {
       this.liveSyncPromise = null;
@@ -360,7 +408,16 @@ class MovimientosLocalDb {
   async queryMovimientos(options = {}) {
     await this.start();
 
-    return this.request("query", options);
+    return this.request("query", {
+      ...options,
+      includeTotal: false,
+    });
+  }
+
+  async countMovimientos(options = {}) {
+    await this.start();
+
+    return this.request("queryCount", options);
   }
 
   async getDistinctValues(options = {}) {
@@ -379,6 +436,7 @@ class MovimientosLocalDb {
       serverTotal: 0,
       bootstrapComplete: false,
       lastSyncVersion: "0000000000000000",
+      dataRevision: Number(this.status.dataRevision || 0) + 1,
     });
 
     this.startBootstrapLoop();

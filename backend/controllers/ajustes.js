@@ -1,6 +1,7 @@
 // backend/controllers/ajustes.js
 const { sql, poolConnect, getPool } = require("../db");
 const XLSX = require("xlsx");
+const crypto = require("crypto");
 
 const {
   downloadByPath,
@@ -831,6 +832,7 @@ exports.getAll = async (req, res) => {
       100,
     );
     const offset = (page - 1) * pageSize;
+    const incluirDropbox = String(req.query?.incluirDropbox || "") === "1";
 
     const filtros = {
       estado: String(req.query?.estado ?? "").trim(),
@@ -846,9 +848,12 @@ exports.getAll = async (req, res) => {
     const request = pool
       .request()
       .input("offset", sql.Int, offset)
-      .input("pageSize", sql.Int, pageSize);
+      .input("pageSize", sql.Int, pageSize)
+      .input("incluirDropbox", sql.Bit, incluirDropbox ? 1 : 0);
 
-    const where = [];
+    const where = [
+      "(@incluirDropbox = 1 OR base.es_consumo_dropbox = 0)",
+    ];
 
     const addLike = (key, value, expression, maxLength = 500) => {
       if (!value) {
@@ -1003,9 +1008,9 @@ exports.getAll = async (req, res) => {
           ON ap.numero_movimiento = a.numero_ajuste
 
         /*
-         * IMPORTANTE:
-         * Los consumos de producción Dropbox NO se excluyen.
-         * Son movimientos reales y deben aparecer siempre en la tabla.
+         * Los consumos Dropbox forman parte de la base.
+         * La exclusión por defecto se aplica fuera del CTE para permitir
+         * volver a mostrarlos desde el filtro de Motivo.
          */
 
         UNION ALL
@@ -2537,6 +2542,143 @@ async function insertAlertaConsumoProduccion(
   return Number(result.recordset?.[0]?.id_alerta || 0);
 }
 
+// ========================================================
+// CONTROL IDEMPOTENTE DE CONSUMO DE PRODUCCIÓN DROPBOX
+// ========================================================
+
+const CONSUMO_PRODUCCION_ID_HEADER = "SZ_ID_CONSUMO";
+
+function generarIdConsumoProduccion() {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return crypto.randomBytes(16).toString("hex");
+}
+
+async function consumoProduccionYaProcesado(transaction, idConsumo) {
+  const result = await new sql.Request(transaction)
+    .input("idConsumo", sql.VarChar(64), idConsumo)
+    .query(`
+      SELECT TOP 1 id_consumo
+      FROM dbo.consumo_produccion_procesados
+      WITH (UPDLOCK, HOLDLOCK)
+      WHERE id_consumo = @idConsumo;
+    `);
+
+  return result.recordset.length > 0;
+}
+
+async function buscarAlertaHistoricaConsumo(
+  transaction,
+  { obra, version, codigo, faltante, fechaLinea },
+) {
+  const codigoBusqueda = codigo || "SIN_CODIGO";
+
+  const result = await new sql.Request(transaction)
+    .input("obra", sql.NVarChar(sql.MAX), obra ?? null)
+    .input("version", sql.NVarChar(sql.MAX), version ?? null)
+    .input("codigo", sql.VarChar(100), codigoBusqueda)
+    .input("faltante", sql.Int, Number(faltante || 0))
+    .input("fechaLinea", sql.Date, fechaLinea ?? null)
+    .query(`
+      SELECT TOP 1
+        id_alerta,
+        numero_movimiento,
+        cantidad_ajustada,
+        cantidad_faltante,
+        motivo,
+        leida
+      FROM dbo.consumo_produccion_alertas
+      WHERE ISNULL(LTRIM(RTRIM(obra)), '') =
+            ISNULL(LTRIM(RTRIM(@obra)), '')
+        AND ISNULL(LTRIM(RTRIM(version)), '') =
+            ISNULL(LTRIM(RTRIM(@version)), '')
+        AND UPPER(LTRIM(RTRIM(ISNULL(codigo, '')))) =
+            UPPER(LTRIM(RTRIM(ISNULL(@codigo, ''))))
+        AND ISNULL(cantidad_faltante, 0) = @faltante
+        AND leida = 0
+        AND (
+          @fechaLinea IS NULL
+          OR fecha_linea = @fechaLinea
+        )
+      ORDER BY id_alerta DESC;
+    `);
+
+  return result.recordset?.[0] || null;
+}
+
+async function registrarConsumoProduccionProcesado(
+  transaction,
+  {
+    idConsumo,
+    numeroAjuste,
+    filaExcel,
+    obra,
+    version,
+    codigo,
+    requerido,
+    ajustado,
+    faltante,
+    resultado,
+    motivo,
+  },
+) {
+  await new sql.Request(transaction)
+    .input("idConsumo", sql.VarChar(64), idConsumo)
+    .input("numeroAjuste", sql.Int, numeroAjuste ?? null)
+    .input("filaExcel", sql.Int, filaExcel ?? null)
+    .input("obra", sql.NVarChar(sql.MAX), obra ?? null)
+    .input("version", sql.NVarChar(sql.MAX), version ?? null)
+    .input("codigo", sql.VarChar(100), codigo ?? null)
+    .input("requerido", sql.Decimal(18, 3), Number(requerido || 0))
+    .input("ajustado", sql.Decimal(18, 3), Number(ajustado || 0))
+    .input("faltante", sql.Decimal(18, 3), Number(faltante || 0))
+    .input("resultado", sql.VarChar(30), resultado)
+    .input("motivo", sql.NVarChar(1000), motivo ?? null)
+    .query(`
+      IF NOT EXISTS
+      (
+        SELECT 1
+        FROM dbo.consumo_produccion_procesados
+        WITH (UPDLOCK, HOLDLOCK)
+        WHERE id_consumo = @idConsumo
+      )
+      BEGIN
+        INSERT INTO dbo.consumo_produccion_procesados
+        (
+          id_consumo,
+          numero_ajuste,
+          fila_excel,
+          obra,
+          version,
+          codigo,
+          cantidad_requerida,
+          cantidad_ajustada,
+          cantidad_faltante,
+          resultado,
+          motivo,
+          fecha_procesado
+        )
+        VALUES
+        (
+          @idConsumo,
+          @numeroAjuste,
+          @filaExcel,
+          @obra,
+          @version,
+          @codigo,
+          @requerido,
+          @ajustado,
+          @faltante,
+          @resultado,
+          @motivo,
+          SYSDATETIME()
+        );
+      END;
+    `);
+}
+
 // CONSUMIR PRODUCCIÓN DESDE DROPBOX
 async function runConsumoProduccion() {
   let transaction = null;
@@ -2605,6 +2747,26 @@ async function runConsumoProduccion() {
 
     await transaction.begin();
 
+    // Evita que la tarea programada y una ejecución manual procesen el mismo archivo a la vez.
+    const lockResult = await new sql.Request(transaction).query(`
+      DECLARE @lockResult INT;
+
+      EXEC @lockResult = sys.sp_getapplock
+        @Resource = 'SZ_CONSUMO_PRODUCCION_DROPBOX',
+        @LockMode = 'Exclusive',
+        @LockOwner = 'Transaction',
+        @LockTimeout = 0;
+
+      SELECT @lockResult AS lock_result;
+    `);
+
+    if (Number(lockResult.recordset?.[0]?.lock_result ?? -999) < 0) {
+      throw new Error(
+        "El consumo de producción ya se está ejecutando en otro proceso.",
+      );
+    }
+
+
     const motivoId = await getMotivoIdByNombreActivo(
       transaction,
       "CONSUMO PRODUCCION (DROPBOX)",
@@ -2670,6 +2832,22 @@ async function runConsumoProduccion() {
 
     const ubicacionId = Number(ubicacionResult.recordset[0].id_ubicacion);
 
+    let idColumnIndex = header.findIndex(
+      (value) =>
+        String(value ?? "")
+          .trim()
+          .toUpperCase() === CONSUMO_PRODUCCION_ID_HEADER,
+    );
+
+    if (idColumnIndex < 0) {
+      idColumnIndex = header.length;
+      header[idColumnIndex] = CONSUMO_PRODUCCION_ID_HEADER;
+    }
+
+    const idsVistosEnArchivo = new Set();
+    let controlesHistoricosMigrados = 0;
+    let omitidosYaProcesados = 0;
+
     const grupos = new Map();
     const itemsCorrectos = [];
     const itemsFallidos = [];
@@ -2683,6 +2861,7 @@ async function runConsumoProduccion() {
           version,
           articulos: new Map(),
           fallidos: [],
+          procesamientos: new Map(),
         });
       }
 
@@ -2695,6 +2874,14 @@ async function runConsumoProduccion() {
       if (grupo) {
         grupo.fallidos.push(item);
       }
+    };
+
+    const registrarProcesamiento = (grupo, item) => {
+      if (!grupo || !item?.idConsumo) {
+        return;
+      }
+
+      grupo.procesamientos.set(item.idConsumo, item);
     };
 
     for (let index = 0; index < dataRows.length; index += 1) {
@@ -2712,10 +2899,19 @@ async function runConsumoProduccion() {
       const codigo = up(row[1]);
       const fechaLinea = normalizarFechaExcel(row[7]);
 
-      const grupo = obtenerGrupo(obra, version);
-
       const requerido = toNumber0(row[5]);
       const yaAjustado = toNumber0(row[6]);
+
+      let idConsumo = String(row[idColumnIndex] ?? "").trim();
+
+      if (idConsumo) {
+        if (idsVistosEnArchivo.has(idConsumo)) {
+          // Si una fila fue copiada dentro del Excel, no comparte el ID técnico.
+          idConsumo = "";
+        } else {
+          idsVistosEnArchivo.add(idConsumo);
+        }
+      }
 
       if (yaAjustado >= requerido) {
         continue;
@@ -2727,6 +2923,65 @@ async function runConsumoProduccion() {
         continue;
       }
 
+      let idFueGenerado = false;
+
+      if (!idConsumo) {
+        idConsumo = generarIdConsumoProduccion();
+        row[idColumnIndex] = idConsumo;
+        idsVistosEnArchivo.add(idConsumo);
+        idFueGenerado = true;
+      }
+
+      const yaProcesado = await consumoProduccionYaProcesado(
+        transaction,
+        idConsumo,
+      );
+
+      if (yaProcesado) {
+        omitidosYaProcesados += 1;
+        continue;
+      }
+
+      /*
+       * Compatibilidad con revisiones creadas antes de incorporar SZ_ID_CONSUMO.
+       * Si esta fila ya tiene una alerta histórica con la misma obra/versión/código
+       * y el mismo faltante, se registra como ya intentada sin volver a tocar stock.
+       */
+      if (idFueGenerado) {
+        const alertaHistorica = await buscarAlertaHistoricaConsumo(
+          transaction,
+          {
+            obra,
+            version,
+            codigo,
+            faltante: diferencia,
+            fechaLinea,
+          },
+        );
+
+        if (alertaHistorica) {
+          await registrarConsumoProduccionProcesado(transaction, {
+            idConsumo,
+            numeroAjuste: alertaHistorica.numero_movimiento,
+            filaExcel: excelRow,
+            obra,
+            version,
+            codigo: codigo || "SIN_CODIGO",
+            requerido: diferencia,
+            ajustado: Number(alertaHistorica.cantidad_ajustada || 0),
+            faltante: Number(alertaHistorica.cantidad_faltante || diferencia),
+            resultado: "FALLIDO_PREVIO",
+            motivo: alertaHistorica.motivo || "Revisión existente",
+          });
+
+          controlesHistoricosMigrados += 1;
+          omitidosYaProcesados += 1;
+          continue;
+        }
+      }
+
+      const grupo = obtenerGrupo(obra, version);
+
       if (!codigo) {
         registrarFallo(grupo, {
           row: excelRow,
@@ -2737,6 +2992,20 @@ async function runConsumoProduccion() {
           faltante: diferencia,
           obra,
           version,
+          motivo: "Código vacío",
+          idConsumo,
+        });
+
+        registrarProcesamiento(grupo, {
+          idConsumo,
+          filaExcel: excelRow,
+          obra,
+          version,
+          codigo: "SIN_CODIGO",
+          requerido: diferencia,
+          ajustado: 0,
+          faltante: diferencia,
+          resultado: "FALLIDO",
           motivo: "Código vacío",
         });
 
@@ -2773,6 +3042,20 @@ async function runConsumoProduccion() {
           obra,
           version,
           motivo: "Código inexistente",
+          idConsumo,
+        });
+
+        registrarProcesamiento(grupo, {
+          idConsumo,
+          filaExcel: excelRow,
+          obra,
+          version,
+          codigo,
+          requerido: diferencia,
+          ajustado: 0,
+          faltante: diferencia,
+          resultado: "FALLIDO",
+          motivo: "Código inexistente",
         });
 
         continue;
@@ -2802,6 +3085,20 @@ async function runConsumoProduccion() {
           faltante: diferencia,
           obra,
           version,
+          motivo: "Sin stock disponible",
+          idConsumo,
+        });
+
+        registrarProcesamiento(grupo, {
+          idConsumo,
+          filaExcel: excelRow,
+          obra,
+          version,
+          codigo,
+          requerido: diferencia,
+          ajustado: 0,
+          faltante: diferencia,
+          resultado: "FALLIDO",
           motivo: "Sin stock disponible",
         });
 
@@ -2837,6 +3134,20 @@ async function runConsumoProduccion() {
           obra,
           version,
           motivo: "No se pudo descontar stock",
+          idConsumo,
+        });
+
+        registrarProcesamiento(grupo, {
+          idConsumo,
+          filaExcel: excelRow,
+          obra,
+          version,
+          codigo,
+          requerido: diferencia,
+          ajustado: 0,
+          faltante: diferencia,
+          resultado: "FALLIDO",
+          motivo: "No se pudo descontar stock",
         });
 
         continue;
@@ -2856,6 +3167,23 @@ async function runConsumoProduccion() {
         faltante,
         obra,
         version,
+        idConsumo,
+      });
+
+      registrarProcesamiento(grupo, {
+        idConsumo,
+        filaExcel: excelRow,
+        obra,
+        version,
+        codigo,
+        requerido: diferencia,
+        ajustado: ajustable,
+        faltante,
+        resultado: faltante > 0 ? "PARCIAL" : "AJUSTADO",
+        motivo:
+          faltante > 0
+            ? "Stock parcial: se ajustó hasta cero"
+            : "Ajustado correctamente",
       });
 
       if (faltante > 0) {
@@ -2869,6 +3197,7 @@ async function runConsumoProduccion() {
           obra,
           version,
           motivo: "Stock parcial: se ajustó hasta cero",
+          idConsumo,
         });
       }
 
@@ -2890,7 +3219,11 @@ async function runConsumoProduccion() {
       });
     }
 
-    if (!itemsCorrectos.length && !itemsFallidos.length) {
+    if (
+      !itemsCorrectos.length &&
+      !itemsFallidos.length &&
+      controlesHistoricosMigrados === 0
+    ) {
       await transaction.rollback();
       transaction = null;
 
@@ -2899,6 +3232,7 @@ async function runConsumoProduccion() {
         message: "No hay diferencias para ajustar",
         ajustados: 0,
         fallidos: 0,
+        omitidos_ya_procesados: omitidosYaProcesados,
         resumen_fallidos: [],
       };
     }
@@ -3019,6 +3353,13 @@ async function runConsumoProduccion() {
         });
       }
 
+      for (const procesamiento of grupo.procesamientos.values()) {
+        await registrarConsumoProduccionProcesado(transaction, {
+          ...procesamiento,
+          numeroAjuste,
+        });
+      }
+
       ajustesCreados.push({
         numero_ajuste: numeroAjuste,
         obra: grupo.obra,
@@ -3028,7 +3369,22 @@ async function runConsumoProduccion() {
 
     const outputRows = [header, ...dataRows];
 
-    workbook.Sheets.materiales = XLSX.utils.aoa_to_sheet(outputRows);
+    const outputWorksheet = XLSX.utils.aoa_to_sheet(outputRows);
+    const outputCols = Array.isArray(worksheet["!cols"])
+      ? [...worksheet["!cols"]]
+      : [];
+
+    while (outputCols.length <= idColumnIndex) {
+      outputCols.push({});
+    }
+
+    outputCols[idColumnIndex] = {
+      ...(outputCols[idColumnIndex] || {}),
+      hidden: true,
+    };
+
+    outputWorksheet["!cols"] = outputCols;
+    workbook.Sheets.materiales = outputWorksheet;
 
     const outputBuffer = XLSX.write(workbook, {
       type: "buffer",
@@ -3046,6 +3402,7 @@ async function runConsumoProduccion() {
       cantidad_ajustes: ajustesCreados.length,
       ajustados: itemsCorrectos.length,
       fallidos: itemsFallidos.length,
+      omitidos_ya_procesados: omitidosYaProcesados,
       resumen_fallidos: itemsFallidos,
     };
   } catch (err) {

@@ -1,141 +1,38 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import movimientosLocalDb from "../services/movimientosLocalDb";
+import api from "../api/axiosConfig";
 import "./excelFilters.css";
 
 const EMPTY_KEY = "__EMPTY__";
 
-const MONTHS = [
-  "Enero",
-  "Febrero",
-  "Marzo",
-  "Abril",
-  "Mayo",
-  "Junio",
-  "Julio",
-  "Agosto",
-  "Septiembre",
-  "Octubre",
-  "Noviembre",
-  "Diciembre",
-];
+function cloneFilters(source) {
+  if (!source || typeof source !== "object") return {};
 
-function norm(value) {
-  return String(value ?? "")
-    .trim()
-    .toLocaleLowerCase("es");
+  return Object.fromEntries(
+    Object.entries(source).map(([key, value]) => [
+      key,
+      value && typeof value === "object"
+        ? {
+            ...value,
+            ...(Array.isArray(value.values) ? { values: [...value.values] } : {}),
+          }
+        : value,
+    ]),
+  );
 }
 
-function isDateColumn(column) {
-  if (column?.type === "date" || column?.type === "datetime") return true;
-  return /fecha|date/i.test(String(column?.key ?? ""));
+function getFilterKind(column) {
+  if (column?.filterKind) return column.filterKind;
+  if (column?.type === "date" || column?.type === "datetime") return "date";
+  if (column?.type === "number") return "number";
+  return "search";
 }
 
-function parseDateValue(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
-
-  const text = String(value ?? "").trim();
-  if (!text) return null;
-
-  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) {
-    const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  const ar = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (ar) {
-    const date = new Date(Number(ar[3]), Number(ar[2]) - 1, Number(ar[1]));
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  const date = new Date(text);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function compareValues(a, b, isDate = false) {
-  if (isDate) {
-    const ad = parseDateValue(a);
-    const bd = parseDateValue(b);
-
-    if (ad && bd) return ad.getTime() - bd.getTime();
-    if (ad) return -1;
-    if (bd) return 1;
-  }
-
+function compareValues(a, b) {
   return String(a ?? "").localeCompare(String(b ?? ""), "es", {
     numeric: true,
     sensitivity: "base",
   });
-}
-
-function buildDateTree(values) {
-  const years = new Map();
-  const undated = [];
-
-  values.forEach((item) => {
-    const date = parseDateValue(item.value);
-
-    if (!date) {
-      undated.push(item);
-      return;
-    }
-
-    const year = date.getFullYear();
-    const month = date.getMonth();
-    const day = date.getDate();
-
-    if (!years.has(year)) {
-      years.set(year, {
-        key: `year-${year}`,
-        label: String(year),
-        keys: [],
-        months: new Map(),
-      });
-    }
-
-    const yearNode = years.get(year);
-    yearNode.keys.push(item.key);
-
-    if (!yearNode.months.has(month)) {
-      yearNode.months.set(month, {
-        key: `month-${year}-${month}`,
-        label: MONTHS[month],
-        month,
-        keys: [],
-        days: new Map(),
-      });
-    }
-
-    const monthNode = yearNode.months.get(month);
-    monthNode.keys.push(item.key);
-
-    if (!monthNode.days.has(day)) {
-      monthNode.days.set(day, {
-        key: `day-${year}-${month}-${day}`,
-        label: String(day).padStart(2, "0"),
-        day,
-        keys: [],
-      });
-    }
-
-    monthNode.days.get(day).keys.push(item.key);
-  });
-
-  return {
-    tree: Array.from(years.values())
-      .sort((a, b) => Number(b.label) - Number(a.label))
-      .map((year) => ({
-        ...year,
-        months: Array.from(year.months.values())
-          .sort((a, b) => a.month - b.month)
-          .map((month) => ({
-            ...month,
-            days: Array.from(month.days.values()).sort((a, b) => a.day - b.day),
-          })),
-      })),
-    undated,
-  };
 }
 
 function FilterCheckbox({ checked, indeterminate, onChange, title }) {
@@ -159,15 +56,20 @@ function FilterCheckbox({ checked, indeterminate, onChange, title }) {
 export function useMovimientosSqlFilters(rows, columns, options = {}) {
   void rows;
 
-  const [filters, setFilters] = useState({});
+  const [filters, setFilters] = useState(() =>
+    cloneFilters(options.initialFilters),
+  );
   const [sort, setSort] = useState(null);
 
   const setColumnFilter = (columnKey, filter) => {
     setFilters((previous) => {
       const next = { ...previous };
 
-      if (!filter || filter.mode === "all") delete next[columnKey];
-      else next[columnKey] = filter;
+      if (!filter || filter.mode === "all") {
+        delete next[columnKey];
+      } else {
+        next[columnKey] = filter;
+      }
 
       return next;
     });
@@ -186,7 +88,7 @@ export function useMovimientosSqlFilters(rows, columns, options = {}) {
   };
 
   const clearAllFilters = () => {
-    setFilters({});
+    setFilters(cloneFilters(options.initialFilters));
     setSort(null);
     options.onChange?.();
   };
@@ -201,13 +103,41 @@ export function useMovimientosSqlFilters(rows, columns, options = {}) {
     options.onChange?.();
   };
 
-  const getAvailableValues = async (columnKey, search = "") => {
-    return movimientosLocalDb.getDistinctValues({
-      columnKey,
-      search,
-      excelFilters: filters,
-      textFilters: options.getTextFilters?.() || {},
+  const getAvailableValues = async (columnKey, search = "", signal) => {
+    const response = await api.get("/movimientos/distinct", {
+      params: {
+        column: columnKey,
+        search,
+        filters: JSON.stringify(filters),
+      },
+      signal,
+      timeout: 120000,
     });
+
+    const received = Array.isArray(response.data)
+      ? response.data
+      : Array.isArray(response.data?.values)
+        ? response.data.values
+        : [];
+
+    const limit = 500;
+
+    const values = received.slice(0, limit).map((item) => {
+      const text = item?.value == null ? "" : String(item.value);
+
+      return {
+        key: text === "" ? EMPTY_KEY : text,
+        value: text,
+        label: text === "" ? "(Vacíos)" : String(item?.label ?? text),
+      };
+    });
+
+    values.sort((a, b) => compareValues(a.value, b.value));
+
+    return {
+      values,
+      truncated: received.length > limit || Boolean(response.data?.truncated),
+    };
   };
 
   return {
@@ -228,25 +158,33 @@ export function useMovimientosSqlFilters(rows, columns, options = {}) {
 
 export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
   const [open, setOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 300 });
-  const [localSearch, setLocalSearch] = useState("");
-  const [values, setValues] = useState([]);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 320 });
   const [loadingValues, setLoadingValues] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [values, setValues] = useState([]);
+  const [localSearch, setLocalSearch] = useState("");
+
   const [draftMode, setDraftMode] = useState("all");
   const [draftValues, setDraftValues] = useState([]);
-  const [expanded, setExpanded] = useState({});
+  const [draftText, setDraftText] = useState("");
+  const [draftFrom, setDraftFrom] = useState("");
+  const [draftTo, setDraftTo] = useState("");
+  const [draftNumberMode, setDraftNumberMode] = useState("numberEq");
+  const [draftNumber1, setDraftNumber1] = useState("");
+  const [draftNumber2, setDraftNumber2] = useState("");
 
   const btnRef = useRef(null);
   const menuRef = useRef(null);
 
   const currentFilter = excel.filters[columnKey] || null;
-  const column = excel.columns?.find((item) => item.key === columnKey);
-  const dateColumn = isDateColumn(column || { key: columnKey });
+  const column = excel.columns?.find((item) => item.key === columnKey) || {
+    key: columnKey,
+  };
+  const filterKind = getFilterKind(column);
+  const defaultTextMode = column?.inputMode === "contains" ? "contains" : "startsWith";
 
   const draftSet = useMemo(() => new Set(draftValues), [draftValues]);
-  const visibleKeys = values.map((item) => item.key);
-  const dateTree = useMemo(() => buildDateTree(values), [values]);
+  const visibleKeys = useMemo(() => values.map((item) => item.key), [values]);
 
   const isChecked = (key) => {
     if (draftMode === "all") return true;
@@ -275,80 +213,120 @@ export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
     const rect = btnRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    const width = 300;
+    const width = 320;
     const margin = 8;
     const maxLeft = Math.max(margin, window.innerWidth - width - margin);
-    const left = Math.max(margin, Math.min(rect.left, maxLeft));
 
     setMenuPos({
       top: Math.min(rect.bottom + 4, window.innerHeight - 80),
-      left,
+      left: Math.max(margin, Math.min(rect.left, maxLeft)),
       width,
     });
-  };
-
-  const resetDraftFromCurrent = () => {
-    if (!currentFilter) {
-      setDraftMode("all");
-      setDraftValues([]);
-      return;
-    }
-
-    setDraftMode(currentFilter.mode || "all");
-    setDraftValues(
-      Array.isArray(currentFilter.values) ? currentFilter.values : [],
-    );
   };
 
   useEffect(() => {
     if (!open) return;
 
     setLocalSearch("");
-    setExpanded({});
-    resetDraftFromCurrent();
+    setValues([]);
+    setTruncated(false);
+
+    if (filterKind === "list") {
+      if (currentFilter?.mode === "in" || currentFilter?.mode === "notIn") {
+        setDraftMode(currentFilter.mode);
+        setDraftValues(
+          Array.isArray(currentFilter.values) ? currentFilter.values : [],
+        );
+      } else {
+        setDraftMode("all");
+        setDraftValues([]);
+      }
+    }
+
+    if (filterKind === "search") {
+      const mode =
+        currentFilter?.mode === "contains" || currentFilter?.mode === "startsWith"
+          ? currentFilter.mode
+          : defaultTextMode;
+
+      setDraftMode(mode);
+      setDraftText(String(currentFilter?.value ?? ""));
+    }
+
+    if (filterKind === "date") {
+      setDraftFrom(
+        currentFilter?.mode === "dateRange" ? String(currentFilter?.from ?? "") : "",
+      );
+      setDraftTo(
+        currentFilter?.mode === "dateRange" ? String(currentFilter?.to ?? "") : "",
+      );
+    }
+
+    if (filterKind === "number") {
+      const allowedModes = new Set([
+        "numberEq",
+        "numberGt",
+        "numberGte",
+        "numberLt",
+        "numberLte",
+        "numberBetween",
+      ]);
+
+      const mode = allowedModes.has(currentFilter?.mode)
+        ? currentFilter.mode
+        : "numberEq";
+
+      setDraftNumberMode(mode);
+      setDraftNumber1(String(currentFilter?.value ?? currentFilter?.from ?? ""));
+      setDraftNumber2(String(currentFilter?.to ?? ""));
+    }
+
     positionMenu();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open || filterKind !== "list") return undefined;
 
-    let cancelled = false;
+    const controller = new AbortController();
+    let active = true;
 
     const timer = setTimeout(async () => {
       try {
         setLoadingValues(true);
 
-        const result = await excel.getAvailableValues(columnKey, localSearch);
+        const result = await excel.getAvailableValues(
+          columnKey,
+          localSearch,
+          controller.signal,
+        );
 
-        if (cancelled) return;
+        if (!active) return;
 
-        const nextValues = Array.isArray(result?.values) ? result.values : [];
-
-        nextValues.sort((a, b) => compareValues(a.value, b.value, dateColumn));
-
-        setValues(nextValues);
+        setValues(Array.isArray(result?.values) ? result.values : []);
         setTruncated(Boolean(result?.truncated));
       } catch (err) {
-        if (!cancelled) {
+        if (
+          active &&
+          err?.code !== "ERR_CANCELED" &&
+          err?.name !== "CanceledError"
+        ) {
           console.error("Error cargando valores del filtro:", err);
           setValues([]);
           setTruncated(false);
         }
       } finally {
-        if (!cancelled) setLoadingValues(false);
+        if (active) setLoadingValues(false);
       }
-    }, 220);
+    }, 350);
 
     return () => {
-      cancelled = true;
+      active = false;
       clearTimeout(timer);
+      controller.abort();
     };
-    // Los filtros externos se vuelven a leer al reabrir el menú.
-    // Evitamos depender del objeto excel completo porque cambia de identidad
-    // en cada render y provocaría consultas repetidas.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, localSearch, columnKey, dateColumn]);
+  }, [open, localSearch, columnKey, filterKind]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -383,19 +361,14 @@ export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
 
   const setKeysChecked = (keys, checked) => {
     const uniqueKeys = Array.from(new Set(keys));
+    const actingOnAllVisible =
+      visibleKeys.length > 0 &&
+      uniqueKeys.length === visibleKeys.length &&
+      uniqueKeys.every((key) => visibleKeys.includes(key));
 
-    if (
-      !localSearch &&
-      !truncated &&
-      uniqueKeys.length === visibleKeys.length
-    ) {
-      if (checked) {
-        setDraftMode("all");
-        setDraftValues([]);
-      } else {
-        setDraftMode("in");
-        setDraftValues([]);
-      }
+    if (actingOnAllVisible && !localSearch) {
+      setDraftMode(checked ? "all" : "in");
+      setDraftValues([]);
       return;
     }
 
@@ -403,9 +376,8 @@ export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
       const next = new Set(previous);
       let mode = draftMode;
 
-      if (mode === "all" && !checked) {
-        mode = "notIn";
-      }
+      if (mode === "all" && !checked) mode = "notIn";
+      if (mode === "all" && checked) return previous;
 
       uniqueKeys.forEach((key) => {
         if (mode === "in") {
@@ -424,25 +396,65 @@ export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
     });
   };
 
-  const toggleSingleValue = (key) => {
-    setKeysChecked([key], !isChecked(key));
-  };
-
-  const toggleExpanded = (key) => {
-    setExpanded((previous) => ({
-      ...previous,
-      [key]: !previous[key],
-    }));
-  };
-
   const applyFilter = () => {
-    if (draftMode === "all") {
-      excel.clearColumnFilter(columnKey);
-    } else {
-      excel.setColumnFilter(columnKey, {
-        mode: draftMode,
-        values: draftValues,
-      });
+    if (filterKind === "list") {
+      if (draftMode === "all") {
+        excel.clearColumnFilter(columnKey);
+      } else {
+        excel.setColumnFilter(columnKey, {
+          mode: draftMode,
+          values: draftValues,
+        });
+      }
+    }
+
+    if (filterKind === "search") {
+      const value = draftText.trim();
+
+      if (!value) {
+        excel.clearColumnFilter(columnKey);
+      } else {
+        excel.setColumnFilter(columnKey, {
+          mode:
+            draftMode === "contains" || draftMode === "startsWith"
+              ? draftMode
+              : defaultTextMode,
+          value,
+        });
+      }
+    }
+
+    if (filterKind === "date") {
+      if (!draftFrom && !draftTo) {
+        excel.clearColumnFilter(columnKey);
+      } else {
+        excel.setColumnFilter(columnKey, {
+          mode: "dateRange",
+          from: draftFrom,
+          to: draftTo,
+        });
+      }
+    }
+
+    if (filterKind === "number") {
+      if (draftNumberMode === "numberBetween") {
+        if (draftNumber1 === "" && draftNumber2 === "") {
+          excel.clearColumnFilter(columnKey);
+        } else {
+          excel.setColumnFilter(columnKey, {
+            mode: "numberBetween",
+            from: draftNumber1,
+            to: draftNumber2,
+          });
+        }
+      } else if (draftNumber1 === "") {
+        excel.clearColumnFilter(columnKey);
+      } else {
+        excel.setColumnFilter(columnKey, {
+          mode: draftNumberMode,
+          value: draftNumber1,
+        });
+      }
     }
 
     setOpen(false);
@@ -452,117 +464,173 @@ export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
     excel.clearColumnFilter(columnKey);
     setDraftMode("all");
     setDraftValues([]);
+    setDraftText("");
+    setDraftFrom("");
+    setDraftTo("");
+    setDraftNumberMode("numberEq");
+    setDraftNumber1("");
+    setDraftNumber2("");
     setLocalSearch("");
     setOpen(false);
   };
 
   const active = excel.hasFilter(columnKey) || excel.hasSort(columnKey);
 
-  const renderDateChecks = () => (
+  const renderListFilter = () => (
     <>
-      {dateTree.tree.map((year) => {
-        const yearState = selectionState(year.keys);
-        const yearOpen = Boolean(expanded[year.key]);
+      <div className="excel-filter-search">
+        <input
+          value={localSearch}
+          onChange={(event) => setLocalSearch(event.target.value)}
+          placeholder="Buscar valor..."
+          autoFocus
+        />
+      </div>
 
-        return (
-          <div key={year.key} className="excel-filter-tree-node">
-            <div className="excel-filter-check excel-filter-tree-row">
-              <button
-                type="button"
-                className="excel-filter-expand"
-                onClick={() => toggleExpanded(year.key)}
-                aria-label={yearOpen ? "Contraer año" : "Expandir año"}
-              >
-                {yearOpen ? "−" : "+"}
-              </button>
+      <div
+        className="excel-filter-checks"
+        onWheel={(event) => event.stopPropagation()}
+        onScroll={(event) => event.stopPropagation()}
+      >
+        <label className="excel-filter-check excel-filter-select-all">
+          <FilterCheckbox
+            checked={visibleSelection.checked}
+            indeterminate={visibleSelection.indeterminate}
+            onChange={(event) =>
+              setKeysChecked(visibleKeys, event.target.checked)
+            }
+          />
+          <span>(Seleccionar todo)</span>
+        </label>
 
+        {loadingValues ? (
+          <div className="excel-filter-empty">Buscando valores...</div>
+        ) : (
+          values.map((value) => (
+            <label key={value.key} className="excel-filter-check">
               <FilterCheckbox
-                checked={yearState.checked}
-                indeterminate={yearState.indeterminate}
-                onChange={(event) =>
-                  setKeysChecked(year.keys, event.target.checked)
+                checked={isChecked(value.key)}
+                onChange={() =>
+                  setKeysChecked([value.key], !isChecked(value.key))
                 }
               />
+              <span>{value.label}</span>
+            </label>
+          ))
+        )}
 
-              <span>{year.label}</span>
-            </div>
+        {!loadingValues && !values.length && (
+          <div className="excel-filter-empty">Sin valores</div>
+        )}
 
-            {yearOpen && (
-              <div className="excel-filter-tree-children">
-                {year.months.map((month) => {
-                  const monthState = selectionState(month.keys);
-                  const monthOpen = Boolean(expanded[month.key]);
-
-                  return (
-                    <div key={month.key} className="excel-filter-tree-node">
-                      <div className="excel-filter-check excel-filter-tree-row">
-                        <button
-                          type="button"
-                          className="excel-filter-expand"
-                          onClick={() => toggleExpanded(month.key)}
-                          aria-label={
-                            monthOpen ? "Contraer mes" : "Expandir mes"
-                          }
-                        >
-                          {monthOpen ? "−" : "+"}
-                        </button>
-
-                        <FilterCheckbox
-                          checked={monthState.checked}
-                          indeterminate={monthState.indeterminate}
-                          onChange={(event) =>
-                            setKeysChecked(month.keys, event.target.checked)
-                          }
-                        />
-
-                        <span>{month.label}</span>
-                      </div>
-
-                      {monthOpen && (
-                        <div className="excel-filter-tree-children">
-                          {month.days.map((day) => {
-                            const dayState = selectionState(day.keys);
-
-                            return (
-                              <label
-                                key={day.key}
-                                className="excel-filter-check excel-filter-day"
-                              >
-                                <FilterCheckbox
-                                  checked={dayState.checked}
-                                  indeterminate={dayState.indeterminate}
-                                  onChange={(event) =>
-                                    setKeysChecked(
-                                      day.keys,
-                                      event.target.checked,
-                                    )
-                                  }
-                                />
-                                <span>{day.label}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        {truncated && (
+          <div className="excel-filter-empty">
+            Hay más valores. Escribí en Buscar para acotar la lista.
           </div>
-        );
-      })}
-
-      {dateTree.undated.map((value) => (
-        <label key={value.key} className="excel-filter-check">
-          <FilterCheckbox
-            checked={isChecked(value.key)}
-            onChange={() => toggleSingleValue(value.key)}
-          />
-          <span>{value.label}</span>
-        </label>
-      ))}
+        )}
+      </div>
     </>
+  );
+
+  const renderSearchFilter = () => (
+    <div style={{ padding: "10px 12px" }}>
+      <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 600 }}>
+        Buscar en {label}
+      </div>
+
+      <select
+        value={draftMode}
+        onChange={(event) => setDraftMode(event.target.value)}
+        style={{ width: "100%", marginBottom: 8, padding: "6px 7px" }}
+      >
+        <option value="startsWith">Empieza con</option>
+        <option value="contains">Contiene</option>
+      </select>
+
+      <input
+        value={draftText}
+        onChange={(event) => setDraftText(event.target.value)}
+        placeholder={draftMode === "contains" ? "Texto contenido..." : "Comienza con..."}
+        autoFocus
+        onKeyDown={(event) => {
+          if (event.key === "Enter") applyFilter();
+        }}
+        style={{ width: "100%", boxSizing: "border-box", padding: "6px 7px" }}
+      />
+    </div>
+  );
+
+  const renderDateFilter = () => (
+    <div style={{ padding: "10px 12px" }}>
+      <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 600 }}>
+        Rango de fechas
+      </div>
+
+      <label style={{ display: "block", marginBottom: 8 }}>
+        <span style={{ display: "block", fontSize: 12, marginBottom: 4 }}>Desde</span>
+        <input
+          type="date"
+          value={draftFrom}
+          onChange={(event) => setDraftFrom(event.target.value)}
+          style={{ width: "100%", boxSizing: "border-box", padding: "6px 7px" }}
+        />
+      </label>
+
+      <label style={{ display: "block" }}>
+        <span style={{ display: "block", fontSize: 12, marginBottom: 4 }}>Hasta</span>
+        <input
+          type="date"
+          value={draftTo}
+          onChange={(event) => setDraftTo(event.target.value)}
+          style={{ width: "100%", boxSizing: "border-box", padding: "6px 7px" }}
+        />
+      </label>
+    </div>
+  );
+
+  const renderNumberFilter = () => (
+    <div style={{ padding: "10px 12px" }}>
+      <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 600 }}>
+        Filtro numérico
+      </div>
+
+      <select
+        value={draftNumberMode}
+        onChange={(event) => setDraftNumberMode(event.target.value)}
+        style={{ width: "100%", marginBottom: 8, padding: "6px 7px" }}
+      >
+        <option value="numberEq">Igual a</option>
+        <option value="numberGt">Mayor que</option>
+        <option value="numberGte">Mayor o igual que</option>
+        <option value="numberLt">Menor que</option>
+        <option value="numberLte">Menor o igual que</option>
+        <option value="numberBetween">Entre</option>
+      </select>
+
+      <input
+        type="number"
+        value={draftNumber1}
+        onChange={(event) => setDraftNumber1(event.target.value)}
+        placeholder={draftNumberMode === "numberBetween" ? "Desde" : "Valor"}
+        autoFocus
+        style={{ width: "100%", boxSizing: "border-box", padding: "6px 7px" }}
+      />
+
+      {draftNumberMode === "numberBetween" && (
+        <input
+          type="number"
+          value={draftNumber2}
+          onChange={(event) => setDraftNumber2(event.target.value)}
+          placeholder="Hasta"
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "6px 7px",
+            marginTop: 8,
+          }}
+        />
+      )}
+    </div>
   );
 
   return (
@@ -585,11 +653,7 @@ export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
           <div
             ref={menuRef}
             className="excel-filter-menu"
-            style={{
-              top: menuPos.top,
-              left: menuPos.left,
-              width: menuPos.width,
-            }}
+            style={menuPos}
             onClick={(event) => event.stopPropagation()}
             onMouseDown={(event) => event.stopPropagation()}
           >
@@ -601,9 +665,11 @@ export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
                 setOpen(false);
               }}
             >
-              {dateColumn
+              {filterKind === "date"
                 ? "Ordenar de más antiguo a más reciente"
-                : "Ordenar de A a Z"}
+                : filterKind === "number"
+                  ? "Ordenar de menor a mayor"
+                  : "Ordenar de A a Z"}
             </button>
 
             <button
@@ -614,9 +680,11 @@ export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
                 setOpen(false);
               }}
             >
-              {dateColumn
+              {filterKind === "date"
                 ? "Ordenar de más reciente a más antiguo"
-                : "Ordenar de Z a A"}
+                : filterKind === "number"
+                  ? "Ordenar de mayor a menor"
+                  : "Ordenar de Z a A"}
             </button>
 
             <button
@@ -627,57 +695,10 @@ export function MovimientosSqlFilterButton({ columnKey, label, excel }) {
               Limpiar filtro de &quot;{label}&quot;
             </button>
 
-            <div className="excel-filter-search">
-              <input
-                value={localSearch}
-                onChange={(event) => setLocalSearch(event.target.value)}
-                placeholder="Buscar"
-                autoFocus
-              />
-            </div>
-
-            <div
-              className="excel-filter-checks"
-              onWheel={(event) => event.stopPropagation()}
-              onScroll={(event) => event.stopPropagation()}
-            >
-              <label className="excel-filter-check excel-filter-select-all">
-                <FilterCheckbox
-                  checked={visibleSelection.checked}
-                  indeterminate={visibleSelection.indeterminate}
-                  onChange={(event) =>
-                    setKeysChecked(visibleKeys, event.target.checked)
-                  }
-                />
-                <span>(Seleccionar todo)</span>
-              </label>
-
-              {loadingValues ? (
-                <div className="excel-filter-empty">Buscando valores...</div>
-              ) : dateColumn ? (
-                renderDateChecks()
-              ) : (
-                values.map((value) => (
-                  <label key={value.key} className="excel-filter-check">
-                    <FilterCheckbox
-                      checked={isChecked(value.key)}
-                      onChange={() => toggleSingleValue(value.key)}
-                    />
-                    <span>{value.label}</span>
-                  </label>
-                ))
-              )}
-
-              {!loadingValues && !values.length && (
-                <div className="excel-filter-empty">Sin valores</div>
-              )}
-
-              {truncated && (
-                <div className="excel-filter-empty">
-                  Hay más valores. Escribí en Buscar para acotar la lista.
-                </div>
-              )}
-            </div>
+            {filterKind === "list" && renderListFilter()}
+            {filterKind === "search" && renderSearchFilter()}
+            {filterKind === "date" && renderDateFilter()}
+            {filterKind === "number" && renderNumberFilter()}
 
             <div className="excel-filter-footer">
               <button
