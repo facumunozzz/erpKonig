@@ -1354,6 +1354,84 @@ function buildMovimientosBase() {
   `;
 }
 
+/*
+ * Base materializada para lecturas rápidas.
+ *
+ * buildMovimientosBase() se conserva intacta como definición/fuente histórica
+ * del modelo actual. Las pantallas y filtros leen desde movimientos_historial.
+ */
+function buildMovimientosHistorialBase() {
+  return `
+    FROM
+    (
+      SELECT
+        mh.id_movimiento,
+        mh.orden_movimiento,
+        mh.numero_transaccion,
+        mh.fecha,
+        mh.fecha_real,
+        mh.codigo,
+        mh.descripcion,
+        mh.cantidad,
+        mh.deposito_origen,
+        mh.ubicacion_origen,
+        mh.deposito_destino,
+        mh.ubicacion_destino,
+        mh.tipo_transaccion,
+        mh.motivo,
+        mh.remito_referencia,
+        mh.obra,
+        mh.version,
+        mh.referente,
+        mh.id_referente,
+        mh.proveedor,
+        mh.ingreso_egreso,
+        mh.usuario
+      FROM dbo.movimientos_historial mh
+      WHERE mh.eliminado = 0
+    ) movimientos
+  `;
+}
+
+function rowVersionToHex(value) {
+  if (!value) return "0000000000000000";
+
+  if (Buffer.isBuffer(value)) {
+    return value.toString("hex").toUpperCase().padStart(16, "0");
+  }
+
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString("hex").toUpperCase().padStart(16, "0");
+  }
+
+  const text = String(value).replace(/^0x/i, "").trim();
+
+  return text.toUpperCase().padStart(16, "0");
+}
+
+function parseRowVersion(value) {
+  const text = String(value || "")
+    .replace(/^0x/i, "")
+    .trim();
+
+  if (!/^[0-9a-fA-F]{1,16}$/.test(text)) {
+    return Buffer.alloc(8, 0);
+  }
+
+  return Buffer.from(text.padStart(16, "0"), "hex");
+}
+
+function mapHistorialRow(row) {
+  if (!row) return row;
+
+  const { sync_version, ...rest } = row;
+
+  return {
+    ...rest,
+    sync_version: rowVersionToHex(sync_version),
+  };
+}
+
 // ========================================================
 // GET /movimientos
 // ========================================================
@@ -1388,7 +1466,7 @@ exports.getAll = async (req, res) => {
 
     request.input("pageSize", sql.Int, pageSize);
 
-    const sqlBase = buildMovimientosBase();
+    const sqlBase = buildMovimientosHistorialBase();
 
     const where = buildWhere(filters, request);
 
@@ -1452,6 +1530,249 @@ exports.getAll = async (req, res) => {
 };
 
 // ========================================================
+// GET /movimientos/bootstrap
+//
+// Primera carga para la SQLite local.
+// Entrega primero los movimientos más recientes y permite
+// continuar hacia atrás mediante beforeId.
+// ========================================================
+
+exports.bootstrapHistorial = async (req, res) => {
+  try {
+    await poolConnect;
+
+    const pool = await getPool();
+
+    const limit = Math.min(Math.max(toInt(req.query.limit, 2500), 100), 5000);
+
+    const beforeIdRaw = Number(req.query.beforeId);
+
+    const beforeId =
+      Number.isFinite(beforeIdRaw) && beforeIdRaw > 0
+        ? Math.trunc(beforeIdRaw)
+        : null;
+
+    const includeMeta = String(req.query.includeMeta || "0") === "1";
+
+    const request = pool.request();
+
+    request.timeout = 120000;
+
+    request.input("limit", sql.Int, limit);
+    request.input("beforeId", sql.BigInt, beforeId);
+
+    const result = await request.query(`
+      SELECT TOP (@limit)
+        historial_id,
+        linea,
+        id_movimiento,
+        orden_movimiento,
+        numero_transaccion,
+        fecha,
+        fecha_real,
+        codigo,
+        descripcion,
+        cantidad,
+        deposito_origen,
+        ubicacion_origen,
+        deposito_destino,
+        ubicacion_destino,
+        tipo_transaccion,
+        motivo,
+        remito_referencia,
+        obra,
+        version,
+        referente,
+        id_referente,
+        proveedor,
+        ingreso_egreso,
+        usuario,
+        eliminado,
+        sync_version
+
+      FROM dbo.movimientos_historial
+
+      WHERE eliminado = 0
+        AND
+        (
+          @beforeId IS NULL
+          OR historial_id < @beforeId
+        )
+
+      ORDER BY historial_id DESC;
+    `);
+
+    const rows = (result.recordset || []).map(mapHistorialRow);
+
+    let watermark = null;
+    let total = null;
+
+    if (includeMeta) {
+      const meta = await pool.request().query(`
+        SELECT
+          COUNT_BIG(*) AS total,
+          (
+            SELECT TOP 1 sync_version
+            FROM dbo.movimientos_historial
+            ORDER BY sync_version DESC
+          ) AS watermark
+        FROM dbo.movimientos_historial
+        WHERE eliminado = 0;
+      `);
+
+      total = Number(meta.recordset?.[0]?.total || 0);
+      watermark = rowVersionToHex(meta.recordset?.[0]?.watermark);
+    }
+
+    const nextBeforeId =
+      rows.length > 0 ? Number(rows[rows.length - 1].historial_id) : null;
+
+    return res.json({
+      data: rows,
+      nextBeforeId,
+      hasMore: rows.length === limit,
+      watermark,
+      total,
+    });
+  } catch (err) {
+    console.error("movimientos.bootstrapHistorial:", err);
+
+    return res.status(500).json({
+      error: "Error al preparar historial de movimientos",
+      detalle: err.message,
+    });
+  }
+};
+
+// ========================================================
+// GET /movimientos/sync
+//
+// Sincronización incremental por SQL Server ROWVERSION.
+// También envía tombstones (eliminado=1), para que SQLite
+// quite movimientos que hayan dejado de existir.
+// ========================================================
+
+exports.syncHistorial = async (req, res) => {
+  try {
+    await poolConnect;
+
+    const pool = await getPool();
+
+    const limit = Math.min(Math.max(toInt(req.query.limit, 2500), 100), 5000);
+
+    const since = parseRowVersion(req.query.since);
+
+    const request = pool.request();
+
+    request.timeout = 120000;
+
+    request.input("limit", sql.Int, limit);
+    request.input("since", sql.VarBinary(8), since);
+
+    const result = await request.query(`
+      SELECT TOP (@limit)
+        historial_id,
+        linea,
+        id_movimiento,
+        orden_movimiento,
+        numero_transaccion,
+        fecha,
+        fecha_real,
+        codigo,
+        descripcion,
+        cantidad,
+        deposito_origen,
+        ubicacion_origen,
+        deposito_destino,
+        ubicacion_destino,
+        tipo_transaccion,
+        motivo,
+        remito_referencia,
+        obra,
+        version,
+        referente,
+        id_referente,
+        proveedor,
+        ingreso_egreso,
+        usuario,
+        eliminado,
+        sync_version
+
+      FROM dbo.movimientos_historial
+
+      WHERE sync_version > @since
+
+      ORDER BY sync_version ASC;
+    `);
+
+    const rows = (result.recordset || []).map(mapHistorialRow);
+
+    const nextVersion =
+      rows.length > 0
+        ? rows[rows.length - 1].sync_version
+        : rowVersionToHex(since);
+
+    return res.json({
+      data: rows,
+      nextVersion,
+      hasMore: rows.length === limit,
+    });
+  } catch (err) {
+    console.error("movimientos.syncHistorial:", err);
+
+    return res.status(500).json({
+      error: "Error al sincronizar historial de movimientos",
+      detalle: err.message,
+    });
+  }
+};
+
+// ========================================================
+// GET /movimientos/historial-status
+// ========================================================
+
+exports.getHistorialStatus = async (req, res) => {
+  try {
+    await poolConnect;
+
+    const pool = await getPool();
+
+    const result = await pool.request().query(`
+      SELECT
+        COUNT_BIG(*) AS total,
+        SUM(CASE WHEN eliminado = 0 THEN 1 ELSE 0 END) AS activos,
+        SUM(CASE WHEN eliminado = 1 THEN 1 ELSE 0 END) AS eliminados,
+        MIN(fecha) AS fecha_minima,
+        MAX(fecha) AS fecha_maxima,
+        (
+          SELECT TOP 1 sync_version
+          FROM dbo.movimientos_historial
+          ORDER BY sync_version DESC
+        ) AS ultima_version
+      FROM dbo.movimientos_historial;
+    `);
+
+    const row = result.recordset?.[0] || {};
+
+    return res.json({
+      total: Number(row.total || 0),
+      activos: Number(row.activos || 0),
+      eliminados: Number(row.eliminados || 0),
+      fecha_minima: row.fecha_minima || null,
+      fecha_maxima: row.fecha_maxima || null,
+      ultima_version: rowVersionToHex(row.ultima_version),
+    });
+  } catch (err) {
+    console.error("movimientos.getHistorialStatus:", err);
+
+    return res.status(500).json({
+      error: "Error al consultar estado del historial",
+      detalle: err.message,
+    });
+  }
+};
+
+// ========================================================
 // GET /movimientos/export
 // ========================================================
 
@@ -1471,7 +1792,7 @@ exports.exportAll = async (req, res) => {
 
     request.timeout = 180000;
 
-    const sqlBase = buildMovimientosBase();
+    const sqlBase = buildMovimientosHistorialBase();
 
     const where = buildWhere(filters, request);
 
@@ -1526,7 +1847,7 @@ exports.getDistinctValues = async (req, res) => {
 
     request.timeout = 120000;
 
-    const sqlBase = buildMovimientosBase();
+    const sqlBase = buildMovimientosHistorialBase();
 
     const filtersWithoutCurrent = {
       ...filters,
@@ -2590,7 +2911,7 @@ exports.getByReferencia = async (req, res) => {
 
     const pool = await getPool();
 
-    const sqlBase = buildMovimientosBase();
+    const sqlBase = buildMovimientosHistorialBase();
 
     const result = await pool
       .request()
@@ -2659,7 +2980,7 @@ exports.buscarParaCargaTransferencia = async (req, res) => {
 
     const pool = await getPool();
 
-    const sqlBase = buildMovimientosBase();
+    const sqlBase = buildMovimientosHistorialBase();
 
     const request = pool.request();
 
@@ -2717,10 +3038,6 @@ exports.buscarParaCargaTransferencia = async (req, res) => {
     });
   }
 };
-
-// ========================================================
-// ALIAS PARA LAS RUTAS EXISTENTES
-// ========================================================
 
 exports.update = exports.updateMovimientoCabecera;
 

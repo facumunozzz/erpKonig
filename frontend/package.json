@@ -8,6 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@sqlite.org/sqlite-wasm": "^3.53.4-build1",
     "axios": "^1.4.0",
     "pm2": "^6.0.14",
     "prop-types": "^15.8.1",

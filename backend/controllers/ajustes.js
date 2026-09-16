@@ -825,74 +825,130 @@ exports.getAll = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    /*
-     * Por defecto no se muestran los consumos internos de Dropbox.
-     *
-     * El frontend puede pedirlos enviando:
-     *
-     * GET /ajustes?incluirDropbox=1
-     */
-    const incluirDropbox =
-      String(req.query?.incluirDropbox || "") === "1";
+    const page = Math.max(asInt(req.query?.page) || 1, 1);
+    const pageSize = Math.min(
+      Math.max(asInt(req.query?.pageSize) || 25, 1),
+      100,
+    );
+    const offset = (page - 1) * pageSize;
 
-    const result = await pool
+    const filtros = {
+      estado: String(req.query?.estado ?? "").trim(),
+      fecha: String(req.query?.fecha ?? "").trim(),
+      fecha_real: String(req.query?.fecha_real ?? "").trim(),
+      deposito: String(req.query?.deposito ?? "").trim(),
+      motivo: String(req.query?.motivo ?? "").trim(),
+      referente: String(req.query?.referente ?? "").trim(),
+      remito_referencia: String(req.query?.remito_referencia ?? "").trim(),
+      numero_ajuste: String(req.query?.numero_ajuste ?? "").trim(),
+    };
+
+    const request = pool
       .request()
-      .input("incluirDropbox", sql.Bit, incluirDropbox ? 1 : 0)
-      .query(`
+      .input("offset", sql.Int, offset)
+      .input("pageSize", sql.Int, pageSize);
+
+    const where = [];
+
+    const addLike = (key, value, expression, maxLength = 500) => {
+      if (!value) {
+        return;
+      }
+
+      const param = `f_${key}`;
+
+      request.input(
+        param,
+        sql.NVarChar(maxLength),
+        `%${String(value).slice(0, maxLength)}%`,
+      );
+
+      where.push(`
+        COALESCE(CAST(${expression} AS NVARCHAR(MAX)), N'')
+          LIKE @${param}
+      `);
+    };
+
+    addLike("estado", filtros.estado, "base.estado", 50);
+    addLike(
+      "fecha",
+      filtros.fecha,
+      "CONVERT(VARCHAR(10), base.fecha, 103)",
+      50,
+    );
+    addLike(
+      "fecha_real",
+      filtros.fecha_real,
+      "CONVERT(VARCHAR(10), base.fecha_real, 103)",
+      50,
+    );
+    addLike("deposito", filtros.deposito, "base.deposito", 255);
+    addLike("motivo", filtros.motivo, "base.motivo", 255);
+    addLike("referente", filtros.referente, "base.referente", 255);
+    addLike(
+      "remito_referencia",
+      filtros.remito_referencia,
+      "base.remito_referencia",
+      255,
+    );
+    addLike(
+      "numero_ajuste",
+      filtros.numero_ajuste,
+      "COALESCE(CAST(base.numero_ajuste AS VARCHAR(50)), base.id)",
+      100,
+    );
+
+    const whereSql = where.length
+      ? `WHERE ${where.join("\n AND ")}`
+      : "";
+
+    const result = await request.query(`
+      ;WITH detalle_flags AS
+      (
+        SELECT
+          ad.ajuste_id,
+          MAX(CASE WHEN ad.cantidad > 0 THEN 1 ELSE 0 END) AS tiene_ingreso,
+          MAX(CASE WHEN ad.cantidad < 0 THEN 1 ELSE 0 END) AS tiene_egreso
+        FROM dbo.ajustes_detalles ad
+        GROUP BY ad.ajuste_id
+      ),
+      alertas_pendientes AS
+      (
+        SELECT DISTINCT
+          alerta.numero_movimiento
+        FROM dbo.consumo_produccion_alertas alerta
+        WHERE alerta.leida = 0
+      ),
+      base AS
+      (
         SELECT
           CAST(a.numero_ajuste AS VARCHAR(50)) AS id,
           a.numero_ajuste,
           CAST(NULL AS INT) AS id_borrador,
+
           CAST(
             CASE
-              WHEN EXISTS
-              (
-                SELECT 1
-                FROM dbo.consumo_produccion_alertas alerta
-                WHERE alerta.numero_movimiento = a.numero_ajuste
-                  AND alerta.leida = 0
-              )
+              WHEN ap.numero_movimiento IS NOT NULL
                 THEN 'REVISAR'
               ELSE 'CONFIRMADO'
             END
             AS VARCHAR(20)
           ) AS estado,
+
           a.deposito,
           a.obra,
           a.version,
+
           CASE
             WHEN m.nombre IS NULL
               THEN a.motivo
-            WHEN EXISTS
-            (
-              SELECT 1
-              FROM dbo.ajustes_detalles ad_ingreso
-              WHERE ad_ingreso.ajuste_id = a.numero_ajuste
-                AND ad_ingreso.cantidad > 0
-            )
-            AND NOT EXISTS
-            (
-              SELECT 1
-              FROM dbo.ajustes_detalles ad_egreso
-              WHERE ad_egreso.ajuste_id = a.numero_ajuste
-                AND ad_egreso.cantidad < 0
-            )
+
+            WHEN ISNULL(df.tiene_ingreso, 0) = 1
+             AND ISNULL(df.tiene_egreso, 0) = 0
               THEN CONCAT(m.nombre, ' (Ingreso)')
 
-            WHEN EXISTS
-            (
-              SELECT 1
-              FROM dbo.ajustes_detalles ad_egreso
-              WHERE ad_egreso.ajuste_id = a.numero_ajuste
-                AND ad_egreso.cantidad < 0
-            )
-            AND NOT EXISTS
-            (
-              SELECT 1
-              FROM dbo.ajustes_detalles ad_ingreso
-              WHERE ad_ingreso.ajuste_id = a.numero_ajuste
-                AND ad_ingreso.cantidad > 0
-            )
+            WHEN ISNULL(df.tiene_egreso, 0) = 1
+             AND ISNULL(df.tiene_ingreso, 0) = 0
               THEN CONCAT(m.nombre, ' (Egreso)')
 
             WHEN m.tipo_movimiento = 'INGRESO'
@@ -908,14 +964,20 @@ exports.getAll = async (req, res) => {
           a.fecha_real,
           a.remito_referencia,
           a.id_referente,
-
           r.nombre AS referente,
 
           CAST(
             CASE
               WHEN UPPER(
                 REPLACE(
-                  LTRIM(RTRIM(ISNULL(a.motivo, ''))),
+                  LTRIM(
+                    RTRIM(
+                      ISNULL(
+                        COALESCE(m.nombre, a.motivo),
+                        ''
+                      )
+                    )
+                  ),
                   N'Ó',
                   N'O'
                 )
@@ -934,51 +996,69 @@ exports.getAll = async (req, res) => {
         LEFT JOIN dbo.referentes r
           ON r.id_referente = a.id_referente
 
-        WHERE
-          @incluirDropbox = 1
+        LEFT JOIN detalle_flags df
+          ON df.ajuste_id = a.numero_ajuste
 
-          OR UPPER(
-            REPLACE(
-              LTRIM(RTRIM(ISNULL(a.motivo, ''))),
-              N'Ó',
-              N'O'
-            )
-          ) NOT LIKE N'CONSUMO PRODUCCION (DROPBOX)%'
+        LEFT JOIN alertas_pendientes ap
+          ON ap.numero_movimiento = a.numero_ajuste
+
+        /*
+         * IMPORTANTE:
+         * Los consumos de producción Dropbox NO se excluyen.
+         * Son movimientos reales y deben aparecer siempre en la tabla.
+         */
 
         UNION ALL
 
         SELECT
           CONCAT('BORRADOR-', b.id_borrador) AS id,
-
           CAST(NULL AS INT) AS numero_ajuste,
-
           b.id_borrador,
-
           CAST('BORRADOR' AS VARCHAR(20)) AS estado,
-
           b.deposito,
           b.obra,
           b.version,
           b.motivo,
-
           b.fecha_creacion AS fecha,
           b.fecha_real,
           b.remito_referencia,
           b.id_referente,
-
           r.nombre AS referente,
-
           CAST(0 AS BIT) AS es_consumo_dropbox
 
         FROM dbo.ajustes_borradores b
 
         LEFT JOIN dbo.referentes r
           ON r.id_referente = b.id_referente
+      )
+      SELECT
+        base.*,
+        COUNT_BIG(*) OVER() AS total_rows
+      FROM base
+      ${whereSql}
+      ORDER BY
+        base.fecha DESC,
+        CASE WHEN base.numero_ajuste IS NULL THEN 1 ELSE 0 END,
+        base.numero_ajuste DESC,
+        base.id_borrador DESC
+      OFFSET @offset ROWS
+      FETCH NEXT @pageSize ROWS ONLY;
+    `);
 
-        ORDER BY fecha DESC;
-      `);
+    const data = Array.isArray(result.recordset) ? result.recordset : [];
+    const total = data.length ? Number(data[0].total_rows || 0) : 0;
 
-    return res.json(result.recordset || []);
+    data.forEach((row) => {
+      delete row.total_rows;
+    });
+
+    return res.json({
+      data,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(Math.ceil(total / pageSize), 1),
+    });
   } catch (err) {
     console.error("ajustes.getAll:", err);
 
@@ -988,7 +1068,6 @@ exports.getAll = async (req, res) => {
     });
   }
 };
-
 
 // OBTENER AJUSTE CONFIRMADO
 exports.getById = async (req, res) => {

@@ -2,9 +2,14 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 import api from "../api/axiosConfig";
 import * as XLSX from "xlsx";
 import "./../styles/transferencias.css";
-import { useExcelFilters, ExcelFilterButton } from "../components/ExcelColumnFilter";
+import {
+  useMovimientosSqlFilters as useExcelFilters,
+  MovimientosSqlFilterButton as ExcelFilterButton,
+} from "../components/MovimientosSqlFilter";
+import movimientosLocalDb from "../services/movimientosLocalDb";
 
 const STORAGE_KEY_MOVIMIENTOS = "movimientos_preferencias_v2";
+const MOTIVO_CONSUMO_DROPBOX = "CONSUMO PRODUCCIÓN (DROPBOX)";
 const LOAD_BATCH_SIZE = 500;
 const LOAD_CONCURRENCY = 3;
 
@@ -54,6 +59,17 @@ function Movimientos() {
   const [loading, setLoading] = useState(false);
   const [loadedRows, setLoadedRows] = useState(0);
   const [expectedRows, setExpectedRows] = useState(0);
+  const [totalRows, setTotalRows] = useState(0);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [engineStatus, setEngineStatus] = useState({
+    ready: false,
+    storageMode: "not-initialized",
+    syncing: false,
+    bootstrapComplete: false,
+    localRows: 0,
+    serverTotal: 0,
+    lastError: "",
+  });
 
   const [showEdit, setShowEdit] = useState(false);
   const [movEdit, setMovEdit] = useState(null);
@@ -64,7 +80,6 @@ function Movimientos() {
   const [movsMasivo, setMovsMasivo] = useState([]);
   const [masivoEdit, setMasivoEdit] = useState(null);
   const [buscandoMasivo, setBuscandoMasivo] = useState(false);
-
 
   const tableWrapRef = useRef(null);
   const topScrollRef = useRef(null);
@@ -166,7 +181,7 @@ function Movimientos() {
         label: "Usuario",
       },
     ],
-    []
+    [],
   );
 
   const excelColumns = useMemo(
@@ -175,106 +190,82 @@ function Movimientos() {
         ...col,
         getValue: (row) => row?.[col.key] ?? "",
       })),
-    [columnas]
+    [columnas],
   );
 
   const excel = useExcelFilters(rows, excelColumns, {
     onChange: () => setCurrentPage(1),
+    getTextFilters: () => filtrosColumnas,
   });
 
-  const cargarMovimientos = async () => {
+  /*
+   * Movimientos ya no descarga todo el historial al abrir la pantalla.
+   * Consulta únicamente la página visible en la SQLite local persistente.
+   */
+  const cargarMovimientos = async ({ silent = false } = {}) => {
     try {
-      setLoading(true);
-      setRows([]);
-      setLoadedRows(0);
-      setExpectedRows(0);
-      setCurrentPage(1);
+      if (!silent) {
+        setLoading(true);
+      }
 
-      const primeraRespuesta = await api.get("/movimientos", {
-        params: {
-          page: 1,
-          pageSize: LOAD_BATCH_SIZE,
-          filters: JSON.stringify({}),
-          sortKey: "",
-          sortDir: "",
-        },
-        timeout: 120000,
+      await movimientosLocalDb.start();
+
+      const resultado = await movimientosLocalDb.queryMovimientos({
+        page: currentPage,
+        pageSize,
+        textFilters: filtrosColumnas,
+        excelFilters: excel.filters,
+        sort: excel.sort,
       });
 
-      const primerPayload = primeraRespuesta.data || {};
-      const primeraPagina = Array.isArray(primerPayload.data)
-        ? primerPayload.data
-        : Array.isArray(primerPayload)
-          ? primerPayload
-          : [];
+      const data = Array.isArray(resultado?.data) ? resultado.data : [];
+      const total = Number(resultado?.total || 0);
+      const pages = Number(resultado?.totalPages || 1);
 
-      const total = Number(primerPayload.total || primeraPagina.length || 0);
-      const totalPaginas = Number(
-        primerPayload.totalPages || Math.ceil(total / LOAD_BATCH_SIZE) || 1
-      );
-
-      setRows(primeraPagina);
-      setLoadedRows(primeraPagina.length);
-      setExpectedRows(total);
-
-      if (totalPaginas <= 1) return;
-
-      const paginasPendientes = Array.from(
-        { length: totalPaginas - 1 },
-        (_, index) => index + 2
-      );
-
-      for (let i = 0; i < paginasPendientes.length; i += LOAD_CONCURRENCY) {
-        const bloque = paginasPendientes.slice(i, i + LOAD_CONCURRENCY);
-
-        const respuestas = await Promise.all(
-          bloque.map((page) =>
-            api.get("/movimientos", {
-              params: {
-                page,
-                pageSize: LOAD_BATCH_SIZE,
-                filters: JSON.stringify({}),
-                sortKey: "",
-                sortDir: "",
-              },
-              timeout: 120000,
-            })
-          )
-        );
-
-        const nuevasFilas = respuestas.flatMap((response) => {
-          const payload = response.data || {};
-          return Array.isArray(payload.data)
-            ? payload.data
-            : Array.isArray(payload)
-              ? payload
-              : [];
-        });
-
-        setRows((prev) => [...prev, ...nuevasFilas]);
-        setLoadedRows((prev) => prev + nuevasFilas.length);
+      if (currentPage > pages) {
+        setCurrentPage(pages);
+        return;
       }
+
+      setRows(data);
+      setTotalRows(total);
+
+      const status = movimientosLocalDb.getStatus();
+
+      setLoadedRows(Number(status.localRows || 0));
+      setExpectedRows(Number(status.serverTotal || 0));
+      setEngineStatus(status);
     } catch (err) {
-      console.error("Error cargando movimientos:", err);
+      console.error("Error cargando movimientos desde SQLite local:", err);
 
       setRows([]);
-      setLoadedRows(0);
-      setExpectedRows(0);
+      setTotalRows(0);
 
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "Error cargando movimientos."
+          err.message ||
+          "Error cargando movimientos.",
       );
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
-  const actualizarMovimientos = () => {
+  const actualizarMovimientos = async () => {
     setFiltrosColumnas({});
     excel.clearAllFilters();
-    cargarMovimientos();
+    setCurrentPage(1);
+
+    try {
+      await movimientosLocalDb.syncNow();
+    } catch (err) {
+      console.error("Error actualizando caché local de movimientos:", err);
+    }
+
+    setReloadToken((value) => value + 1);
   };
 
   const cargarReferentes = async () => {
@@ -299,17 +290,62 @@ function Movimientos() {
     try {
       localStorage.setItem(
         STORAGE_KEY_MOVIMIENTOS,
-        JSON.stringify({ pageSize })
+        JSON.stringify({ pageSize }),
       );
     } catch (err) {
       console.error("No se pudo guardar el tamaño de página:", err);
     }
   }, [pageSize]);
 
+  /*
+   * El motor puede estar sincronizando desde que arrancó el ERP, aunque esta
+   * pantalla nunca se haya abierto. Nos suscribimos únicamente para reflejar
+   * progreso y refrescar la página visible cuando entra un lote nuevo.
+   */
   useEffect(() => {
-    cargarMovimientos();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let refreshTimer = null;
+
+    const unsubscribe = movimientosLocalDb.subscribe((status) => {
+      setEngineStatus(status);
+      setLoadedRows(Number(status.localRows || 0));
+      setExpectedRows(Number(status.serverTotal || 0));
+
+      clearTimeout(refreshTimer);
+
+      refreshTimer = setTimeout(() => {
+        setReloadToken((value) => value + 1);
+      }, 350);
+    });
+
+    movimientosLocalDb.start().catch((err) => {
+      console.error("No se pudo iniciar SQLite local de movimientos:", err);
+    });
+
+    return () => {
+      clearTimeout(refreshTimer);
+      unsubscribe();
+    };
   }, []);
+
+  /*
+   * Solo se vuelve a consultar SQLite local cuando cambia la página,
+   * el tamaño, un filtro, el orden o entra una sincronización.
+   */
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      cargarMovimientos();
+    }, 120);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentPage,
+    pageSize,
+    filtrosColumnas,
+    excel.filters,
+    excel.sort,
+    reloadToken,
+  ]);
 
   const limpiarFiltros = () => {
     setFiltrosColumnas({});
@@ -348,12 +384,14 @@ function Movimientos() {
 
       setShowEdit(false);
       setMovEdit(null);
-      cargarMovimientos();
+
+      await movimientosLocalDb.syncNow();
+      setReloadToken((value) => value + 1);
     } catch (err) {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "Error al actualizar movimiento"
+          "Error al actualizar movimiento",
       );
     }
   };
@@ -377,7 +415,7 @@ function Movimientos() {
       setBuscandoMasivo(true);
 
       const res = await api.get(
-        `/movimientos/transaccion/${encodeURIComponent(numero)}`
+        `/movimientos/transaccion/${encodeURIComponent(numero)}`,
       );
 
       const data = Array.isArray(res.data) ? res.data : [];
@@ -412,7 +450,7 @@ function Movimientos() {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "Error al buscar la transacción"
+          "Error al buscar la transacción",
       );
     } finally {
       setBuscandoMasivo(false);
@@ -424,7 +462,7 @@ function Movimientos() {
 
     const confirmar = window.confirm(
       `Vas a modificar la transacción ${masivoEdit.numero_transaccion} completa. ` +
-        `Esto afectará a todos los artículos involucrados. ¿Confirmás?`
+        `Esto afectará a todos los artículos involucrados. ¿Confirmás?`,
     );
 
     if (!confirmar) return;
@@ -444,47 +482,25 @@ function Movimientos() {
       setMovsMasivo([]);
       setMasivoEdit(null);
 
-      cargarMovimientos();
+      await movimientosLocalDb.syncNow();
+      setReloadToken((value) => value + 1);
 
       alert("Transacción actualizada correctamente.");
     } catch (err) {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "Error al actualizar la transacción"
+          "Error al actualizar la transacción",
       );
     }
   };
 
-  const movimientosFiltrados = useMemo(() => {
-    return excel.rows.filter((movimiento) =>
-      columnas.every((col) => {
-        const filtro = String(filtrosColumnas[col.key] ?? "")
-          .trim()
-          .toLowerCase();
-
-        if (!filtro) {
-          return true;
-        }
-
-        const valor =
-          col.key === "fecha" || col.key === "fecha_real"
-            ? formatFecha(movimiento?.[col.key])
-            : movimiento?.[col.key];
-
-        return String(valor ?? "")
-          .toLowerCase()
-          .includes(filtro);
-      }),
-    );
-  }, [excel.rows, filtrosColumnas, columnas]);
-
-  const totalRows = movimientosFiltrados.length;
+  /*
+   * La SQLite local ya devuelve la página filtrada. No recorremos en React
+   * cientos de miles de objetos para filtrar ni para paginar.
+   */
   const totalPages = Math.ceil(totalRows / pageSize) || 1;
-  const paginated = movimientosFiltrados.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
-  );
+  const paginated = rows;
 
   const irPagina = (p) => {
     const n = Number(p);
@@ -585,8 +601,8 @@ function Movimientos() {
               filters: JSON.stringify({}),
             },
             timeout: 120000,
-          })
-        )
+          }),
+        ),
       );
 
       const nuevasOpciones = {};
@@ -608,7 +624,7 @@ function Movimientos() {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "No se pudieron cargar las opciones para exportar."
+          "No se pudieron cargar las opciones para exportar.",
       );
     } finally {
       setLoadingExportOptions(false);
@@ -651,12 +667,14 @@ function Movimientos() {
 
       const existe = data.some(
         (x) =>
-          String(x.value ?? "").trim().toUpperCase() === codigo.toUpperCase()
+          String(x.value ?? "")
+            .trim()
+            .toUpperCase() === codigo.toUpperCase(),
       );
 
       if (!existe) {
         alert(
-          `El código "${codigo}" no existe en movimientos. Corregilo antes de exportar.`
+          `El código "${codigo}" no existe en movimientos. Corregilo antes de exportar.`,
         );
 
         setTimeout(() => {
@@ -674,7 +692,7 @@ function Movimientos() {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "No se pudo validar el código ingresado."
+          "No se pudo validar el código ingresado.",
       );
 
       return false;
@@ -736,7 +754,7 @@ function Movimientos() {
       alert(
         err.response?.data?.error ||
           err.response?.data?.detalle ||
-          "No se pudo exportar movimientos."
+          "No se pudo exportar movimientos.",
       );
     } finally {
       setExportingExcel(false);
@@ -747,7 +765,7 @@ function Movimientos() {
     title,
     field,
     options,
-    defaultLabel = "Todos"
+    defaultLabel = "Todos",
   ) => {
     const selected = Array.isArray(exportFilters[field])
       ? exportFilters[field]
@@ -846,10 +864,18 @@ function Movimientos() {
           Editar transacción completa
         </button>
 
-        {loading && (
+        {(loading ||
+          engineStatus.syncing ||
+          !engineStatus.bootstrapComplete) && (
           <span style={{ padding: "6px 10px" }}>
-            Cargando movimientos: {loadedRows}
+            {loading
+              ? "Consultando movimientos..."
+              : engineStatus.syncing
+                ? "Sincronizando movimientos..."
+                : "Completando historial local..."}
+            {loadedRows > 0 ? ` ${loadedRows}` : ""}
             {expectedRows > 0 ? ` de ${expectedRows}` : ""}
+            {engineStatus.storageMode ? ` · ${engineStatus.storageMode}` : ""}
           </span>
         )}
       </div>
@@ -1038,7 +1064,7 @@ function Movimientos() {
           {Array.from({ length: totalPages }, (_, i) => i + 1)
             .filter(
               (p) =>
-                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1
+                p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1,
             )
             .map((p, i, arr) => (
               <React.Fragment key={p}>
@@ -1122,28 +1148,28 @@ function Movimientos() {
                     "Tipo de transacción",
                     "tipo_transaccion",
                     exportOptions.tipo_transaccion,
-                    "Todas"
+                    "Todas",
                   )}
 
                   {renderExportCheckboxGroup(
                     "Motivo",
                     "motivo",
                     exportOptions.motivo,
-                    "Todos excepto CONSUMO PRODUCCIÓN (DROPBOX)"
+                    "Todos excepto CONSUMO PRODUCCIÓN (DROPBOX)",
                   )}
 
                   {renderExportCheckboxGroup(
                     "Actuante",
                     "referente",
                     exportOptions.referente,
-                    "Todos"
+                    "Todos",
                   )}
 
                   {renderExportCheckboxGroup(
                     "Proveedor",
                     "proveedor",
                     exportOptions.proveedor,
-                    "Todos"
+                    "Todos",
                   )}
                 </div>
 

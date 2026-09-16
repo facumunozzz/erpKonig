@@ -40,7 +40,6 @@ const esMotivoOculto = (nombre) =>
 export default function Ajustes() {
   const navigate = useNavigate();
   const [showRevisionesDropbox, setShowRevisionesDropbox] = useState(false);
-  const [mostrarConsumosDropbox, setMostrarConsumosDropbox] = useState(false);
   const [cantidadRevisiones, setCantidadRevisiones] = useState(0);
   const [procesandoRecortes, setProcesandoRecortes] = useState(false);
 
@@ -49,9 +48,10 @@ export default function Ajustes() {
   const [loadingAjustes, setLoadingAjustes] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(100);
   const [gotoPage, setGotoPage] = useState("");
   const [filtrosColumnas, setFiltrosColumnas] = useState({});
+  const [filtrosServidor, setFiltrosServidor] = useState({});
 
   const [totalRows, setTotalRows] = useState(0);
   const [serverTotalPages, setServerTotalPages] = useState(1);
@@ -80,7 +80,15 @@ export default function Ajustes() {
         params: {
           page: currentPage,
           pageSize,
-          incluirDropbox: mostrarConsumosDropbox ? 1 : 0,
+          estado: filtrosServidor.estado || undefined,
+          fecha: filtrosServidor.fecha || undefined,
+          fecha_real: filtrosServidor.fecha_real || undefined,
+          deposito: filtrosServidor.deposito || undefined,
+          motivo: filtrosServidor.motivo || undefined,
+          referente: filtrosServidor.referente || undefined,
+          remito_referencia:
+            filtrosServidor.remito_referencia || undefined,
+          numero_ajuste: filtrosServidor.numero_ajuste || undefined,
         },
       });
 
@@ -91,7 +99,6 @@ export default function Ajustes() {
         setAjustes(payload);
         setTotalRows(payload.length);
         setServerTotalPages(Math.ceil(payload.length / pageSize) || 1);
-
         return;
       }
 
@@ -123,6 +130,7 @@ export default function Ajustes() {
           : Array.isArray(payload?.alertas)
             ? payload.alertas
             : [];
+
       setCantidadRevisiones(revisiones.length);
     } catch (error) {
       console.error("Error cargando revisiones Dropbox:", error);
@@ -130,13 +138,26 @@ export default function Ajustes() {
     }
   };
 
+  /*
+   * El input se actualiza inmediatamente, pero la consulta al servidor
+   * espera unos milisegundos. Así no se dispara una consulta por cada tecla.
+   */
   useEffect(() => {
     const timer = setTimeout(() => {
-      fetchAjustes();
+      setFiltrosServidor({ ...filtrosColumnas });
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [currentPage, pageSize, mostrarConsumosDropbox]);
+  }, [filtrosColumnas]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchAjustes();
+    }, 80);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, pageSize, filtrosServidor]);
 
   useEffect(() => {
     fetchCantidadRevisiones();
@@ -192,7 +213,9 @@ export default function Ajustes() {
         ? resultado.movimientos
         : [];
 
-      const errores = Array.isArray(resultado.errores) ? resultado.errores : [];
+      const errores = Array.isArray(resultado.errores)
+        ? resultado.errores
+        : [];
 
       alert(
         `Proceso de recortes finalizado.\n\n` +
@@ -203,7 +226,6 @@ export default function Ajustes() {
           `Errores: ${errores.length}`,
       );
 
-      setMostrarConsumosDropbox(true);
       setCurrentPage(1);
 
       await fetchAjustes();
@@ -399,7 +421,8 @@ export default function Ajustes() {
       await fetchMotivos();
     } catch (error) {
       alert(
-        error.response?.data?.error || "Error al cambiar el tipo de movimiento",
+        error.response?.data?.error ||
+          "Error al cambiar el tipo de movimiento",
       );
     }
   };
@@ -430,7 +453,9 @@ export default function Ajustes() {
 
   const getAjusteValue = (ajuste, key) => {
     if (key === "fecha") {
-      return ajuste.fecha ? new Date(ajuste.fecha).toLocaleString("es-AR") : "";
+      return ajuste.fecha
+        ? new Date(ajuste.fecha).toLocaleString("es-AR")
+        : "";
     }
 
     if (key === "fecha_real") {
@@ -460,6 +485,10 @@ export default function Ajustes() {
     onChange: () => setCurrentPage(1),
   });
 
+  /*
+   * El filtro de texto pesado ya se hace en SQL.
+   * Esta segunda comprobación sólo recorre la página visible (10/25/50/100).
+   */
   const filtrados = useMemo(() => {
     return excel.rows.filter((ajuste) =>
       AJUSTE_COLUMNS.every(([key]) => {
@@ -563,8 +592,8 @@ export default function Ajustes() {
         }}
       >
         {/* ===============================================
-      ACCIONES PRINCIPALES
-  =============================================== */}
+            ACCIONES PRINCIPALES
+        =============================================== */}
 
         <div
           className="acciones"
@@ -595,6 +624,7 @@ export default function Ajustes() {
           <button
             onClick={() => {
               setFiltrosColumnas({});
+              setFiltrosServidor({});
               excel.clearAllFilters();
               setCurrentPage(1);
             }}
@@ -613,8 +643,8 @@ export default function Ajustes() {
         </div>
 
         {/* ===============================================
-      MENÚ LATERAL
-  =============================================== */}
+            MENÚ LATERAL
+        =============================================== */}
 
         {menuLateralAbierto && (
           <aside
@@ -630,8 +660,6 @@ export default function Ajustes() {
               zIndex: 50,
             }}
           >
-            {/* ENCABEZADO DEL MENÚ */}
-
             <div
               style={{
                 display: "flex",
@@ -665,8 +693,8 @@ export default function Ajustes() {
             </div>
 
             {/* =============================================
-          MENÚ EXCEL
-      ============================================= */}
+                MENÚ EXCEL
+            ============================================= */}
 
             <div
               style={{
@@ -693,7 +721,6 @@ export default function Ajustes() {
                 }}
               >
                 <span>📊 Excel</span>
-
                 <span>{menuExcelAbierto ? "▲" : "▼"}</span>
               </button>
 
@@ -745,8 +772,8 @@ export default function Ajustes() {
             </div>
 
             {/* =============================================
-          MENÚ DROPBOX
-      ============================================= */}
+                MENÚ DROPBOX
+            ============================================= */}
 
             <div>
               <button
@@ -769,7 +796,6 @@ export default function Ajustes() {
                 }}
               >
                 <span>☁️ Dropbox</span>
-
                 <span>{menuDropboxAbierto ? "▲" : "▼"}</span>
               </button>
 
@@ -788,22 +814,14 @@ export default function Ajustes() {
                       display: "flex",
                       alignItems: "center",
                       gap: 8,
-                      cursor: "pointer",
                       padding: "9px 10px",
                       border: "1px solid #d7dce2",
                       borderRadius: 5,
                       background: "#ffffff",
                     }}
+                    title="Los consumos Dropbox se muestran siempre en la tabla."
                   >
-                    <input
-                      type="checkbox"
-                      checked={mostrarConsumosDropbox}
-                      onChange={(event) => {
-                        setMostrarConsumosDropbox(event.target.checked);
-
-                        setCurrentPage(1);
-                      }}
-                    />
+                    <input type="checkbox" checked disabled readOnly />
                     Mostrar consumos Dropbox
                   </label>
 
@@ -876,6 +894,7 @@ export default function Ajustes() {
               </th>
             ))}
           </tr>
+
           <tr>
             {AJUSTE_COLUMNS.map(([key]) => (
               <th key={`filtro-${key}`}>
@@ -908,13 +927,15 @@ export default function Ajustes() {
 
             return (
               <tr
-                key={id}
+                key={ajuste.id ?? id}
                 style={{
                   cursor: "pointer",
                 }}
                 onClick={() => {
                   if (ajuste.estado === "BORRADOR") {
-                    navigate(`/ajustes/nuevo?borradorId=${ajuste.id_borrador}`);
+                    navigate(
+                      `/ajustes/nuevo?borradorId=${ajuste.id_borrador}`,
+                    );
                   } else {
                     navigate(`/ajustes/${id}`);
                   }
@@ -980,7 +1001,6 @@ export default function Ajustes() {
             value={pageSize}
             onChange={(event) => {
               setPageSize(Number(event.target.value));
-
               setCurrentPage(1);
             }}
           >
@@ -1047,7 +1067,9 @@ export default function Ajustes() {
 
                 <button
                   type="button"
-                  className={`pg-btn ${currentPage === page ? "activo" : ""}`}
+                  className={`pg-btn ${
+                    currentPage === page ? "activo" : ""
+                  }`}
                   onClick={() => irPagina(page)}
                 >
                   {page}
@@ -1133,13 +1155,13 @@ export default function Ajustes() {
 
               <select
                 value={nuevoTipoMovimiento}
-                onChange={(event) => setNuevoTipoMovimiento(event.target.value)}
+                onChange={(event) =>
+                  setNuevoTipoMovimiento(event.target.value)
+                }
                 title="Tipo de movimiento sugerido"
               >
                 <option value="">Ingreso / Egreso</option>
-
                 <option value="INGRESO">Ingreso</option>
-
                 <option value="EGRESO">Egreso</option>
               </select>
 
@@ -1189,9 +1211,7 @@ export default function Ajustes() {
                           }
                         >
                           <option value="">Ingreso / Egreso</option>
-
                           <option value="INGRESO">Ingreso</option>
-
                           <option value="EGRESO">Egreso</option>
                         </select>
                       </td>
@@ -1209,7 +1229,10 @@ export default function Ajustes() {
                           type="button"
                           className="btn-light"
                           onClick={() =>
-                            editarMotivo(motivo.id_motivo, motivo.nombre)
+                            editarMotivo(
+                              motivo.id_motivo,
+                              motivo.nombre,
+                            )
                           }
                         >
                           Editar
@@ -1219,7 +1242,10 @@ export default function Ajustes() {
                           type="button"
                           className="btn-light"
                           onClick={() =>
-                            toggleMotivo(motivo.id_motivo, motivo.activo)
+                            toggleMotivo(
+                              motivo.id_motivo,
+                              motivo.activo,
+                            )
                           }
                         >
                           {motivo.activo ? "Desactivar" : "Activar"}
@@ -1228,7 +1254,9 @@ export default function Ajustes() {
                         <button
                           type="button"
                           className="borrar-btn"
-                          onClick={() => borrarMotivo(motivo.id_motivo)}
+                          onClick={() =>
+                            borrarMotivo(motivo.id_motivo)
+                          }
                         >
                           Eliminar
                         </button>
