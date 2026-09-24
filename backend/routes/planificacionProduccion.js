@@ -26,6 +26,9 @@ router.get("/articulos/codigo/:codigo", controller.getArticuloPorCodigo);
 router.get("/materiales-excluir", controller.getMaterialesExcluir);
 router.put("/materiales-excluir", controller.saveMaterialesExcluir);
 
+router.get("/articulos-pendientes", controller.getArticulosPendientes);
+router.delete("/articulos-pendientes/:id", controller.deleteArticuloPendiente);
+
 router.post("/calcular-materiales", controller.calcularMaterialesObra);
 
 module.exports = router;

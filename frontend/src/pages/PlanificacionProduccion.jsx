@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import "../styles/planificacionProduccion.css";
 
@@ -31,88 +31,147 @@ const OPERACIONES_CARGA_AUTOMATICA = new Set([
 ]);
 
 // ============================================================
-// CONFIGURACIÓN VISUAL DE LA TABLA DE PLANIFICACIÓN
+// COLUMNAS FIJAS DE PLANIFICACIÓN
 // ============================================================
-// Se usan los mismos anchos definidos actualmente en el CSS para
-// poder inmovilizar columnas sin que se superpongan.
+//
+// Horizontalmente quedan fijas:
+// Cargar | Obra | Fase | Sector | Cantidad
+//
+// Tiempo STD y Total horas se desplazan con las fechas.
+// Todas las cabeceras siguen fijas verticalmente.
+// ============================================================
+
+const ANCHO_CARGAR_FIJA = 78;
 const ANCHO_OBRA_FIJA = 145;
 const ANCHO_FASE_FIJA = 125;
 const ANCHO_SECTOR_FIJO = 180;
+const ANCHO_CANTIDAD_FIJA = 82;
+
 const ALTO_CABECERA_FECHA = 32;
+
+const LEFT_CARGAR = 0;
+
+const LEFT_OBRA = LEFT_CARGAR + ANCHO_CARGAR_FIJA;
+
+const LEFT_FASE = LEFT_OBRA + ANCHO_OBRA_FIJA;
+
+const LEFT_SECTOR = LEFT_FASE + ANCHO_FASE_FIJA;
+
+const LEFT_CANTIDAD = LEFT_SECTOR + ANCHO_SECTOR_FIJO;
+
+// ============================================================
+// CABECERAS VERTICALES
+// ============================================================
 
 const estiloCabeceraFechaDia = {
   position: "sticky",
   top: 0,
-  zIndex: 8,
+  zIndex: 20,
   background: "#f4f4f4",
 };
 
 const estiloCabeceraFecha = {
   position: "sticky",
   top: ALTO_CABECERA_FECHA,
-  zIndex: 8,
+  zIndex: 20,
   background: "#f8fafc",
 };
 
-const estiloCabeceraObra = {
+/*
+ * Para Tiempo STD, Total horas y Eliminar.
+ *
+ * Quedan fijos solamente al desplazarse verticalmente.
+ * NO quedan fijos horizontalmente.
+ */
+const estiloCabeceraSoloVertical = {
   position: "sticky",
-  left: 0,
   top: 0,
-  zIndex: 11,
-  width: ANCHO_OBRA_FIJA,
-  minWidth: ANCHO_OBRA_FIJA,
-  background: "#eef2f6",
-  boxShadow: "2px 0 5px rgba(15, 23, 42, 0.08)",
+  zIndex: 20,
+  background: "#f4f4f4",
 };
 
-const estiloCabeceraFase = {
+// ============================================================
+// CABECERAS FIJAS HORIZONTAL + VERTICAL
+// ============================================================
+
+const crearEstiloCabeceraFija = (left, width, bordeDerecho = false) => ({
   position: "sticky",
-  left: ANCHO_OBRA_FIJA,
   top: 0,
-  zIndex: 11,
-  width: ANCHO_FASE_FIJA,
-  minWidth: ANCHO_FASE_FIJA,
+  left,
+  zIndex: 40,
+  width,
+  minWidth: width,
+  maxWidth: width,
   background: "#eef2f6",
-};
 
-const estiloCabeceraSector = {
-  position: "sticky",
-  left: ANCHO_OBRA_FIJA + ANCHO_FASE_FIJA,
-  top: 0,
-  zIndex: 11,
-  width: ANCHO_SECTOR_FIJO,
-  minWidth: ANCHO_SECTOR_FIJO,
-  background: "#eef2f6",
-  boxShadow: "2px 0 5px rgba(15, 23, 42, 0.10)",
-};
+  ...(bordeDerecho
+    ? {
+        boxShadow: "3px 0 6px rgba(15, 23, 42, 0.15)",
+      }
+    : {}),
+});
 
-const estiloCeldaObra = {
+const estiloCabeceraCargar = crearEstiloCabeceraFija(
+  LEFT_CARGAR,
+  ANCHO_CARGAR_FIJA,
+);
+
+const estiloCabeceraObra = crearEstiloCabeceraFija(LEFT_OBRA, ANCHO_OBRA_FIJA);
+
+const estiloCabeceraFase = crearEstiloCabeceraFija(LEFT_FASE, ANCHO_FASE_FIJA);
+
+const estiloCabeceraSector = crearEstiloCabeceraFija(
+  LEFT_SECTOR,
+  ANCHO_SECTOR_FIJO,
+);
+
+/*
+ * Cantidad es la última columna congelada.
+ * Por eso lleva la sombra derecha.
+ */
+const estiloCabeceraCantidad = crearEstiloCabeceraFija(
+  LEFT_CANTIDAD,
+  ANCHO_CANTIDAD_FIJA,
+  true,
+);
+
+// ============================================================
+// CELDAS FIJAS HORIZONTALMENTE
+// ============================================================
+
+const crearEstiloCeldaFija = (left, width, bordeDerecho = false) => ({
   position: "sticky",
-  left: 0,
-  zIndex: 4,
-  width: ANCHO_OBRA_FIJA,
-  minWidth: ANCHO_OBRA_FIJA,
+  left,
+  zIndex: 10,
+  width,
+  minWidth: width,
+  maxWidth: width,
   background: "#ffffff",
-};
 
-const estiloCeldaFase = {
-  position: "sticky",
-  left: ANCHO_OBRA_FIJA,
-  zIndex: 4,
-  width: ANCHO_FASE_FIJA,
-  minWidth: ANCHO_FASE_FIJA,
-  background: "#ffffff",
-};
+  ...(bordeDerecho
+    ? {
+        boxShadow: "3px 0 6px rgba(15, 23, 42, 0.12)",
+      }
+    : {}),
+});
 
-const estiloCeldaSector = {
-  position: "sticky",
-  left: ANCHO_OBRA_FIJA + ANCHO_FASE_FIJA,
-  zIndex: 4,
-  width: ANCHO_SECTOR_FIJO,
-  minWidth: ANCHO_SECTOR_FIJO,
-  background: "#ffffff",
-  boxShadow: "2px 0 5px rgba(15, 23, 42, 0.10)",
-};
+const estiloCeldaCargar = crearEstiloCeldaFija(LEFT_CARGAR, ANCHO_CARGAR_FIJA);
+
+const estiloCeldaObra = crearEstiloCeldaFija(LEFT_OBRA, ANCHO_OBRA_FIJA);
+
+const estiloCeldaFase = crearEstiloCeldaFija(LEFT_FASE, ANCHO_FASE_FIJA);
+
+const estiloCeldaSector = crearEstiloCeldaFija(LEFT_SECTOR, ANCHO_SECTOR_FIJO);
+
+const estiloCeldaCantidad = crearEstiloCeldaFija(
+  LEFT_CANTIDAD,
+  ANCHO_CANTIDAD_FIJA,
+  true,
+);
+
+// ============================================================
+// SCROLL
+// ============================================================
 
 const estiloScrollTablaObras = {
   maxHeight: "68vh",
@@ -348,6 +407,7 @@ function normalizarMaterialExcluir(fila, indice) {
 function PlanificacionProduccion() {
   const { token } = useAuth();
   const mesInicial = obtenerMesActual();
+  const mesPlanificacionCargadoRef = useRef(null);
 
   const [mesSeleccionado, setMesSeleccionado] = useState(mesInicial);
 
@@ -381,6 +441,11 @@ function PlanificacionProduccion() {
   const [modalExcluirAbierto, setModalExcluirAbierto] = useState(false);
   const [modalHistoricoAbierto, setModalHistoricoAbierto] = useState(false);
   const [modalExportarAbierto, setModalExportarAbierto] = useState(false);
+  const [modalArticulosPendientesAbierto, setModalArticulosPendientesAbierto] =
+    useState(false);
+  const [articulosPendientes, setArticulosPendientes] = useState([]);
+  const [cargandoArticulosPendientes, setCargandoArticulosPendientes] =
+    useState(false);
   const [exportandoOrdenes, setExportandoOrdenes] = useState(false);
 
   const rangoExportacionInicial = obtenerRangoMes(mesInicial);
@@ -395,6 +460,62 @@ function PlanificacionProduccion() {
 
   const [mesHistorico, setMesHistorico] = useState(obtenerMesActual());
   const [nuevoSector, setNuevoSector] = useState("");
+
+  const cargarArticulosPendientes = async () => {
+    try {
+      setCargandoArticulosPendientes(true);
+
+      const respuesta = await solicitarJson(
+        `${API_PLANIFICACION}/articulos-pendientes`,
+      );
+
+      setArticulosPendientes(Array.isArray(respuesta) ? respuesta : []);
+
+      return Array.isArray(respuesta) ? respuesta : [];
+    } catch (error) {
+      console.error("Error cargando artículos pendientes:", error);
+
+      setArticulosPendientes([]);
+
+      return [];
+    } finally {
+      setCargandoArticulosPendientes(false);
+    }
+  };
+
+  const abrirArticulosPendientes = async () => {
+    setModalArticulosPendientesAbierto(true);
+
+    await cargarArticulosPendientes();
+  };
+
+  const eliminarArticuloPendiente = async (id) => {
+    if (!window.confirm("¿Eliminar esta alerta de artículo pendiente?")) {
+      return;
+    }
+
+    try {
+      await solicitarJson(`${API_PLANIFICACION}/articulos-pendientes/${id}`, {
+        method: "DELETE",
+      });
+
+      await cargarArticulosPendientes();
+    } catch (error) {
+      console.error("Error eliminando artículo pendiente:", error);
+
+      window.alert(error.message);
+    }
+  };
+
+  // ============================================================
+  // CARGAR PENDIENTES AL ENTRAR
+  // ============================================================
+
+  useEffect(() => {
+    cargarArticulosPendientes();
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const diasHabiles = useMemo(() => {
     if (!mesSeleccionado) {
@@ -412,6 +533,43 @@ function PlanificacionProduccion() {
       return resultado;
     }, {});
   }, [sectores]);
+
+  // ============================================================
+  // OPERACIONES QUE REALMENTE ESTÁN EN LA PLANIFICACIÓN
+  // ============================================================
+
+  const operacionesPlanificadas = useMemo(() => {
+    const resultado = [];
+    const usadas = new Set();
+
+    /*
+     * Se recorren las filas de planificación en el
+     * mismo orden en que fueron cargadas.
+     */
+    for (const obra of obras) {
+      const idOperacion = String(obra.sectorId || "");
+
+      if (!idOperacion) {
+        continue;
+      }
+
+      if (usadas.has(idOperacion)) {
+        continue;
+      }
+
+      const operacion = sectoresPorId[idOperacion];
+
+      if (!operacion) {
+        continue;
+      }
+
+      usadas.add(idOperacion);
+
+      resultado.push(operacion);
+    }
+
+    return resultado;
+  }, [obras, sectoresPorId]);
 
   const totalesPorSectorYFecha = useMemo(() => {
     const totales = {};
@@ -453,6 +611,8 @@ function PlanificacionProduccion() {
       return false;
     }
 
+    let cargaCorrecta = false;
+
     try {
       setCargandoPlanificacion(true);
       setErrorGeneral("");
@@ -474,6 +634,8 @@ function PlanificacionProduccion() {
         ) {
           setObras(planificacionLegacy);
 
+          cargaCorrecta = true;
+
           return false;
         }
 
@@ -482,6 +644,8 @@ function PlanificacionProduccion() {
         if (avisarSiNoExiste) {
           window.alert(`No existe una planificación guardada para ${mes}.`);
         }
+
+        cargaCorrecta = true;
 
         return false;
       }
@@ -498,20 +662,35 @@ function PlanificacionProduccion() {
           : null;
 
       setConsultaHetmoResultado(consultaGuardada);
+
       setConsultaHetmoObraVersion(String(consultaGuardada?.obraVersion || ""));
+
       setConsultaHetmoFase(
         consultaGuardada?.fase === undefined || consultaGuardada?.fase === null
           ? ""
           : String(consultaGuardada.fase),
       );
 
+      cargaCorrecta = true;
+
       return true;
     } catch (error) {
       console.error("Error al cargar planificación compartida:", error);
+
       setErrorGeneral(error.message);
+
       window.alert(error.message);
+
       return false;
     } finally {
+      /*
+       * El autosave solamente queda habilitado cuando
+       * sabemos que ese mes ya terminó de cargarse.
+       */
+      if (cargaCorrecta) {
+        mesPlanificacionCargadoRef.current = mes;
+      }
+
       setCargandoPlanificacion(false);
     }
   };
@@ -1270,6 +1449,7 @@ function PlanificacionProduccion() {
           body: JSON.stringify({
             obraVersion,
             fase,
+            registrarPendientes: true,
           }),
         },
       );
@@ -1328,14 +1508,47 @@ function PlanificacionProduccion() {
         return [...estadoAnterior, ...nuevasFilas];
       });
 
-      const ignorados = respuesta?.materialesIgnorados?.length || 0;
+      const ignorados = Array.isArray(respuesta?.materialesIgnorados)
+        ? respuesta.materialesIgnorados
+        : [];
+
       const excluidos = respuesta?.materialesExcluidos?.length || 0;
 
-      window.alert(
-        `Se agregaron ${operacionesRespuesta.length} operaciones.\n` +
-          `Materiales ignorados: ${ignorados}.\n` +
-          `Materiales excluidos: ${excluidos}.`,
+      const inexistentes = ignorados.filter(
+        (material) =>
+          normalizarTexto(material?.motivo) ===
+          "NO SE ENCONTRO EL ARTICULO POR CODIGO NI POR DESCRIPCION EN DBO.ARTICULOS",
       );
+
+      await cargarArticulosPendientes();
+
+      if (inexistentes.length > 0) {
+        const articulosTexto = [
+          ...new Set(
+            inexistentes.map((material) => {
+              const codigo =
+                String(material.codigo || "").trim() || "SIN CÓDIGO";
+
+              const descripcion = String(material.descripcion || "").trim();
+
+              return descripcion ? `${codigo} - ${descripcion}` : codigo;
+            }),
+          ),
+        ];
+
+        window.alert(
+          `Se agregaron ${operacionesRespuesta.length} operaciones.\n\n` +
+            `ATENCIÓN: ${articulosTexto.length} artículo(s) de HETMO no existen en el sistema y no fueron utilizados:\n\n` +
+            articulosTexto.map((articulo) => `• ${articulo}`).join("\n") +
+            `\n\nQuedaron guardados en "Artículos no creados".`,
+        );
+      } else {
+        window.alert(
+          `Se agregaron ${operacionesRespuesta.length} operaciones.\n` +
+            `Materiales ignorados: ${ignorados.length}.\n` +
+            `Materiales excluidos: ${excluidos}.`,
+        );
+      }
     } catch (error) {
       console.error("Error al cargar operaciones:", error);
       setErrorGeneral(error.message);
@@ -1372,6 +1585,20 @@ function PlanificacionProduccion() {
 
       // ============================================================
       // 1. ARMAR LAS OT DESDE LA PLANIFICACIÓN
+      //
+      // REGLA:
+      //
+      // UNA OT por:
+      //
+      // Obra/Versión
+      // + Fase
+      // + Operación
+      //
+      // La cantidad de la OT sale de la columna "Cantidad".
+      //
+      // Las cantidades cargadas en los días solamente determinan
+      // si la operación está planificada dentro del rango y cuál
+      // será su primera fecha planificada.
       // ============================================================
 
       const agrupadas = new Map();
@@ -1385,54 +1612,120 @@ function PlanificacionProduccion() {
 
         const sector = sectoresPorId[String(obra.sectorId)];
 
-        for (const [fecha, cantidadRaw] of Object.entries(
-          obra.cantidadesPorDia || {},
-        )) {
-          const cantidad = convertirNumero(cantidadRaw);
+        const cantidadOperacion = convertirNumero(obra.cantidad);
 
-          if (
-            fecha < fechaInicioExportar ||
-            fecha > fechaFinExportar ||
-            cantidad <= 0
-          ) {
-            continue;
-          }
+        // ----------------------------------------------------------
+        // Buscar fechas planificadas dentro del rango seleccionado
+        // ----------------------------------------------------------
 
-          if (!obraVersion || !obraVersion.includes(".")) {
-            throw new Error(
-              `Hay una fila planificada para ${fecha} sin Obra/Versión válida.`,
+        const fechasPlanificadas = Object.entries(obra.cantidadesPorDia || {})
+          .filter(([fecha, cantidadRaw]) => {
+            const cantidadDia = convertirNumero(cantidadRaw);
+
+            return (
+              fecha >= fechaInicioExportar &&
+              fecha <= fechaFinExportar &&
+              cantidadDia > 0
             );
-          }
+          })
+          .map(([fecha]) => fecha)
+          .sort();
 
-          if (!Number.isInteger(fase)) {
-            throw new Error(`La obra ${obraVersion} tiene una fase inválida.`);
-          }
-
-          if (!sector) {
-            throw new Error(
-              `La obra ${obraVersion} tiene una operación/sector inválido.`,
-            );
-          }
-
-          const clave =
-            `${fecha}|` +
-            `${obraVersion.toUpperCase()}|` +
-            `${fase}|` +
-            `${sector.id}`;
-
-          const actual = agrupadas.get(clave) || {
-            fecha_planificada: fecha,
-            obra_version: obraVersion,
-            fase,
-            id_operacion: Number(sector.id),
-            operacion: sector.nombre,
-            cantidad_pedida: 0,
-          };
-
-          actual.cantidad_pedida += cantidad;
-
-          agrupadas.set(clave, actual);
+        /*
+         * Si esta operación no tiene ninguna cantidad planificada
+         * dentro del rango elegido, no se exporta.
+         */
+        if (fechasPlanificadas.length === 0) {
+          continue;
         }
+
+        if (!obraVersion || !obraVersion.includes(".")) {
+          throw new Error(`Hay una fila planificada sin Obra/Versión válida.`);
+        }
+
+        if (!Number.isInteger(fase)) {
+          throw new Error(`La obra ${obraVersion} tiene una fase inválida.`);
+        }
+
+        if (!sector) {
+          throw new Error(
+            `La obra ${obraVersion} tiene una operación/sector inválido.`,
+          );
+        }
+
+        if (cantidadOperacion <= 0) {
+          throw new Error(
+            `La obra ${obraVersion}, operación ${sector.nombre}, no tiene una cantidad válida.`,
+          );
+        }
+
+        /*
+         * IMPORTANTE:
+         *
+         * YA NO SE INCLUYE LA FECHA EN LA CLAVE.
+         *
+         * Antes:
+         *
+         * fecha | obra | fase | operación
+         *
+         * Ahora:
+         *
+         * obra | fase | operación
+         */
+        const clave =
+          `${obraVersion.toUpperCase()}|` + `${fase}|` + `${sector.id}`;
+
+        const fechaPrimera = fechasPlanificadas[0];
+
+        const existente = agrupadas.get(clave);
+
+        if (!existente) {
+          agrupadas.set(clave, {
+            fecha_planificada: fechaPrimera,
+
+            obra_version: obraVersion,
+
+            fase,
+
+            id_operacion: Number(sector.id),
+
+            operacion: sector.nombre,
+
+            /*
+             * La cantidad sale DIRECTAMENTE
+             * de la columna Cantidad.
+             */
+            cantidad_pedida: cantidadOperacion,
+          });
+
+          continue;
+        }
+
+        /*
+         * Si accidentalmente existen dos filas iguales de
+         * obra/fase/operación, NO sumamos las cantidades.
+         *
+         * Conservamos una sola OT.
+         *
+         * Si una tiene una fecha anterior, usamos esa.
+         */
+        if (fechaPrimera < existente.fecha_planificada) {
+          existente.fecha_planificada = fechaPrimera;
+        }
+
+        /*
+         * Si por algún motivo la misma operación aparece repetida,
+         * usamos la cantidad mayor.
+         *
+         * Esto evita que dos filas duplicadas de la planificación
+         * conviertan 112 en 224.
+         */
+        existente.cantidad_pedida = Math.max(
+          convertirNumero(existente.cantidad_pedida),
+          cantidadOperacion,
+        );
+
+        agrupadas.set(clave, existente);
       }
 
       const ordenesBase = Array.from(agrupadas.values());
@@ -1624,20 +1917,29 @@ function PlanificacionProduccion() {
     }
   };
 
-  const guardarPlanificacion = async () => {
+  const guardarPlanificacion = async (opciones = {}) => {
+    const { silencioso = false } = opciones;
+
     if (!mesSeleccionado) {
-      window.alert("Debe seleccionar un mes.");
-      return;
+      if (!silencioso) {
+        window.alert("Debe seleccionar un mes.");
+      }
+
+      return false;
     }
 
     try {
-      setGuardandoPlanificacion(true);
+      if (!silencioso) {
+        setGuardandoPlanificacion(true);
+      }
+
       setErrorGeneral("");
 
       const respuesta = await solicitarJson(
         `${API_PLANIFICACION}/planificacion`,
         {
           method: "PUT",
+
           body: JSON.stringify({
             mes: mesSeleccionado,
             obras,
@@ -1646,18 +1948,87 @@ function PlanificacionProduccion() {
         },
       );
 
-      window.alert(
-        respuesta?.message ||
-          `La planificación de ${mesSeleccionado} fue guardada para todos los usuarios.`,
-      );
+      if (!silencioso) {
+        window.alert(
+          respuesta?.message ||
+            `La planificación de ${mesSeleccionado} fue guardada para todos los usuarios.`,
+        );
+      }
+
+      return true;
     } catch (error) {
-      console.error("Error guardando planificación compartida:", error);
-      setErrorGeneral(error.message);
-      window.alert(error.message);
+      console.error(
+        silencioso
+          ? "Error en guardado automático:"
+          : "Error guardando planificación compartida:",
+        error,
+      );
+
+      setErrorGeneral(`No se pudo guardar la planificación: ${error.message}`);
+
+      if (!silencioso) {
+        window.alert(error.message);
+      }
+
+      return false;
     } finally {
-      setGuardandoPlanificacion(false);
+      if (!silencioso) {
+        setGuardandoPlanificacion(false);
+      }
     }
   };
+
+  // ============================================================
+  // GUARDADO AUTOMÁTICO
+  // ============================================================
+
+  useEffect(() => {
+    /*
+     * No guardamos mientras todavía se está cargando
+     * información inicial.
+     */
+    if (cargandoPlanificacion || cargandoConfiguracion) {
+      return undefined;
+    }
+
+    /*
+     * Impide que al cambiar de mes se guarden
+     * momentáneamente los datos del mes anterior
+     * dentro del nuevo.
+     */
+    if (
+      !mesSeleccionado ||
+      mesPlanificacionCargadoRef.current !== mesSeleccionado
+    ) {
+      return undefined;
+    }
+
+    /*
+     * Debounce:
+     *
+     * Si el usuario escribe varias cantidades seguidas,
+     * esperamos 900 ms desde la última modificación.
+     *
+     * Así no hacemos un PUT por cada tecla.
+     */
+    const timer = setTimeout(() => {
+      guardarPlanificacion({
+        silencioso: true,
+      });
+    }, 900);
+
+    return () => {
+      clearTimeout(timer);
+    };
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    obras,
+    consultaHetmoResultado,
+    mesSeleccionado,
+    cargandoPlanificacion,
+    cargandoConfiguracion,
+  ]);
 
   const cargarHistorico = async () => {
     if (!mesHistorico) {
@@ -1736,7 +2107,20 @@ function PlanificacionProduccion() {
 
         <button
           type="button"
-          onClick={guardarPlanificacion}
+          onClick={abrirArticulosPendientes}
+          style={{
+            position: "relative",
+          }}
+        >
+          ⚠ Artículos no creados
+          {articulosPendientes.length > 0
+            ? ` (${articulosPendientes.length})`
+            : ""}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => guardarPlanificacion()}
           disabled={guardandoPlanificacion}
         >
           {guardandoPlanificacion ? "Guardando..." : "Guardar"}
@@ -1797,7 +2181,7 @@ function PlanificacionProduccion() {
             </thead>
 
             <tbody>
-              {sectores.map((sector) => (
+              {operacionesPlanificadas.map((sector) => (
                 <tr key={sector.id}>
                   <td className="columna-sector columna-fija">
                     {sector.nombre}
@@ -1842,7 +2226,11 @@ function PlanificacionProduccion() {
           >
             <thead>
               <tr>
-                <th className="columna-cargar" rowSpan={2}>
+                <th
+                  className="columna-cargar"
+                  rowSpan={2}
+                  style={estiloCabeceraCargar}
+                >
                   Cargar
                 </th>
 
@@ -1870,15 +2258,27 @@ function PlanificacionProduccion() {
                   Sector
                 </th>
 
-                <th className="columna-cantidad" rowSpan={2}>
+                <th
+                  className="columna-cantidad"
+                  rowSpan={2}
+                  style={estiloCabeceraCantidad}
+                >
                   Cantidad
                 </th>
 
-                <th className="columna-tiempo" rowSpan={2}>
+                <th
+                  className="columna-tiempo"
+                  rowSpan={2}
+                  style={estiloCabeceraSoloVertical}
+                >
                   Tiempo STD
                 </th>
 
-                <th className="columna-total" rowSpan={2}>
+                <th
+                  className="columna-total"
+                  rowSpan={2}
+                  style={estiloCabeceraSoloVertical}
+                >
                   Total horas
                 </th>
 
@@ -1896,7 +2296,11 @@ function PlanificacionProduccion() {
                   </th>
                 ))}
 
-                <th className="columna-acciones" rowSpan={2}>
+                <th
+                  className="columna-acciones"
+                  rowSpan={2}
+                  style={estiloCabeceraFechaDia}
+                >
                   Eliminar
                 </th>
               </tr>
@@ -1921,7 +2325,7 @@ function PlanificacionProduccion() {
             <tbody>
               {obras.map((obra) => (
                 <tr key={obra.id}>
-                  <td className="celda-cargar">
+                  <td className="celda-cargar" style={estiloCeldaCargar}>
                     <button
                       type="button"
                       className="boton-cargar-operaciones"
@@ -1972,7 +2376,7 @@ function PlanificacionProduccion() {
                     </select>
                   </td>
 
-                  <td>
+                  <td style={estiloCeldaCantidad}>
                     <input
                       type="number"
                       min="0"
@@ -2790,6 +3194,168 @@ function PlanificacionProduccion() {
 
               <button type="button" onClick={cargarHistorico}>
                 Cargar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalArticulosPendientesAbierto && (
+        <div
+          className="planificacion-modal-overlay"
+          onMouseDown={() => setModalArticulosPendientesAbierto(false)}
+        >
+          <div
+            className="planificacion-modal planificacion-modal-grande"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="planificacion-modal-header">
+              <div>
+                <h3>Artículos no creados</h3>
+
+                <span>
+                  Materiales encontrados en HETMO que no existen actualmente en
+                  dbo.articulos
+                </span>
+              </div>
+
+              <button
+                type="button"
+                className="planificacion-modal-cerrar"
+                onClick={() => setModalArticulosPendientesAbierto(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="planificacion-modal-body">
+              <div
+                className="configuracion-modal-acciones"
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                  marginBottom: 12,
+                }}
+              >
+                <div>
+                  Pendientes: <strong>{articulosPendientes.length}</strong>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={cargarArticulosPendientes}
+                  disabled={cargandoArticulosPendientes}
+                >
+                  {cargandoArticulosPendientes
+                    ? "Revisando..."
+                    : "↻ Revisar nuevamente"}
+                </button>
+              </div>
+
+              <div className="tabla-configuracion-wrapper">
+                <table className="tabla-configuracion">
+                  <thead>
+                    <tr>
+                      <th>Obra / Versión</th>
+                      <th>Fase</th>
+                      <th>Código</th>
+                      <th>Descripción HETMO</th>
+                      <th>Cantidad</th>
+                      <th>Detectado</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {!cargandoArticulosPendientes &&
+                      articulosPendientes.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="tabla-vacia">
+                            No hay artículos pendientes de crear.
+                          </td>
+                        </tr>
+                      )}
+
+                    {cargandoArticulosPendientes && (
+                      <tr>
+                        <td colSpan={7} className="tabla-vacia">
+                          Revisando artículos...
+                        </td>
+                      </tr>
+                    )}
+
+                    {!cargandoArticulosPendientes &&
+                      articulosPendientes.map((pendiente) => (
+                        <tr key={pendiente.id_pendiente}>
+                          <td>{pendiente.obra_version}</td>
+
+                          <td>{pendiente.fase}</td>
+
+                          <td>
+                            <strong>{pendiente.codigo || "SIN CÓDIGO"}</strong>
+                          </td>
+
+                          <td>{pendiente.descripcion || ""}</td>
+
+                          <td>
+                            {convertirNumero(pendiente.cantidad).toLocaleString(
+                              "es-AR",
+                              {
+                                maximumFractionDigits: 4,
+                              },
+                            )}
+                          </td>
+
+                          <td>
+                            {pendiente.fecha_ultima_deteccion
+                              ? new Date(
+                                  pendiente.fecha_ultima_deteccion,
+                                ).toLocaleString("es-AR")
+                              : ""}
+                          </td>
+
+                          <td>
+                            <button
+                              type="button"
+                              className="boton-eliminar-configuracion"
+                              onClick={() =>
+                                eliminarArticuloPendiente(
+                                  pendiente.id_pendiente,
+                                )
+                              }
+                            >
+                              Eliminar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: 10,
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 6,
+                  fontSize: 13,
+                }}
+              >
+                Al recargar esta lista, los artículos que ya existan en
+                dbo.articulos desaparecerán automáticamente.
+              </div>
+            </div>
+
+            <div className="planificacion-modal-footer">
+              <button
+                type="button"
+                onClick={() => setModalArticulosPendientesAbierto(false)}
+              >
+                Cerrar
               </button>
             </div>
           </div>

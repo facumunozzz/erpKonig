@@ -1,4 +1,5 @@
 const { sql, poolConnect, getPool } = require("../db");
+const crypto = require("crypto");
 
 function texto(valor) {
   const resultado = String(valor ?? "").trim();
@@ -11,7 +12,10 @@ function numero(valor) {
 }
 
 function normalizarObraVersion(valor) {
-  return String(valor ?? "").trim().replace(",", ".").toUpperCase();
+  return String(valor ?? "")
+    .trim()
+    .replace(",", ".")
+    .toUpperCase();
 }
 
 function usuarioAuditoria(req) {
@@ -79,8 +83,7 @@ exports.createOperacion = async (req, res) => {
     const result = await pool
       .request()
       .input("nombre", sql.NVarChar(150), nombre)
-      .input("tiempo_std", sql.Decimal(18, 4), tiempoStd)
-      .query(`
+      .input("tiempo_std", sql.Decimal(18, 4), tiempoStd).query(`
         INSERT INTO dbo.planificacion_operaciones (
           nombre,
           tiempo_std
@@ -138,8 +141,7 @@ exports.updateOperacion = async (req, res) => {
       .request()
       .input("id", sql.Int, id)
       .input("nombre", sql.NVarChar(150), nombre)
-      .input("tiempo_std", sql.Decimal(18, 4), tiempoStd)
-      .query(`
+      .input("tiempo_std", sql.Decimal(18, 4), tiempoStd).query(`
         UPDATE dbo.planificacion_operaciones
         SET
           nombre = @nombre,
@@ -186,10 +188,7 @@ exports.deleteOperacion = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    const result = await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
+    const result = await pool.request().input("id", sql.Int, id).query(`
         UPDATE dbo.planificacion_operaciones
         SET
           activa = 0,
@@ -199,9 +198,7 @@ exports.deleteOperacion = async (req, res) => {
         SELECT @@ROWCOUNT AS affected;
       `);
 
-    const affected = Number(
-      result.recordset?.[0]?.affected || 0
-    );
+    const affected = Number(result.recordset?.[0]?.affected || 0);
 
     if (!affected) {
       return res.status(404).json({
@@ -245,8 +242,7 @@ exports.getTiemposStdObra = async (req, res) => {
     const result = await pool
       .request()
       .input("obra_version", sql.NVarChar(150), obraVersion)
-      .input("fase", sql.Int, fase)
-      .query(`
+      .input("fase", sql.Int, fase).query(`
         SELECT
           teo.id_tiempo_std_obra,
           teo.obra_version,
@@ -316,8 +312,7 @@ exports.saveTiempoStdObra = async (req, res) => {
       .input("fase", sql.Int, fase)
       .input("id_operacion", sql.Int, idOperacion)
       .input("tiempo_std", sql.Decimal(18, 4), tiempoStd)
-      .input("usuario", sql.NVarChar(150), usuarioAuditoria(req))
-      .query(`
+      .input("usuario", sql.NVarChar(150), usuarioAuditoria(req)).query(`
         DECLARE @tiempo_base DECIMAL(18,4);
         DECLARE @operacion NVARCHAR(150);
 
@@ -433,9 +428,7 @@ exports.getTiposArticulos = async (req, res) => {
     `);
 
     return res.json(
-      (result.recordset || [])
-        .map((fila) => fila.tipo)
-        .filter(Boolean)
+      (result.recordset || []).map((fila) => fila.tipo).filter(Boolean),
     );
   } catch (error) {
     console.error("getTiposArticulos:", error);
@@ -480,9 +473,7 @@ exports.saveTiposMaterial = async (req, res) => {
   let transaction;
 
   try {
-    const filas = Array.isArray(req.body?.filas)
-      ? req.body.filas
-      : [];
+    const filas = Array.isArray(req.body?.filas) ? req.body.filas : [];
 
     await poolConnect;
     const pool = await getPool();
@@ -499,15 +490,12 @@ exports.saveTiposMaterial = async (req, res) => {
       const tipo = texto(fila.tipo);
 
       if (!Number.isInteger(idOperacion) || !tipo) {
-        throw new Error(
-          "Todas las filas deben tener operación y tipo"
-        );
+        throw new Error("Todas las filas deben tener operación y tipo");
       }
 
       await new sql.Request(transaction)
         .input("id_operacion", sql.Int, idOperacion)
-        .input("tipo", sql.NVarChar(150), tipo)
-        .query(`
+        .input("tipo", sql.NVarChar(150), tipo).query(`
           INSERT INTO dbo.planificacion_tipos_material (
             id_operacion,
             tipo
@@ -555,8 +543,7 @@ exports.getArticuloPorCodigo = async (req, res) => {
 
     const result = await pool
       .request()
-      .input("codigo", sql.NVarChar(150), codigo)
-      .query(`
+      .input("codigo", sql.NVarChar(150), codigo).query(`
         SELECT TOP 1
           id_articulo,
           codigo,
@@ -620,9 +607,7 @@ exports.saveMaterialesExcluir = async (req, res) => {
   let transaction;
 
   try {
-    const filas = Array.isArray(req.body?.filas)
-      ? req.body.filas
-      : [];
+    const filas = Array.isArray(req.body?.filas) ? req.body.filas : [];
 
     await poolConnect;
     const pool = await getPool();
@@ -638,19 +623,13 @@ exports.saveMaterialesExcluir = async (req, res) => {
       const idOperacion = Number(fila.id_operacion);
       const idArticulo = Number(fila.id_articulo);
 
-      if (
-        !Number.isInteger(idOperacion) ||
-        !Number.isInteger(idArticulo)
-      ) {
-        throw new Error(
-          "Todas las filas deben tener operación y artículo"
-        );
+      if (!Number.isInteger(idOperacion) || !Number.isInteger(idArticulo)) {
+        throw new Error("Todas las filas deben tener operación y artículo");
       }
 
       await new sql.Request(transaction)
         .input("id_operacion", sql.Int, idOperacion)
-        .input("id_articulo", sql.Int, idArticulo)
-        .query(`
+        .input("id_articulo", sql.Int, idArticulo).query(`
           INSERT INTO dbo.planificacion_materiales_excluir (
             id_operacion,
             id_articulo
@@ -683,10 +662,7 @@ exports.saveMaterialesExcluir = async (req, res) => {
   }
 };
 
-const {
-  sql: sqlHetmo,
-  getHetmoPool,
-} = require("../dbHetmo");
+const { sql: sqlHetmo, getHetmoPool } = require("../dbHetmo");
 
 function normalizar(valor) {
   return String(valor ?? "")
@@ -697,13 +673,241 @@ function normalizar(valor) {
     .toUpperCase();
 }
 
+// ============================================================
+// ARTÍCULOS PENDIENTES DE CREAR
+// ============================================================
+
+const MOTIVO_ARTICULO_INEXISTENTE =
+  "NO SE ENCONTRO EL ARTICULO POR CODIGO NI POR DESCRIPCION EN DBO.ARTICULOS";
+
+function esMaterialInexistente(material) {
+  return normalizar(material?.motivo) === MOTIVO_ARTICULO_INEXISTENTE;
+}
+
+function crearClaveArticuloPendiente({
+  obraVersion,
+  fase,
+  codigo,
+  descripcion,
+}) {
+  const textoClave = [
+    normalizarObraVersion(obraVersion),
+    Number(fase),
+    normalizar(codigo),
+    normalizar(descripcion),
+  ].join("|");
+
+  return crypto.createHash("sha256").update(textoClave, "utf8").digest("hex");
+}
+
+/*
+ * Elimina automáticamente del listado los artículos que
+ * ya fueron creados en dbo.articulos.
+ *
+ * Se considera resuelto si ahora coincide:
+ * 1. por código, o
+ * 2. por descripción.
+ *
+ * Esto respeta la misma lógica usada al calcular los
+ * materiales de HETMO.
+ */
+async function limpiarArticulosPendientesResueltos(pool) {
+  await pool.request().query(`
+    DELETE pendiente
+    FROM dbo.planificacion_articulos_pendientes pendiente
+
+    WHERE EXISTS
+    (
+      SELECT 1
+      FROM dbo.articulos articulo
+
+      WHERE
+        (
+          LTRIM(RTRIM(ISNULL(pendiente.codigo, ''))) <> ''
+          AND
+          LTRIM(RTRIM(ISNULL(articulo.codigo, '')))
+              COLLATE Latin1_General_100_CI_AI
+          =
+          LTRIM(RTRIM(pendiente.codigo))
+              COLLATE Latin1_General_100_CI_AI
+        )
+
+        OR
+
+        (
+          LTRIM(RTRIM(ISNULL(pendiente.descripcion, ''))) <> ''
+          AND
+          LTRIM(RTRIM(ISNULL(articulo.descripcion, '')))
+              COLLATE Latin1_General_100_CI_AI
+          =
+          LTRIM(RTRIM(pendiente.descripcion))
+              COLLATE Latin1_General_100_CI_AI
+        )
+    );
+  `);
+}
+
+/*
+ * Sincroniza los artículos inexistentes encontrados
+ * durante una consulta HETMO.
+ *
+ * No guarda materiales ignorados por otros motivos.
+ */
+async function sincronizarArticulosPendientesConsulta(
+  pool,
+  { obraVersion, fase, materialesIgnorados, usuario },
+) {
+  const inexistentes = Array.isArray(materialesIgnorados)
+    ? materialesIgnorados.filter(esMaterialInexistente)
+    : [];
+
+  /*
+   * Primero agrupamos por código/descripción.
+   *
+   * Si HETMO devuelve el mismo artículo más de una vez,
+   * el modal tendrá una sola línea y se sumará la cantidad.
+   */
+  const agrupados = new Map();
+
+  for (const material of inexistentes) {
+    const codigo = String(material?.codigo || "")
+      .trim()
+      .toUpperCase();
+
+    const descripcion = String(material?.descripcion || "").trim();
+
+    if (!codigo && !descripcion) {
+      continue;
+    }
+
+    const clave = crearClaveArticuloPendiente({
+      obraVersion,
+      fase,
+      codigo,
+      descripcion,
+    });
+
+    const anterior = agrupados.get(clave);
+
+    if (anterior) {
+      anterior.cantidad += Number(material.cantidad) || 0;
+    } else {
+      agrupados.set(clave, {
+        clave,
+        obraVersion: normalizarObraVersion(obraVersion),
+        fase: Number(fase),
+        codigo,
+        descripcion,
+        cantidad: Number(material.cantidad) || 0,
+      });
+    }
+  }
+
+  /*
+   * Los que ya fueron creados desaparecen.
+   */
+  await limpiarArticulosPendientesResueltos(pool);
+
+  /*
+   * Sincronizamos también esta Obra/Fase.
+   *
+   * Si antes había un pendiente pero HETMO ya no lo devuelve,
+   * se elimina de la lista.
+   */
+  const clavesActuales = Array.from(agrupados.keys());
+
+  const requestLimpiarObra = pool
+    .request()
+    .input("obraVersion", sql.NVarChar(150), normalizarObraVersion(obraVersion))
+    .input("fase", sql.Int, Number(fase));
+
+  if (clavesActuales.length === 0) {
+    await requestLimpiarObra.query(`
+      DELETE FROM dbo.planificacion_articulos_pendientes
+      WHERE obra_version = @obraVersion
+        AND fase = @fase;
+    `);
+  } else {
+    /*
+     * Como SQL Server no permite pasar cómodamente un array de
+     * strings sin TVP, eliminamos los anteriores de esta obra/fase
+     * y volvemos a insertar/actualizar los actuales.
+     *
+     * La lista es de avisos, por lo que este comportamiento es
+     * correcto y mantiene el estado exactamente igual a HETMO.
+     */
+    await requestLimpiarObra.query(`
+      DELETE FROM dbo.planificacion_articulos_pendientes
+      WHERE obra_version = @obraVersion
+        AND fase = @fase;
+    `);
+  }
+
+  for (const pendiente of agrupados.values()) {
+    await pool
+      .request()
+      .input("clave", sql.VarChar(64), pendiente.clave)
+      .input("obraVersion", sql.NVarChar(150), pendiente.obraVersion)
+      .input("fase", sql.Int, pendiente.fase)
+      .input("codigo", sql.NVarChar(150), pendiente.codigo)
+      .input("descripcion", sql.NVarChar(500), pendiente.descripcion)
+      .input("cantidad", sql.Decimal(18, 4), pendiente.cantidad)
+      .input("usuario", sql.NVarChar(150), usuario || "sistema").query(`
+        MERGE dbo.planificacion_articulos_pendientes AS destino
+
+        USING
+        (
+          SELECT @clave AS clave
+        ) AS origen
+
+        ON destino.clave = origen.clave
+
+        WHEN MATCHED THEN
+          UPDATE SET
+            obra_version = @obraVersion,
+            fase = @fase,
+            codigo = @codigo,
+            descripcion = @descripcion,
+            cantidad = @cantidad,
+            fecha_ultima_deteccion = SYSDATETIME(),
+            usuario = @usuario
+
+        WHEN NOT MATCHED THEN
+          INSERT
+          (
+            clave,
+            obra_version,
+            fase,
+            codigo,
+            descripcion,
+            cantidad,
+            usuario
+          )
+          VALUES
+          (
+            @clave,
+            @obraVersion,
+            @fase,
+            @codigo,
+            @descripcion,
+            @cantidad,
+            @usuario
+          );
+      `);
+  }
+
+  return Array.from(agrupados.values());
+}
+
 function separarObraVersion(valor) {
-  const entrada = String(valor ?? "").trim().replace(",", ".");
+  const entrada = String(valor ?? "")
+    .trim()
+    .replace(",", ".");
   const posicion = entrada.indexOf(".");
 
   if (posicion <= 0 || posicion === entrada.length - 1) {
     const error = new Error(
-      "Obra/versión debe tener el formato OBRA.VERSION, por ejemplo 12345.2"
+      "Obra/versión debe tener el formato OBRA.VERSION, por ejemplo 12345.2",
     );
     error.statusCode = 400;
     throw error;
@@ -714,7 +918,7 @@ function separarObraVersion(valor) {
 
   if (!obraTexto || !versionTexto) {
     const error = new Error(
-      "Debe indicar obra y versión separadas por un punto"
+      "Debe indicar obra y versión separadas por un punto",
     );
     error.statusCode = 400;
     throw error;
@@ -734,8 +938,7 @@ async function consultarMaterialesHetmo(obraTexto, versionTexto, fase) {
     .request()
     .input("obra", sqlHetmo.VarChar(50), obraTexto)
     .input("version", sqlHetmo.VarChar(50), versionTexto)
-    .input("fase", sqlHetmo.Int, fase)
-    .query(`
+    .input("fase", sqlHetmo.Int, fase).query(`
       SET NOCOUNT ON;
 
       SELECT
@@ -796,8 +999,7 @@ async function consultarMecanizadoHetmo(obraTexto, versionTexto, fase) {
     .request()
     .input("obra", sqlHetmo.VarChar(50), obraTexto)
     .input("version", sqlHetmo.VarChar(50), versionTexto)
-    .input("fase", sqlHetmo.Int, fase)
-    .query(`
+    .input("fase", sqlHetmo.Int, fase).query(`
       SET NOCOUNT ON;
 
       SELECT
@@ -919,9 +1121,12 @@ async function obtenerConfiguracionCalculo(pool) {
 async function obtenerTiemposStdObra(pool, obraVersion, fase) {
   const result = await pool
     .request()
-    .input("obra_version", sql.NVarChar(150), normalizarObraVersion(obraVersion))
-    .input("fase", sql.Int, fase)
-    .query(`
+    .input(
+      "obra_version",
+      sql.NVarChar(150),
+      normalizarObraVersion(obraVersion),
+    )
+    .input("fase", sql.Int, fase).query(`
       SET NOCOUNT ON;
 
       SELECT
@@ -936,14 +1141,11 @@ async function obtenerTiemposStdObra(pool, obraVersion, fase) {
     (result.recordset || []).map((fila) => [
       Number(fila.id_operacion),
       Number(fila.tiempo_std) || 0,
-    ])
+    ]),
   );
 }
 
-function calcularOperacionesDesdeMateriales(
-  materialesHetmo,
-  configuracion
-) {
+function calcularOperacionesDesdeMateriales(materialesHetmo, configuracion) {
   const articuloPorCodigo = new Map();
   const articuloPorDescripcion = new Map();
   const operacionesPorTipo = new Map();
@@ -991,7 +1193,7 @@ function calcularOperacionesDesdeMateriales(
 
   for (const exclusion of configuracion.exclusiones) {
     exclusiones.add(
-      `${Number(exclusion.id_operacion)}|${normalizar(exclusion.codigo)}`
+      `${Number(exclusion.id_operacion)}|${normalizar(exclusion.codigo)}`,
     );
   }
 
@@ -1016,9 +1218,7 @@ function calcularOperacionesDesdeMateriales(
     }
 
     // Primero busca por código.
-    let articulo = codigoHetmo
-      ? articuloPorCodigo.get(codigoHetmo)
-      : null;
+    let articulo = codigoHetmo ? articuloPorCodigo.get(codigoHetmo) : null;
     let encontradoPor = articulo ? "codigo" : "";
 
     // Si no encontró el código, busca por descripción.
@@ -1084,16 +1284,15 @@ function calcularOperacionesDesdeMateriales(
         verifican ambos códigos contra la tabla de exclusiones.
       */
       const codigosParaExclusion = new Set(
-        [codigoHetmo, codigoArticulo].filter(Boolean)
+        [codigoHetmo, codigoArticulo].filter(Boolean),
       );
 
-      const estaExcluido = Array.from(codigosParaExclusion).some(
-        (codigo) =>
-          exclusiones.has(`${idOperacion}|${codigo}`)
+      const estaExcluido = Array.from(codigosParaExclusion).some((codigo) =>
+        exclusiones.has(`${idOperacion}|${codigo}`),
       );
 
       const operacion = configuracion.operaciones.find(
-        (item) => Number(item.id_operacion) === idOperacion
+        (item) => Number(item.id_operacion) === idOperacion,
       );
 
       if (estaExcluido) {
@@ -1112,7 +1311,7 @@ function calcularOperacionesDesdeMateriales(
 
       cantidadesPorOperacion.set(
         idOperacion,
-        (cantidadesPorOperacion.get(idOperacion) || 0) + cantidad
+        (cantidadesPorOperacion.get(idOperacion) || 0) + cantidad,
       );
 
       operacionesAplicadas.push({
@@ -1129,9 +1328,7 @@ function calcularOperacionesDesdeMateriales(
       cantidad,
       encontradoPor,
       operaciones: operacionesAplicadas,
-      excluido:
-        operacionesAplicadas.length === 0 &&
-        idsOperaciones.size > 0,
+      excluido: operacionesAplicadas.length === 0 && idsOperaciones.size > 0,
     });
   }
 
@@ -1152,7 +1349,7 @@ function calcularMecanizado(
   configuracion,
   exclusiones,
   articuloPorCodigo,
-  articuloPorDescripcion
+  articuloPorDescripcion,
 ) {
   let cantidad = 0;
   const excluidos = [];
@@ -1172,9 +1369,7 @@ function calcularMecanizado(
       una eventual exclusión configurada, pero si no existe igualmente se
       cuentan los RES_NUMERO_CORTES devueltos por la consulta de fabricación.
     */
-    let articulo = codigoHetmo
-      ? articuloPorCodigo.get(codigoHetmo)
-      : null;
+    let articulo = codigoHetmo ? articuloPorCodigo.get(codigoHetmo) : null;
     let encontradoPor = articulo ? "codigo" : "";
 
     if (!articulo && descripcionNormalizada) {
@@ -1197,12 +1392,11 @@ function calcularMecanizado(
     */
 
     const codigosParaExclusion = new Set(
-      [codigoHetmo, codigoArticulo].filter(Boolean)
+      [codigoHetmo, codigoArticulo].filter(Boolean),
     );
 
-    const estaExcluido = Array.from(codigosParaExclusion).some(
-      (codigo) =>
-        exclusiones.has(`${idOperacionMecanizado}|${codigo}`)
+    const estaExcluido = Array.from(codigosParaExclusion).some((codigo) =>
+      exclusiones.has(`${idOperacionMecanizado}|${codigo}`),
     );
 
     if (estaExcluido) {
@@ -1242,8 +1436,9 @@ function calcularMecanizado(
 
 exports.calcularMaterialesObra = async (req, res) => {
   try {
-    const { obraVersion, obraTexto, versionTexto } =
-      separarObraVersion(req.body?.obraVersion);
+    const { obraVersion, obraTexto, versionTexto } = separarObraVersion(
+      req.body?.obraVersion,
+    );
 
     const fase = Number(req.body?.fase);
 
@@ -1256,29 +1451,36 @@ exports.calcularMaterialesObra = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    const [
-      materialesHetmo,
-      filasMecanizado,
-      configuracion,
-    ] = await Promise.all([
-      consultarMaterialesHetmo(obraTexto, versionTexto, fase),
-      consultarMecanizadoHetmo(obraTexto, versionTexto, fase),
-      obtenerConfiguracionCalculo(pool),
-    ]);
-
-    const tiemposStdObra = await obtenerTiemposStdObra(
-      pool,
-      obraVersion,
-      fase
+    const [materialesHetmo, filasMecanizado, configuracion] = await Promise.all(
+      [
+        consultarMaterialesHetmo(obraTexto, versionTexto, fase),
+        consultarMecanizadoHetmo(obraTexto, versionTexto, fase),
+        obtenerConfiguracionCalculo(pool),
+      ],
     );
+
+    const tiemposStdObra = await obtenerTiemposStdObra(pool, obraVersion, fase);
 
     const calculoGeneral = calcularOperacionesDesdeMateriales(
       materialesHetmo,
-      configuracion
+      configuracion,
     );
 
+    let articulosPendientesRegistrados = [];
+
+    if (req.body?.registrarPendientes === true) {
+      articulosPendientesRegistrados =
+        await sincronizarArticulosPendientesConsulta(pool, {
+          obraVersion,
+          fase,
+          materialesIgnorados: calculoGeneral.materialesIgnorados,
+
+          usuario: usuarioAuditoria(req),
+        });
+    }
+
     const operacionMecanizado = configuracion.operaciones.find(
-      (operacion) => normalizar(operacion.nombre) === "MECANIZADO"
+      (operacion) => normalizar(operacion.nombre) === "MECANIZADO",
     );
 
     let detalleMecanizado = [];
@@ -1294,12 +1496,12 @@ exports.calcularMaterialesObra = async (req, res) => {
         configuracion,
         calculoGeneral.exclusiones,
         calculoGeneral.articuloPorCodigo,
-        calculoGeneral.articuloPorDescripcion
+        calculoGeneral.articuloPorDescripcion,
       );
 
       calculoGeneral.cantidadesPorOperacion.set(
         idMecanizado,
-        mecanizado.cantidad
+        mecanizado.cantidad,
       );
 
       detalleMecanizado = mecanizado.detalle;
@@ -1309,19 +1511,17 @@ exports.calcularMaterialesObra = async (req, res) => {
 
     const operaciones = configuracion.operaciones
       .filter((operacion) =>
-        OPERACIONES_CARGA_AUTOMATICA.has(
-          normalizar(operacion.nombre)
-        )
+        OPERACIONES_CARGA_AUTOMATICA.has(normalizar(operacion.nombre)),
       )
       .map((operacion) => {
         const cantidad =
           calculoGeneral.cantidadesPorOperacion.get(
-            Number(operacion.id_operacion)
+            Number(operacion.id_operacion),
           ) || 0;
 
         const tiempoStdBase = Number(operacion.tiempo_std) || 0;
         const tieneTiempoStdEspecifico = tiemposStdObra.has(
-          Number(operacion.id_operacion)
+          Number(operacion.id_operacion),
         );
         const tiempoStd = tieneTiempoStdEspecifico
           ? tiemposStdObra.get(Number(operacion.id_operacion))
@@ -1336,51 +1536,44 @@ exports.calcularMaterialesObra = async (req, res) => {
           tiempo_std_especifico: tieneTiempoStdEspecifico,
           total_horas:
             cantidad > 0 && tiempoStd > 0
-              ? Number(
-                  ((cantidad * tiempoStd) / 60).toFixed(4)
-                )
+              ? Number(((cantidad * tiempoStd) / 60).toFixed(4))
               : 0,
         };
       });
 
     return res.json({
-  obraVersion,
-  obra: obraTexto,
-  version: versionTexto,
-  fase,
+      obraVersion,
+      obra: obraTexto,  
+      version: versionTexto,
+      fase,
 
-  // ==========================================================
-  // DATOS CRUDOS DEVUELTOS POR HETMO
-  // Se usan para mostrarlos debajo de la planificación.
-  // ==========================================================
-  materialesHetmo,
-  mecanizadoHetmo: filasMecanizado,
+      materialesHetmo,
+      mecanizadoHetmo: filasMecanizado,
 
-  // ==========================================================
-  // DATOS PROCESADOS PARA PLANIFICACIÓN
-  // ==========================================================
-  operaciones,
+      operaciones,
 
-  materiales: calculoGeneral.materiales,
+      materiales: calculoGeneral.materiales,
 
-  mecanizado: detalleMecanizado,
+      mecanizado: detalleMecanizado,
 
-  materialesIgnorados: [
-    ...calculoGeneral.materialesIgnorados,
-    ...ignoradosMecanizado,
-  ],
+      materialesIgnorados: [
+        ...calculoGeneral.materialesIgnorados,
+        ...ignoradosMecanizado,
+      ],
 
-  materialesExcluidos: [
-    ...calculoGeneral.materialesExcluidos,
-    ...excluidosMecanizado,
-  ],
+      materialesExcluidos: [
+        ...calculoGeneral.materialesExcluidos,
+        ...excluidosMecanizado,
+      ],
 
-  resumen: {
-    filasMaterialesHetmo: materialesHetmo.length,
-    filasMecanizadoHetmo: filasMecanizado.length,
-    operacionesGeneradas: operaciones.length,
-  },
-});
+      articulosPendientesRegistrados,
+
+      resumen: {
+        filasMaterialesHetmo: materialesHetmo.length,
+        filasMecanizadoHetmo: filasMecanizado.length,
+        operacionesGeneradas: operaciones.length,
+      },
+    });
   } catch (error) {
     console.error("calcularMaterialesObra:", error);
 
@@ -1389,6 +1582,98 @@ exports.calcularMaterialesObra = async (req, res) => {
         error.statusCode === 400
           ? error.message
           : "Error al calcular materiales y operaciones",
+      detalle: error.message,
+    });
+  }
+};
+
+// ============================================================
+// LISTAR ARTÍCULOS PENDIENTES
+// ============================================================
+
+exports.getArticulosPendientes = async (req, res) => {
+  try {
+    await poolConnect;
+
+    const pool = await getPool();
+
+    /*
+     * Cada vez que se abre/recarga el modal verificamos
+     * automáticamente si alguno ya fue creado.
+     */
+    await limpiarArticulosPendientesResueltos(pool);
+
+    const result = await pool.request().query(`
+      SELECT
+        id_pendiente,
+        obra_version,
+        fase,
+        codigo,
+        descripcion,
+        cantidad,
+        fecha_deteccion,
+        fecha_ultima_deteccion,
+        usuario
+      FROM dbo.planificacion_articulos_pendientes
+      ORDER BY
+        fecha_ultima_deteccion DESC,
+        obra_version,
+        fase,
+        codigo;
+    `);
+
+    return res.json(result.recordset || []);
+  } catch (error) {
+    console.error("getArticulosPendientes:", error);
+
+    return res.status(500).json({
+      error: "Error al obtener los artículos pendientes de crear",
+      detalle: error.message,
+    });
+  }
+};
+
+// ============================================================
+// ELIMINAR MANUALMENTE UN PENDIENTE
+// ============================================================
+
+exports.deleteArticuloPendiente = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        error: "ID de pendiente inválido",
+      });
+    }
+
+    await poolConnect;
+
+    const pool = await getPool();
+
+    const result = await pool.request().input("id", sql.Int, id).query(`
+        DELETE FROM dbo.planificacion_articulos_pendientes
+        WHERE id_pendiente = @id;
+
+        SELECT @@ROWCOUNT AS affected;
+      `);
+
+    const afectados = Number(result.recordset?.[0]?.affected || 0);
+
+    if (!afectados) {
+      return res.status(404).json({
+        error: "El pendiente ya no existe",
+      });
+    }
+
+    return res.json({
+      ok: true,
+    });
+  } catch (error) {
+    console.error("deleteArticuloPendiente:", error);
+
+    return res.status(500).json({
+      error: "Error al eliminar el artículo pendiente",
       detalle: error.message,
     });
   }
@@ -1415,10 +1700,7 @@ exports.getPlanificacionCompartida = async (req, res) => {
     await poolConnect;
     const pool = await getPool();
 
-    const result = await pool
-      .request()
-      .input("mes", sql.Char(7), mes)
-      .query(`
+    const result = await pool.request().input("mes", sql.Char(7), mes).query(`
         SELECT TOP 1
           mes,
           contenido_json,
@@ -1446,16 +1728,13 @@ exports.getPlanificacionCompartida = async (req, res) => {
     let contenido = {};
 
     try {
-      contenido = JSON.parse(
-        String(fila.contenido_json || "{}")
-      );
+      contenido = JSON.parse(String(fila.contenido_json || "{}"));
     } catch {
       contenido = {};
     }
 
     const consultaHetmo =
-      contenido?.consultaHetmo &&
-      typeof contenido.consultaHetmo === "object"
+      contenido?.consultaHetmo && typeof contenido.consultaHetmo === "object"
         ? contenido.consultaHetmo
         : null;
 
@@ -1463,33 +1742,23 @@ exports.getPlanificacionCompartida = async (req, res) => {
       existe: true,
       mes: fila.mes,
 
-      obras: Array.isArray(contenido?.obras)
-        ? contenido.obras
-        : [],
+      obras: Array.isArray(contenido?.obras) ? contenido.obras : [],
 
       consultaHetmo,
 
-      usuario_creacion:
-        fila.usuario_creacion || null,
+      usuario_creacion: fila.usuario_creacion || null,
 
-      fecha_creacion:
-        fila.fecha_creacion || null,
+      fecha_creacion: fila.fecha_creacion || null,
 
-      usuario_modificacion:
-        fila.usuario_modificacion || null,
+      usuario_modificacion: fila.usuario_modificacion || null,
 
-      fecha_modificacion:
-        fila.fecha_modificacion || null,
+      fecha_modificacion: fila.fecha_modificacion || null,
     });
   } catch (error) {
-    console.error(
-      "getPlanificacionCompartida:",
-      error
-    );
+    console.error("getPlanificacionCompartida:", error);
 
     return res.status(500).json({
-      error:
-        "Error al obtener la planificación compartida",
+      error: "Error al obtener la planificación compartida",
       detalle: error.message,
     });
   }
@@ -1499,27 +1768,22 @@ exports.savePlanificacionCompartida = async (req, res) => {
   try {
     const mes = String(req.body?.mes || "").trim();
 
-    const obras = Array.isArray(req.body?.obras)
-      ? req.body.obras
-      : null;
+    const obras = Array.isArray(req.body?.obras) ? req.body.obras : null;
 
     const consultaHetmo =
-      req.body?.consultaHetmo &&
-      typeof req.body.consultaHetmo === "object"
+      req.body?.consultaHetmo && typeof req.body.consultaHetmo === "object"
         ? req.body.consultaHetmo
         : null;
 
     if (!mesPlanificacionValido(mes)) {
       return res.status(400).json({
-        error:
-          "Debe indicar un mes válido con formato AAAA-MM",
+        error: "Debe indicar un mes válido con formato AAAA-MM",
       });
     }
 
     if (!obras) {
       return res.status(400).json({
-        error:
-          "La planificación debe contener un arreglo de filas",
+        error: "La planificación debe contener un arreglo de filas",
       });
     }
 
@@ -1539,17 +1803,8 @@ exports.savePlanificacionCompartida = async (req, res) => {
     const result = await pool
       .request()
       .input("mes", sql.Char(7), mes)
-      .input(
-        "contenido_json",
-        sql.NVarChar(sql.MAX),
-        contenidoJson
-      )
-      .input(
-        "usuario",
-        sql.NVarChar(150),
-        usuario
-      )
-      .query(`
+      .input("contenido_json", sql.NVarChar(sql.MAX), contenidoJson)
+      .input("usuario", sql.NVarChar(150), usuario).query(`
         MERGE dbo.planificacion_produccion_mensual AS destino
 
         USING (
@@ -1591,22 +1846,16 @@ exports.savePlanificacionCompartida = async (req, res) => {
     return res.json({
       ok: true,
 
-      message:
-        `Planificación ${mes} guardada para todos los usuarios`,
+      message: `Planificación ${mes} guardada para todos los usuarios`,
 
       ...(result.recordset?.[0] || {}),
     });
   } catch (error) {
-    console.error(
-      "savePlanificacionCompartida:",
-      error
-    );
+    console.error("savePlanificacionCompartida:", error);
 
     return res.status(500).json({
-      error:
-        "Error al guardar la planificación compartida",
+      error: "Error al guardar la planificación compartida",
       detalle: error.message,
     });
   }
 };
-

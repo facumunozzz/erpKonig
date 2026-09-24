@@ -83,11 +83,7 @@ function getUsuarioReq(req) {
 }
 
 function normalizarFechaExcel(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    String(value).trim() === ""
-  ) {
+  if (value === null || value === undefined || String(value).trim() === "") {
     return null;
   }
 
@@ -95,10 +91,7 @@ function normalizarFechaExcel(value) {
    * Excel puede entregar la fecha como número serial
    * cuando la celda tiene formato General.
    */
-  if (
-    typeof value === "number" &&
-    Number.isFinite(value)
-  ) {
+  if (typeof value === "number" && Number.isFinite(value)) {
     const parsed = XLSX.SSF.parse_date_code(value);
 
     if (!parsed) {
@@ -121,9 +114,7 @@ function normalizarFechaExcel(value) {
   /*
    * Formato DD/MM/AAAA.
    */
-  const fechaArgentina = text.match(
-    /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/,
-  );
+  const fechaArgentina = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
 
   if (fechaArgentina) {
     const day = fechaArgentina[1].padStart(2, "0");
@@ -136,9 +127,7 @@ function normalizarFechaExcel(value) {
   /*
    * Formato AAAA-MM-DD.
    */
-  const fechaIso = text.match(
-    /^(\d{4})-(\d{1,2})-(\d{1,2})/,
-  );
+  const fechaIso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
 
   if (fechaIso) {
     const year = fechaIso[1];
@@ -272,8 +261,7 @@ async function upsertStockDelta(
     .input("depositoId", sql.Int, depositoId)
     .input("articuloId", sql.Int, articuloId)
     .input("ubicacionId", sql.Int, ubicacionId)
-    .input("delta", sql.Decimal(18, 2), Number(delta))
-    .query(`
+    .input("delta", sql.Decimal(18, 2), Number(delta)).query(`
       MERGE dbo.stock WITH (HOLDLOCK) AS destino
 
       USING (
@@ -319,8 +307,7 @@ async function tryDescontarStock(
     .input("depositoId", sql.Int, depositoId)
     .input("articuloId", sql.Int, articuloId)
     .input("ubicacionId", sql.Int, ubicacionId)
-    .input("delta", sql.Decimal(18, 2), Number(deltaNegativo))
-    .query(`
+    .input("delta", sql.Decimal(18, 2), Number(deltaNegativo)).query(`
       UPDATE dbo.stock
       SET cantidad = cantidad + @delta
       WHERE id_deposito = @depositoId
@@ -851,9 +838,7 @@ exports.getAll = async (req, res) => {
       .input("pageSize", sql.Int, pageSize)
       .input("incluirDropbox", sql.Bit, incluirDropbox ? 1 : 0);
 
-    const where = [
-      "(@incluirDropbox = 1 OR base.es_consumo_dropbox = 0)",
-    ];
+    const where = ["(@incluirDropbox = 1 OR base.es_consumo_dropbox = 0)"];
 
     const addLike = (key, value, expression, maxLength = 500) => {
       if (!value) {
@@ -903,9 +888,7 @@ exports.getAll = async (req, res) => {
       100,
     );
 
-    const whereSql = where.length
-      ? `WHERE ${where.join("\n AND ")}`
-      : "";
+    const whereSql = where.length ? `WHERE ${where.join("\n AND ")}` : "";
 
     const result = await request.query(`
       ;WITH detalle_flags AS
@@ -1323,9 +1306,11 @@ async function crearAjusteRecortes(req, res) {
     const motivo = await requireMotivoActivo(transaction, motivoId);
 
     if (referenteId !== null) {
-      const referenteResult = await new sql.Request(transaction)
-        .input("referenteId", sql.Int, referenteId)
-        .query(`
+      const referenteResult = await new sql.Request(transaction).input(
+        "referenteId",
+        sql.Int,
+        referenteId,
+      ).query(`
           SELECT id_referente, activo
           FROM dbo.referentes
           WHERE id_referente = @referenteId;
@@ -1356,8 +1341,7 @@ async function crearAjusteRecortes(req, res) {
       .input("fechaReal", sql.Date, fechaReal)
       .input("obra", sql.VarChar(255), obra)
       .input("version", sql.VarChar(255), version)
-      .input("referenteId", sql.Int, referenteId)
-      .query(`
+      .input("referenteId", sql.Int, referenteId).query(`
         INSERT INTO dbo.ajustes
         (
           numero_ajuste,
@@ -1393,8 +1377,7 @@ async function crearAjusteRecortes(req, res) {
     for (const item of items) {
       const recorteResult = await new sql.Request(transaction)
         .input("idRecorte", sql.Int, item.id_recorte)
-        .input("codigo", sql.VarChar(150), item.codigo)
-        .query(`
+        .input("codigo", sql.VarChar(150), item.codigo).query(`
           SELECT id_recorte, codigo, descripcion
           FROM dbo.recortes WITH (UPDLOCK, HOLDLOCK)
           WHERE id_recorte = @idRecorte
@@ -1403,14 +1386,14 @@ async function crearAjusteRecortes(req, res) {
         `);
 
       if (!recorteResult.recordset.length) {
-        throw new Error(
-          `El recorte ${item.codigo} no existe o está inactivo.`,
-        );
+        throw new Error(`El recorte ${item.codigo} no existe o está inactivo.`);
       }
 
-      const ubicacionResult = await new sql.Request(transaction)
-        .input("id", sql.Int, item.id_ubicacion_recorte)
-        .query(`
+      const ubicacionResult = await new sql.Request(transaction).input(
+        "id",
+        sql.Int,
+        item.id_ubicacion_recorte,
+      ).query(`
           SELECT id_ubicacion_recorte, nombre
           FROM dbo.recortes_ubicaciones WITH (UPDLOCK, HOLDLOCK)
           WHERE id_ubicacion_recorte = @id
@@ -1423,9 +1406,7 @@ async function crearAjusteRecortes(req, res) {
         );
       }
 
-      const nombreUbicacion = String(
-        ubicacionResult.recordset[0].nombre || "",
-      );
+      const nombreUbicacion = String(ubicacionResult.recordset[0].nombre || "");
 
       if (item.cantidad < 0) {
         const descuento = await new sql.Request(transaction)
@@ -1452,8 +1433,7 @@ async function crearAjusteRecortes(req, res) {
           .input("idRecorte", sql.Int, item.id_recorte)
           .input("idUbicacion", sql.Int, item.id_ubicacion_recorte)
           .input("ubicacion", sql.VarChar(150), nombreUbicacion)
-          .input("cantidad", sql.Decimal(18, 3), item.cantidad)
-          .query(`
+          .input("cantidad", sql.Decimal(18, 3), item.cantidad).query(`
             UPDATE dbo.stock_recortes
             SET
               cantidad = cantidad + @cantidad,
@@ -1492,13 +1472,8 @@ async function crearAjusteRecortes(req, res) {
         )
         .input("cantidad", sql.Decimal(18, 3), item.cantidad)
         .input("idRecorte", sql.Int, item.id_recorte)
-        .input(
-          "idUbicacionRecorte",
-          sql.Int,
-          item.id_ubicacion_recorte,
-        )
-        .input("usuario", sql.VarChar(255), usuario)
-        .query(`
+        .input("idUbicacionRecorte", sql.Int, item.id_ubicacion_recorte)
+        .input("usuario", sql.VarChar(255), usuario).query(`
           INSERT INTO dbo.ajustes_detalles
           (
             ajuste_id,
@@ -1623,21 +1598,21 @@ exports.create = async (req, res) => {
 
     const ubicacionItemId = asInt(item?.id_ubicacion);
 
-if (!Number.isFinite(ubicacionItemId) || ubicacionItemId <= 0) {
-  continue;
-}
+    if (!Number.isFinite(ubicacionItemId) || ubicacionItemId <= 0) {
+      continue;
+    }
 
-const clave = `${codigo}|${ubicacionItemId}`;
+    const clave = `${codigo}|${ubicacionItemId}`;
 
-const actual = agrupados.get(clave) || {
-  codigo,
-  cantidad: 0,
-  id_ubicacion: ubicacionItemId,
-};
+    const actual = agrupados.get(clave) || {
+      codigo,
+      cantidad: 0,
+      id_ubicacion: ubicacionItemId,
+    };
 
-actual.cantidad += cantidad;
+    actual.cantidad += cantidad;
 
-agrupados.set(clave, actual);
+    agrupados.set(clave, actual);
   }
 
   const items = Array.from(agrupados.values());
@@ -2394,19 +2369,12 @@ async function insertAlertaConsumoProduccion(
   },
 ) {
   const numeroMovimientoDb =
-    numeroMovimiento == null
-      ? null
-      : Number(numeroMovimiento);
+    numeroMovimiento == null ? null : Number(numeroMovimiento);
 
-  const codigoDb =
-    codigo == null
-      ? null
-      : String(codigo).trim();
+  const codigoDb = codigo == null ? null : String(codigo).trim();
 
   const cantidadFaltanteDb =
-    cantidadFaltante == null
-      ? null
-      : Number(cantidadFaltante);
+    cantidadFaltante == null ? null : Number(cantidadFaltante);
 
   /*
    * Evita insertar dos alertas pendientes para el mismo
@@ -2417,22 +2385,9 @@ async function insertAlertaConsumoProduccion(
    * 2. nuevamente desde grupo.fallidos.
    */
   const existente = await new sql.Request(transaction)
-    .input(
-      "numeroMovimiento",
-      sql.Int,
-      numeroMovimientoDb,
-    )
-    .input(
-      "codigo",
-      sql.VarChar(100),
-      codigoDb,
-    )
-    .input(
-      "cantidadFaltante",
-      sql.Int,
-      cantidadFaltanteDb,
-    )
-    .query(`
+    .input("numeroMovimiento", sql.Int, numeroMovimientoDb)
+    .input("codigo", sql.VarChar(100), codigoDb)
+    .input("cantidadFaltante", sql.Int, cantidadFaltanteDb).query(`
       SELECT TOP 1
         id_alerta
       FROM dbo.consumo_produccion_alertas
@@ -2448,65 +2403,32 @@ async function insertAlertaConsumoProduccion(
   }
 
   const result = await new sql.Request(transaction)
-    .input(
-      "numeroMovimiento",
-      sql.Int,
-      numeroMovimientoDb,
-    )
+    .input("numeroMovimiento", sql.Int, numeroMovimientoDb)
     .input(
       "obra",
       sql.NVarChar(sql.MAX),
-      obra == null
-        ? null
-        : String(obra).trim(),
+      obra == null ? null : String(obra).trim(),
     )
     .input(
       "version",
       sql.NVarChar(sql.MAX),
-      version == null
-        ? null
-        : String(version).trim(),
+      version == null ? null : String(version).trim(),
     )
-    .input(
-      "codigo",
-      sql.VarChar(100),
-      codigoDb,
-    )
+    .input("codigo", sql.VarChar(100), codigoDb)
     .input(
       "descripcion",
       sql.VarChar(500),
-      descripcion == null
-        ? null
-        : String(descripcion).trim(),
+      descripcion == null ? null : String(descripcion).trim(),
     )
-    .input(
-      "cantidadRequerida",
-      sql.Int,
-      cantidadRequerida ?? null,
-    )
-    .input(
-      "cantidadAjustada",
-      sql.Int,
-      cantidadAjustada ?? null,
-    )
-    .input(
-      "cantidadFaltante",
-      sql.Int,
-      cantidadFaltanteDb,
-    )
+    .input("cantidadRequerida", sql.Int, cantidadRequerida ?? null)
+    .input("cantidadAjustada", sql.Int, cantidadAjustada ?? null)
+    .input("cantidadFaltante", sql.Int, cantidadFaltanteDb)
     .input(
       "motivo",
       sql.NVarChar(sql.MAX),
-      motivo == null
-        ? null
-        : String(motivo).trim(),
+      motivo == null ? null : String(motivo).trim(),
     )
-    .input(
-      "fechaLinea",
-      sql.Date,
-      fechaLinea ?? null,
-    )
-    .query(`
+    .input("fechaLinea", sql.Date, fechaLinea ?? null).query(`
       INSERT INTO dbo.consumo_produccion_alertas
       (
         numero_movimiento,
@@ -2557,9 +2479,11 @@ function generarIdConsumoProduccion() {
 }
 
 async function consumoProduccionYaProcesado(transaction, idConsumo) {
-  const result = await new sql.Request(transaction)
-    .input("idConsumo", sql.VarChar(64), idConsumo)
-    .query(`
+  const result = await new sql.Request(transaction).input(
+    "idConsumo",
+    sql.VarChar(64),
+    idConsumo,
+  ).query(`
       SELECT TOP 1 id_consumo
       FROM dbo.consumo_produccion_procesados
       WITH (UPDLOCK, HOLDLOCK)
@@ -2580,28 +2504,66 @@ async function buscarAlertaHistoricaConsumo(
     .input("version", sql.NVarChar(sql.MAX), version ?? null)
     .input("codigo", sql.VarChar(100), codigoBusqueda)
     .input("faltante", sql.Int, Number(faltante || 0))
-    .input("fechaLinea", sql.Date, fechaLinea ?? null)
-    .query(`
+    .input("fechaLinea", sql.Date, fechaLinea ?? null).query(`
       SELECT TOP 1
         id_alerta,
         numero_movimiento,
         cantidad_ajustada,
         cantidad_faltante,
         motivo,
-        leida
+        leida,
+        fecha_linea
+
       FROM dbo.consumo_produccion_alertas
-      WHERE ISNULL(LTRIM(RTRIM(obra)), '') =
-            ISNULL(LTRIM(RTRIM(@obra)), '')
+
+      WHERE
+        ISNULL(LTRIM(RTRIM(obra)), '') =
+          ISNULL(LTRIM(RTRIM(@obra)), '')
+
         AND ISNULL(LTRIM(RTRIM(version)), '') =
-            ISNULL(LTRIM(RTRIM(@version)), '')
-        AND UPPER(LTRIM(RTRIM(ISNULL(codigo, '')))) =
-            UPPER(LTRIM(RTRIM(ISNULL(@codigo, ''))))
+          ISNULL(LTRIM(RTRIM(@version)), '')
+
+        AND UPPER(
+          LTRIM(
+            RTRIM(
+              ISNULL(codigo, '')
+            )
+          )
+        ) =
+        UPPER(
+          LTRIM(
+            RTRIM(
+              ISNULL(@codigo, '')
+            )
+          )
+        )
+
         AND ISNULL(cantidad_faltante, 0) = @faltante
-        AND leida = 0
-        AND (
+
+        /*
+         * IMPORTANTE:
+         *
+         * Una alerta leída SIGUE significando que
+         * esa línea ya fue intentada.
+         *
+         * "leida" solamente controla la visualización
+         * de Revisiones Dropbox.
+         *
+         * NO controla si se debe volver a consumir.
+         */
+
+        AND
+        (
           @fechaLinea IS NULL
           OR fecha_linea = @fechaLinea
+
+          /*
+           * Compatibilidad con alertas viejas que fueron
+           * creadas antes de guardar fecha_linea.
+           */
+          OR fecha_linea IS NULL
         )
+
       ORDER BY id_alerta DESC;
     `);
 
@@ -2635,8 +2597,7 @@ async function registrarConsumoProduccionProcesado(
     .input("ajustado", sql.Decimal(18, 3), Number(ajustado || 0))
     .input("faltante", sql.Decimal(18, 3), Number(faltante || 0))
     .input("resultado", sql.VarChar(30), resultado)
-    .input("motivo", sql.NVarChar(1000), motivo ?? null)
-    .query(`
+    .input("motivo", sql.NVarChar(1000), motivo ?? null).query(`
       IF NOT EXISTS
       (
         SELECT 1
@@ -2765,7 +2726,6 @@ async function runConsumoProduccion() {
         "El consumo de producción ya se está ejecutando en otro proceso.",
       );
     }
-
 
     const motivoId = await getMotivoIdByNombreActivo(
       transaction,
@@ -2992,6 +2952,7 @@ async function runConsumoProduccion() {
           faltante: diferencia,
           obra,
           version,
+          fechaLinea,
           motivo: "Código vacío",
           idConsumo,
         });
@@ -3041,6 +3002,7 @@ async function runConsumoProduccion() {
           faltante: diferencia,
           obra,
           version,
+          fechaLinea,
           motivo: "Código inexistente",
           idConsumo,
         });
@@ -3076,6 +3038,21 @@ async function runConsumoProduccion() {
       const faltante = diferencia - ajustable;
 
       if (ajustable <= 0) {
+        /*
+         * FALLA TOTAL.
+         *
+         * No hay nada para descontar.
+         *
+         * Debe generarse:
+         *
+         * 1) UNA línea de movimiento con cantidad 0.
+         * 2) UNA alerta.
+         * 3) El ID queda registrado como procesado.
+         *
+         * NO agregar este artículo a grupo.articulos porque
+         * después generaría una segunda línea/alerta.
+         */
+
         registrarFallo(grupo, {
           row: excelRow,
           codigo,
@@ -3085,6 +3062,7 @@ async function runConsumoProduccion() {
           faltante: diferencia,
           obra,
           version,
+          fechaLinea,
           motivo: "Sin stock disponible",
           idConsumo,
         });
@@ -3100,17 +3078,6 @@ async function runConsumoProduccion() {
           faltante: diferencia,
           resultado: "FALLIDO",
           motivo: "Sin stock disponible",
-        });
-
-        const anterior = grupo.articulos.get(codigo);
-
-        grupo.articulos.set(codigo, {
-          descripcion,
-          delta: anterior?.delta || 0,
-          requerido: (anterior?.requerido || 0) + diferencia,
-          faltante: (anterior?.faltante || 0) + diferencia,
-          fechaLinea,
-          observacion: "Sin stock disponible",
         });
 
         continue;
@@ -3133,6 +3100,7 @@ async function runConsumoProduccion() {
           faltante: diferencia,
           obra,
           version,
+          fechaLinea,
           motivo: "No se pudo descontar stock",
           idConsumo,
         });
@@ -3154,8 +3122,7 @@ async function runConsumoProduccion() {
       }
 
       row[6] = yaAjustado + ajustable;
-      const quedoCompletamenteAjustado =
-        Number(row[6]) >= requerido;
+      const quedoCompletamenteAjustado = Number(row[6]) >= requerido;
 
       itemsCorrectos.push({
         row: excelRow,
@@ -3185,21 +3152,6 @@ async function runConsumoProduccion() {
             ? "Stock parcial: se ajustó hasta cero"
             : "Ajustado correctamente",
       });
-
-      if (faltante > 0) {
-        registrarFallo(grupo, {
-          row: excelRow,
-          codigo,
-          descripcion,
-          requerido: diferencia,
-          ajustado: ajustable,
-          faltante,
-          obra,
-          version,
-          motivo: "Stock parcial: se ajustó hasta cero",
-          idConsumo,
-        });
-      }
 
       const anterior = grupo.articulos.get(codigo);
 
@@ -3482,11 +3434,7 @@ exports.marcarAlertasConsumoLeidas = async (req, res) => {
     const ids = Array.isArray(req.body?.ids)
       ? req.body.ids
           .map((id) => asInt(id))
-          .filter(
-            (id) =>
-              Number.isFinite(id) &&
-              id > 0,
-          )
+          .filter((id) => Number.isFinite(id) && id > 0)
       : [];
 
     if (!ids.length) {
@@ -3504,11 +3452,7 @@ exports.marcarAlertasConsumoLeidas = async (req, res) => {
     const parametros = ids.map((id, index) => {
       const nombre = `id${index}`;
 
-      request.input(
-        nombre,
-        sql.Int,
-        id,
-      );
+      request.input(nombre, sql.Int, id);
 
       return `@${nombre}`;
     });
@@ -3590,19 +3534,13 @@ exports.marcarAlertasConsumoLeidas = async (req, res) => {
 
     return res.json({
       ok: true,
-      afectados: Number(
-        result.recordset?.[0]?.afectados || 0,
-      ),
+      afectados: Number(result.recordset?.[0]?.afectados || 0),
     });
   } catch (err) {
-    console.error(
-      "ajustes.marcarAlertasConsumoLeidas:",
-      err,
-    );
+    console.error("ajustes.marcarAlertasConsumoLeidas:", err);
 
     return res.status(500).json({
-      error:
-        "Error al marcar alertas como resueltas",
+      error: "Error al marcar alertas como resueltas",
       detalle: err.message,
     });
   }
@@ -3865,7 +3803,11 @@ exports.saveDraft = async (req, res) => {
         .input("proveedor", sql.NVarChar(255), proveedor || null)
         .input("stock", sql.NVarChar(50), stock || null)
         .input("stockTotal", sql.NVarChar(50), stockTotal || null)
-        .input("idRecorte", sql.Int, Number.isFinite(idRecorte) && idRecorte > 0 ? idRecorte : null)
+        .input(
+          "idRecorte",
+          sql.Int,
+          Number.isFinite(idRecorte) && idRecorte > 0 ? idRecorte : null,
+        )
         .input(
           "idUbicacion",
           sql.Int,
@@ -3927,7 +3869,6 @@ exports.saveDraft = async (req, res) => {
     });
   }
 };
-
 
 exports.getDraftById = async (req, res) => {
   try {
@@ -4180,7 +4121,6 @@ exports.confirmDraft = async (req, res) => {
   }
 };
 
-
 // ========================================================
 // REVERSIÓN DE MOVIMIENTOS POR REFERENCIA
 // ========================================================
@@ -4222,17 +4162,15 @@ function createDbRequest(executor) {
 }
 
 async function getEfectosPorReferencia(
-  executor, 
-  referencia, 
+  executor,
+  referencia,
   tablasReversion = null,
 ) {
   const efectos = [];
 
-  const tablas =
-    tablasReversion ||
-    (await getTablasReversion(executor));
-  
-   const {
+  const tablas = tablasReversion || (await getTablasReversion(executor));
+
+  const {
     transferenciaDetalle,
     ajusteDetalle,
     ajustesTable,
@@ -4576,104 +4514,75 @@ async function getEfectosPorReferencia(
   }
 
   return efectos
-  .map((row, index) => {
-    const tipoOriginal = String(
-      row.tipo_original || "",
-    )
-      .trim()
-      .toUpperCase();
+    .map((row, index) => {
+      const tipoOriginal = String(row.tipo_original || "")
+        .trim()
+        .toUpperCase();
 
-    const numeroOriginal = String(
-      row.numero_original || "",
-    ).trim();
+      const numeroOriginal = String(row.numero_original || "").trim();
 
-    const deposito = String(
-      row.deposito || "",
-    )
-      .trim()
-      .toUpperCase();
+      const deposito = String(row.deposito || "")
+        .trim()
+        .toUpperCase();
 
-    const codigo = String(
-      row.codigo || "",
-    )
-      .trim()
-      .toUpperCase();
+      const codigo = String(row.codigo || "")
+        .trim()
+        .toUpperCase();
 
-    const cantidadOriginal = Number(
-      row.cantidad_original || 0,
-    );
+      const cantidadOriginal = Number(row.cantidad_original || 0);
 
-    const cantidadReversion = Number(
-      row.cantidad_reversion || 0,
-    );
+      const cantidadReversion = Number(row.cantidad_reversion || 0);
 
-    /*
-     * El índice se agrega para diferenciar líneas repetidas
-     * dentro de una misma transacción.
-     */
-    const idMovimientoOriginal = [
-      tipoOriginal,
-      numeroOriginal,
-      deposito,
-      codigo,
-      cantidadOriginal,
-      index,
-    ].join("|");
-
-    return {
-      ...row,
-
-      id_movimiento_original:
-        idMovimientoOriginal,
-
-      cantidad_original:
+      /*
+       * El índice se agrega para diferenciar líneas repetidas
+       * dentro de una misma transacción.
+       */
+      const idMovimientoOriginal = [
+        tipoOriginal,
+        numeroOriginal,
+        deposito,
+        codigo,
         cantidadOriginal,
+        index,
+      ].join("|");
 
-      cantidad_reversion:
-        cantidadReversion,
+      return {
+        ...row,
 
-      id_referente:
-        row.id_referente == null
-          ? null
-          : Number(row.id_referente),
-    };
-  })
-  .filter(
-    (row) =>
-      row.codigo &&
-      row.deposito &&
-      row.cantidad_reversion !== 0,
-  );
+        id_movimiento_original: idMovimientoOriginal,
+
+        cantidad_original: cantidadOriginal,
+
+        cantidad_reversion: cantidadReversion,
+
+        id_referente:
+          row.id_referente == null ? null : Number(row.id_referente),
+      };
+    })
+    .filter(
+      (row) => row.codigo && row.deposito && row.cantidad_reversion !== 0,
+    );
 }
 
 async function getTablasReversion(executor) {
-  const transferenciaDetalle =
-    await getExistingTableName(executor, [
-      "transferencias_detalle",
-      "transferencia_detalles",
-      "transferencias_detalles",
-    ]);
+  const transferenciaDetalle = await getExistingTableName(executor, [
+    "transferencias_detalle",
+    "transferencia_detalles",
+    "transferencias_detalles",
+  ]);
 
-  const ajusteDetalle =
-    await getExistingTableName(executor, [
-      "ajustes_detalles",
-      "ajuste_detalles",
-    ]);
+  const ajusteDetalle = await getExistingTableName(executor, [
+    "ajustes_detalles",
+    "ajuste_detalles",
+  ]);
 
-  const ajustesTable =
-    await getExistingTableName(executor, [
-      "ajustes",
-    ]);
+  const ajustesTable = await getExistingTableName(executor, ["ajustes"]);
 
-  const remitosTable =
-    await getExistingTableName(executor, [
-      "remitos",
-    ]);
+  const remitosTable = await getExistingTableName(executor, ["remitos"]);
 
-  const remitosDetalle =
-    await getExistingTableName(executor, [
-      "remitos_detalles",
-    ]);
+  const remitosDetalle = await getExistingTableName(executor, [
+    "remitos_detalles",
+  ]);
 
   return {
     transferenciaDetalle,
@@ -4776,19 +4685,10 @@ async function procesarReferenciasEnLotes(
 ) {
   const resultados = [];
 
-  for (
-    let inicio = 0;
-    inicio < referencias.length;
-    inicio += cantidadPorLote
-  ) {
-    const lote = referencias.slice(
-      inicio,
-      inicio + cantidadPorLote,
-    );
+  for (let inicio = 0; inicio < referencias.length; inicio += cantidadPorLote) {
+    const lote = referencias.slice(inicio, inicio + cantidadPorLote);
 
-    const resultadosLote = await Promise.all(
-      lote.map(callback),
-    );
+    const resultadosLote = await Promise.all(lote.map(callback));
 
     for (const resultado of resultadosLote) {
       if (Array.isArray(resultado)) {
@@ -4800,10 +4700,7 @@ async function procesarReferenciasEnLotes(
   return resultados;
 }
 
-async function obtenerIdsYaRevertidos(
-  poolOrTransaction,
-  idsMovimientos,
-) {
+async function obtenerIdsYaRevertidos(poolOrTransaction, idsMovimientos) {
   const ids = [
     ...new Set(
       (idsMovimientos || [])
@@ -4824,28 +4721,15 @@ async function obtenerIdsYaRevertidos(
    */
   const cantidadPorLote = 500;
 
-  for (
-    let inicio = 0;
-    inicio < ids.length;
-    inicio += cantidadPorLote
-  ) {
-    const lote = ids.slice(
-      inicio,
-      inicio + cantidadPorLote,
-    );
+  for (let inicio = 0; inicio < ids.length; inicio += cantidadPorLote) {
+    const lote = ids.slice(inicio, inicio + cantidadPorLote);
 
-    const request = new sql.Request(
-      poolOrTransaction,
-    );
+    const request = new sql.Request(poolOrTransaction);
 
     const parametros = lote.map((id, index) => {
       const nombre = `idMovimiento${index}`;
 
-      request.input(
-        nombre,
-        sql.NVarChar(600),
-        id,
-      );
+      request.input(nombre, sql.NVarChar(600), id);
 
       return `@${nombre}`;
     });
@@ -4860,9 +4744,7 @@ async function obtenerIdsYaRevertidos(
     `);
 
     for (const fila of result.recordset || []) {
-      const id = String(
-        fila.id_movimiento_original || "",
-      ).trim();
+      const id = String(fila.id_movimiento_original || "").trim();
 
       if (id) {
         idsRevertidos.add(id);
@@ -4881,39 +4763,25 @@ exports.buscarMovimientosParaReversion = async (req, res) => {
       .trim()
       .toLowerCase();
 
-    const referencia = String(
-      req.query?.referencia || "",
-    ).trim();
+    const referencia = String(req.query?.referencia || "").trim();
 
     const obra = String(req.query?.obra || "").trim();
 
-    const version = String(
-      req.query?.version || "",
-    ).trim();
+    const version = String(req.query?.version || "").trim();
 
-    if (
-      !["referencia", "obra_version"].includes(
-        modo,
-      )
-    ) {
+    if (!["referencia", "obra_version"].includes(modo)) {
       return res.status(400).json({
         error: "Modo de búsqueda inválido",
       });
     }
 
-    if (
-      modo === "referencia" &&
-      !referencia
-    ) {
+    if (modo === "referencia" && !referencia) {
       return res.status(400).json({
         error: "Debe indicar una referencia",
       });
     }
 
-    if (
-      modo === "obra_version" &&
-      (!obra || !version)
-    ) {
+    if (modo === "obra_version" && (!obra || !version)) {
       return res.status(400).json({
         error: "Debe indicar obra y versión",
       });
@@ -4926,12 +4794,11 @@ exports.buscarMovimientosParaReversion = async (req, res) => {
     let movimientos = [];
 
     if (modo === "referencia") {
-      movimientos =
-        await getEfectosPorReferencia(
-          pool,
-          referencia,
-          tablasReversion,
-        );
+      movimientos = await getEfectosPorReferencia(
+        pool,
+        referencia,
+        tablasReversion,
+      );
     } else {
       /*
        * Gracias al índice IX_ajustes_obra_version,
@@ -4940,17 +4807,8 @@ exports.buscarMovimientosParaReversion = async (req, res) => {
        */
       const referenciasResult = await pool
         .request()
-        .input(
-          "obra",
-          sql.NVarChar(200),
-          obra,
-        )
-        .input(
-          "version",
-          sql.NVarChar(100),
-          version,
-        )
-        .query(`
+        .input("obra", sql.NVarChar(200), obra)
+        .input("version", sql.NVarChar(100), version).query(`
           SELECT DISTINCT
             remito_referencia
           FROM dbo.ajustes
@@ -4962,51 +4820,35 @@ exports.buscarMovimientosParaReversion = async (req, res) => {
 
       const referencias = [
         ...new Set(
-          (
-            referenciasResult.recordset ||
-            []
-          )
-            .map((fila) =>
-              String(
-                fila.remito_referencia ||
-                  "",
-              ).trim(),
-            )
+          (referenciasResult.recordset || [])
+            .map((fila) => String(fila.remito_referencia || "").trim())
             .filter(Boolean),
         ),
       ];
 
       if (!referencias.length) {
         return res.status(404).json({
-          error:
-            "No se encontraron referencias para esa obra y versión",
+          error: "No se encontraron referencias para esa obra y versión",
         });
       }
 
-      movimientos =
-        await procesarReferenciasEnLotes(
-          referencias,
-          15,
-          async (
+      movimientos = await procesarReferenciasEnLotes(
+        referencias,
+        15,
+        async (referenciaEncontrada) => {
+          const encontrados = await getEfectosPorReferencia(
+            pool,
             referenciaEncontrada,
-          ) => {
-            const encontrados =
-              await getEfectosPorReferencia(
-                pool,
-                referenciaEncontrada,
-                tablasReversion,
-              );
+            tablasReversion,
+          );
 
-            return encontrados.map(
-              (movimiento) => ({
-                ...movimiento,
+          return encontrados.map((movimiento) => ({
+            ...movimiento,
 
-                referencia_busqueda:
-                  referenciaEncontrada,
-              }),
-            );
-          },
-        );
+            referencia_busqueda: referenciaEncontrada,
+          }));
+        },
+      );
     }
 
     /*
@@ -5016,10 +4858,7 @@ exports.buscarMovimientosParaReversion = async (req, res) => {
     const idsEncontrados = new Set();
 
     for (const movimiento of movimientos) {
-      const id = String(
-        movimiento.id_movimiento_original ||
-          "",
-      ).trim();
+      const id = String(movimiento.id_movimiento_original || "").trim();
 
       if (!id) {
         continue;
@@ -5054,29 +4893,18 @@ exports.buscarMovimientosParaReversion = async (req, res) => {
      * Antes se descargaba la tabla completa de
      * ajustes_reversiones_detalles.
      */
-    const idsRevertidos =
-      await obtenerIdsYaRevertidos(
-        pool,
-        movimientosUnicos.map(
-          (movimiento) =>
-            movimiento.id_movimiento_original,
-        ),
-      );
+    const idsRevertidos = await obtenerIdsYaRevertidos(
+      pool,
+      movimientosUnicos.map((movimiento) => movimiento.id_movimiento_original),
+    );
 
-    const movimientosDisponibles =
-      movimientosUnicos.map(
-        (movimiento) => ({
-          ...movimiento,
+    const movimientosDisponibles = movimientosUnicos.map((movimiento) => ({
+      ...movimiento,
 
-          ya_revertido:
-            idsRevertidos.has(
-              movimiento.id_movimiento_original,
-            ),
-        }),
-      );
+      ya_revertido: idsRevertidos.has(movimiento.id_movimiento_original),
+    }));
 
-    const tiempoMs =
-      Date.now() - inicioProceso;
+    const tiempoMs = Date.now() - inicioProceso;
 
     console.log(
       [
@@ -5091,44 +4919,27 @@ exports.buscarMovimientosParaReversion = async (req, res) => {
     return res.json({
       modo,
 
-      referencia:
-        modo === "referencia"
-          ? referencia
-          : null,
+      referencia: modo === "referencia" ? referencia : null,
 
-      obra:
-        modo === "obra_version"
-          ? obra
-          : null,
+      obra: modo === "obra_version" ? obra : null,
 
-      version:
-        modo === "obra_version"
-          ? version
-          : null,
+      version: modo === "obra_version" ? version : null,
 
-      cantidad_movimientos:
-        movimientosDisponibles.length,
+      cantidad_movimientos: movimientosDisponibles.length,
 
-      cantidad_disponibles:
-        movimientosDisponibles.filter(
-          (movimiento) =>
-            !movimiento.ya_revertido,
-        ).length,
+      cantidad_disponibles: movimientosDisponibles.filter(
+        (movimiento) => !movimiento.ya_revertido,
+      ).length,
 
       tiempo_ms: tiempoMs,
 
-      movimientos:
-        movimientosDisponibles,
+      movimientos: movimientosDisponibles,
     });
   } catch (err) {
-    console.error(
-      "ajustes.buscarMovimientosParaReversion:",
-      err,
-    );
+    console.error("ajustes.buscarMovimientosParaReversion:", err);
 
     return res.status(500).json({
-      error:
-        "Error al buscar movimientos para reversión",
+      error: "Error al buscar movimientos para reversión",
 
       detalle: err.message,
     });
@@ -5140,65 +4951,39 @@ exports.buscarMovimientosParaReversion = async (req, res) => {
 // ========================================================
 
 exports.revertirReferencia = async (req, res) => {
-  const modo = String(
-    req.body?.modo || "",
-  )
+  const modo = String(req.body?.modo || "")
     .trim()
     .toLowerCase();
 
-  const referencia = String(
-    req.body?.referencia || "",
-  ).trim();
+  const referencia = String(req.body?.referencia || "").trim();
 
-  const obra = String(
-    req.body?.obra || "",
-  ).trim();
+  const obra = String(req.body?.obra || "").trim();
 
-  const version = String(
-    req.body?.version || "",
-  ).trim();
+  const version = String(req.body?.version || "").trim();
 
-  const confirmar =
-    req.body?.confirmar === true;
+  const confirmar = req.body?.confirmar === true;
 
-  const movimientosSeleccionados =
-    Array.isArray(req.body?.movimientos)
-      ? req.body.movimientos
-          .map((id) =>
-            String(id || "").trim(),
-          )
-          .filter(Boolean)
-      : [];
+  const movimientosSeleccionados = Array.isArray(req.body?.movimientos)
+    ? req.body.movimientos.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
 
-  const motivoUsuario = toDb(
-    req.body?.motivo,
-  );
+  const motivoUsuario = toDb(req.body?.motivo);
 
   const usuario = getUsuarioReq(req);
 
-  if (
-    !["referencia", "obra_version"].includes(
-      modo,
-    )
-  ) {
+  if (!["referencia", "obra_version"].includes(modo)) {
     return res.status(400).json({
       error: "Modo de reversión inválido",
     });
   }
 
-  if (
-    modo === "referencia" &&
-    !referencia
-  ) {
+  if (modo === "referencia" && !referencia) {
     return res.status(400).json({
       error: "Debe indicar una referencia",
     });
   }
 
-  if (
-    modo === "obra_version" &&
-    (!obra || !version)
-  ) {
+  if (modo === "obra_version" && (!obra || !version)) {
     return res.status(400).json({
       error: "Debe indicar obra y versión",
     });
@@ -5206,15 +4991,13 @@ exports.revertirReferencia = async (req, res) => {
 
   if (!confirmar) {
     return res.status(400).json({
-      error:
-        "La reversión requiere confirmar: true",
+      error: "La reversión requiere confirmar: true",
     });
   }
 
   if (!movimientosSeleccionados.length) {
     return res.status(400).json({
-      error:
-        "Debe seleccionar al menos un movimiento para revertir",
+      error: "Debe seleccionar al menos un movimiento para revertir",
     });
   }
 
@@ -5227,32 +5010,20 @@ exports.revertirReferencia = async (req, res) => {
     transaction = new sql.Transaction(pool);
 
     await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-    const tablasReversion =
-      await getTablasReversion(transaction);
+    const tablasReversion = await getTablasReversion(transaction);
 
     let todosLosMovimientos = [];
 
-if (modo === "referencia") {
-  todosLosMovimientos =
-    await getEfectosPorReferencia(
-      transaction,
-      referencia,
-      tablasReversion,
-    );
-} else {
-  const referenciasResult =
-    await new sql.Request(transaction)
-      .input(
-        "obra",
-        sql.NVarChar(200),
-        obra,
-      )
-      .input(
-        "version",
-        sql.NVarChar(100),
-        version,
-      )
-      .query(`
+    if (modo === "referencia") {
+      todosLosMovimientos = await getEfectosPorReferencia(
+        transaction,
+        referencia,
+        tablasReversion,
+      );
+    } else {
+      const referenciasResult = await new sql.Request(transaction)
+        .input("obra", sql.NVarChar(200), obra)
+        .input("version", sql.NVarChar(100), version).query(`
         SELECT DISTINCT
           remito_referencia
         FROM dbo.ajustes
@@ -5262,48 +5033,33 @@ if (modo === "referencia") {
           AND remito_referencia <> '';
       `);
 
-  const referencias = [
-    ...new Set(
-      (referenciasResult.recordset || [])
-        .map((fila) =>
-          String(
-            fila.remito_referencia || "",
-          ).trim(),
-        )
-        .filter(Boolean),
-    ),
-  ];
-
-  todosLosMovimientos = [];
-  for (const referenciaEncontrada of referencias) {
-    const movimientosReferencia =
-      await getEfectosPorReferencia(
-        transaction,
-        referenciaEncontrada,
-        tablasReversion,
-      );
-
-    todosLosMovimientos.push(
-      ...movimientosReferencia,
-    );
-  }
-}
-
-const seleccionadosSet = new Set(
-  movimientosSeleccionados,
-);
-
-const movimientos =
-  todosLosMovimientos.filter(
-    (movimiento) =>
-      seleccionadosSet.has(
-        String(
-          movimiento.id_movimiento_original,
+      const referencias = [
+        ...new Set(
+          (referenciasResult.recordset || [])
+            .map((fila) => String(fila.remito_referencia || "").trim())
+            .filter(Boolean),
         ),
-      ),
-  );
+      ];
 
-if (!movimientos.length) {
+      todosLosMovimientos = [];
+      for (const referenciaEncontrada of referencias) {
+        const movimientosReferencia = await getEfectosPorReferencia(
+          transaction,
+          referenciaEncontrada,
+          tablasReversion,
+        );
+
+        todosLosMovimientos.push(...movimientosReferencia);
+      }
+    }
+
+    const seleccionadosSet = new Set(movimientosSeleccionados);
+
+    const movimientos = todosLosMovimientos.filter((movimiento) =>
+      seleccionadosSet.has(String(movimiento.id_movimiento_original)),
+    );
+
+    if (!movimientos.length) {
       await transaction.rollback();
 
       return res.status(404).json({
@@ -5311,27 +5067,21 @@ if (!movimientos.length) {
       });
     }
 
-    const requestRevertidos =
-  new sql.Request(transaction);
+    const requestRevertidos = new sql.Request(transaction);
 
-const parametrosRevertidos =
-  movimientos.map(
-    (_, index) =>
-      `@movimiento${index}`,
-  );
-
-movimientos.forEach(
-  (movimiento, index) => {
-    requestRevertidos.input(
-      `movimiento${index}`,
-      sql.NVarChar(600),
-      movimiento.id_movimiento_original,
+    const parametrosRevertidos = movimientos.map(
+      (_, index) => `@movimiento${index}`,
     );
-  },
-);
 
-const revertidosResult =
-  await requestRevertidos.query(`
+    movimientos.forEach((movimiento, index) => {
+      requestRevertidos.input(
+        `movimiento${index}`,
+        sql.NVarChar(600),
+        movimiento.id_movimiento_original,
+      );
+    });
+
+    const revertidosResult = await requestRevertidos.query(`
     SELECT
       id_movimiento_original
 
@@ -5344,17 +5094,15 @@ const revertidosResult =
     );
   `);
 
-if (revertidosResult.recordset.length) {
-  await transaction.rollback();
+    if (revertidosResult.recordset.length) {
+      await transaction.rollback();
 
-  return res.status(409).json({
-    error:
-      "Uno o más movimientos seleccionados ya fueron revertidos",
+      return res.status(409).json({
+        error: "Uno o más movimientos seleccionados ya fueron revertidos",
 
-    movimientos:
-      revertidosResult.recordset,
-  });
-}
+        movimientos: revertidosResult.recordset,
+      });
+    }
 
     const motivoId = await getMotivoIdByNombreActivo(
       transaction,
@@ -5657,52 +5405,19 @@ if (revertidosResult.recordset.length) {
 
         for (const fuente of grupo.fuentes) {
           await new sql.Request(transaction)
-  .input(
-    "idReversion",
-    sql.Int,
-    idReversion,
-  )
-  .input(
-    "numeroAjuste",
-    sql.Int,
-    numeroAjuste,
-  )
-  .input(
-    "tipoOriginal",
-    sql.NVarChar(50),
-    fuente.tipo_original,
-  )
-  .input(
-    "numeroOriginal",
-    sql.NVarChar(50),
-    fuente.numero_original,
-  )
-  .input(
-    "deposito",
-    sql.NVarChar(255),
-    fuente.deposito,
-  )
-  .input(
-    "codigo",
-    sql.NVarChar(100),
-    fuente.codigo,
-  )
-  .input(
-    "cantidadOriginal",
-    sql.Int,
-    fuente.cantidad_original,
-  )
-  .input(
-    "cantidadReversion",
-    sql.Int,
-    fuente.cantidad_reversion,
-  )
-  .input(
-    "idMovimientoOriginal",
-    sql.NVarChar(600),
-    fuente.id_movimiento_original,
-  )
-  .query(`
+            .input("idReversion", sql.Int, idReversion)
+            .input("numeroAjuste", sql.Int, numeroAjuste)
+            .input("tipoOriginal", sql.NVarChar(50), fuente.tipo_original)
+            .input("numeroOriginal", sql.NVarChar(50), fuente.numero_original)
+            .input("deposito", sql.NVarChar(255), fuente.deposito)
+            .input("codigo", sql.NVarChar(100), fuente.codigo)
+            .input("cantidadOriginal", sql.Int, fuente.cantidad_original)
+            .input("cantidadReversion", sql.Int, fuente.cantidad_reversion)
+            .input(
+              "idMovimientoOriginal",
+              sql.NVarChar(600),
+              fuente.id_movimiento_original,
+            ).query(`
     INSERT INTO dbo.ajustes_reversiones_detalles
     (
       id_reversion,
@@ -5778,7 +5493,9 @@ if (revertidosResult.recordset.length) {
 
 exports.getStockArticuloUbicaciones = async (req, res) => {
   try {
-    const codigo = String(req.query?.codigo || "").trim().toUpperCase();
+    const codigo = String(req.query?.codigo || "")
+      .trim()
+      .toUpperCase();
 
     const depositoId = asInt(req.query?.deposito_id);
 
@@ -5805,8 +5522,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
 
     if (
       ubicacionSolicitada !== null &&
-      (!Number.isInteger(ubicacionSolicitada) ||
-        ubicacionSolicitada <= 0)
+      (!Number.isInteger(ubicacionSolicitada) || ubicacionSolicitada <= 0)
     ) {
       return res.status(400).json({
         error: "La ubicación indicada no es válida.",
@@ -5819,8 +5535,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
     // Buscar artículo
     const articuloResult = await pool
       .request()
-      .input("codigo", sql.VarChar(100), codigo)
-      .query(`
+      .input("codigo", sql.VarChar(100), codigo).query(`
         SELECT TOP 1
           id_articulo,
           codigo,
@@ -5841,8 +5556,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
     // Verificar depósito
     const depositoResult = await pool
       .request()
-      .input("depositoId", sql.Int, depositoId)
-      .query(`
+      .input("depositoId", sql.Int, depositoId).query(`
         SELECT TOP 1
           id_deposito,
           nombre
@@ -5861,8 +5575,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
     const ubicacionesResult = await pool
       .request()
       .input("depositoId", sql.Int, depositoId)
-      .input("articuloId", sql.Int, articuloId)
-      .query(`
+      .input("articuloId", sql.Int, articuloId).query(`
         SELECT
           u.id_ubicacion,
           u.nombre,
@@ -5904,7 +5617,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
         id_ubicacion: Number(ubicacion.id_ubicacion),
         nombre: String(ubicacion.nombre || ""),
         stock_ubicacion: Number(ubicacion.stock_ubicacion || 0),
-      })
+      }),
     );
 
     if (!ubicaciones.length) {
@@ -5917,8 +5630,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
     const stockDepositoResult = await pool
       .request()
       .input("depositoId", sql.Int, depositoId)
-      .input("articuloId", sql.Int, articuloId)
-      .query(`
+      .input("articuloId", sql.Int, articuloId).query(`
         SELECT
           CAST(ISNULL(SUM(cantidad), 0) AS DECIMAL(18, 2))
             AS stock_deposito
@@ -5928,14 +5640,13 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
       `);
 
     const stockDeposito = Number(
-      stockDepositoResult.recordset?.[0]?.stock_deposito || 0
+      stockDepositoResult.recordset?.[0]?.stock_deposito || 0,
     );
 
     // Stock total del artículo en todos los depósitos
     const stockTotalResult = await pool
       .request()
-      .input("articuloId", sql.Int, articuloId)
-      .query(`
+      .input("articuloId", sql.Int, articuloId).query(`
         SELECT
           CAST(ISNULL(SUM(cantidad), 0) AS DECIMAL(18, 2))
             AS stock_total
@@ -5944,7 +5655,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
       `);
 
     const stockTotal = Number(
-      stockTotalResult.recordset?.[0]?.stock_total || 0
+      stockTotalResult.recordset?.[0]?.stock_total || 0,
     );
 
     let ubicacionSeleccionada = null;
@@ -5954,8 +5665,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
     // Si el usuario cambió manualmente la ubicación, devolver exactamente el stock de esa ubicación
     if (ubicacionSolicitada !== null) {
       ubicacionSeleccionada = ubicaciones.find(
-        (ubicacion) =>
-          ubicacion.id_ubicacion === ubicacionSolicitada
+        (ubicacion) => ubicacion.id_ubicacion === ubicacionSolicitada,
       );
 
       if (!ubicacionSeleccionada) {
@@ -5965,14 +5675,13 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
       }
     } else {
       const stockMaximo = Math.max(
-        ...ubicaciones.map(
-          (ubicacion) => Number(ubicacion.stock_ubicacion || 0)
-        )
+        ...ubicaciones.map((ubicacion) =>
+          Number(ubicacion.stock_ubicacion || 0),
+        ),
       );
 
       const ubicacionesConMaximo = ubicaciones.filter(
-        (ubicacion) =>
-          Number(ubicacion.stock_ubicacion || 0) === stockMaximo
+        (ubicacion) => Number(ubicacion.stock_ubicacion || 0) === stockMaximo,
       );
 
       /*
@@ -5980,10 +5689,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
        * Si todas las ubicaciones tienen stock 0, se utiliza
        * GENERAL o la primera ubicación activa.
        */
-      if (
-        stockMaximo > 0 &&
-        ubicacionesConMaximo.length > 1
-      ) {
+      if (stockMaximo > 0 && ubicacionesConMaximo.length > 1) {
         empate = true;
         ubicacionesEmpatadas = ubicacionesConMaximo;
       } else if (stockMaximo > 0) {
@@ -5994,7 +5700,7 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
             (ubicacion) =>
               String(ubicacion.nombre || "")
                 .trim()
-                .toUpperCase() === "GENERAL"
+                .toUpperCase() === "GENERAL",
           ) || ubicaciones[0];
       }
     }
@@ -6006,24 +5712,18 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
       stock_deposito: stockDeposito,
       stock_total: stockTotal,
 
-      id_ubicacion:
-        ubicacionSeleccionada?.id_ubicacion ?? null,
+      id_ubicacion: ubicacionSeleccionada?.id_ubicacion ?? null,
 
-      ubicacion_nombre:
-        ubicacionSeleccionada?.nombre ?? "",
+      ubicacion_nombre: ubicacionSeleccionada?.nombre ?? "",
 
-      stock_ubicacion:
-        ubicacionSeleccionada?.stock_ubicacion ?? null,
+      stock_ubicacion: ubicacionSeleccionada?.stock_ubicacion ?? null,
 
       empate,
       ubicaciones_empatadas: ubicacionesEmpatadas,
       ubicaciones,
     });
   } catch (error) {
-    console.error(
-      "ajustes.getStockArticuloUbicaciones:",
-      error
-    );
+    console.error("ajustes.getStockArticuloUbicaciones:", error);
 
     return res.status(500).json({
       error: "Error al consultar el stock por ubicación.",
@@ -6031,7 +5731,6 @@ exports.getStockArticuloUbicaciones = async (req, res) => {
     });
   }
 };
-
 
 // ========================================================
 // OPCIONES DE CÓDIGOS CONCATENADOS DE STOCK RECORTES
@@ -6053,8 +5752,7 @@ exports.getOpcionesRecortes = async (req, res) => {
 
     const result = await pool
       .request()
-      .input("codigoBase", sql.VarChar(150), codigoBase)
-      .query(`
+      .input("codigoBase", sql.VarChar(150), codigoBase).query(`
         SELECT
           r.id_recorte,
           UPPER(LTRIM(RTRIM(r.codigo))) AS codigo,
@@ -6087,7 +5785,8 @@ exports.getOpcionesRecortes = async (req, res) => {
     console.error("getOpcionesRecortes:", error);
 
     return res.status(500).json({
-      error: "No se pudieron buscar los códigos concatenados de Stock Recortes.",
+      error:
+        "No se pudieron buscar los códigos concatenados de Stock Recortes.",
       detalle: error.message,
     });
   }

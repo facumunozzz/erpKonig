@@ -285,8 +285,8 @@
   border-left: 2px solid #7db9df !important;
 }
 
-.tabla-obras th:nth-child(n + 7):not(:last-child),
-.tabla-obras td:nth-child(n + 7):not(:last-child) {
+.tabla-obras th:nth-child(n + 8):not(:last-child),
+.tabla-obras td:nth-child(n + 8):not(:last-child) {
   width: 84px;
   min-width: 84px;
 }
