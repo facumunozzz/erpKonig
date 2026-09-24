@@ -369,6 +369,12 @@ function PlanificacionProduccion() {
   const [errorGeneral, setErrorGeneral] = useState("");
   const [errorTipos, setErrorTipos] = useState("");
 
+  // Consulta visible de HETMO. Se guarda junto con la planificación mensual.
+  const [consultaHetmoObraVersion, setConsultaHetmoObraVersion] = useState("");
+  const [consultaHetmoFase, setConsultaHetmoFase] = useState("");
+  const [consultaHetmoResultado, setConsultaHetmoResultado] = useState(null);
+  const [consultandoHetmo, setConsultandoHetmo] = useState(false);
+
   const [modalTiemposAbierto, setModalTiemposAbierto] = useState(false);
   const [modalTiposMaterialAbierto, setModalTiposMaterialAbierto] =
     useState(false);
@@ -456,9 +462,16 @@ function PlanificacionProduccion() {
       );
 
       if (!respuesta?.existe) {
+        setConsultaHetmoResultado(null);
+        setConsultaHetmoObraVersion("");
+        setConsultaHetmoFase("");
+
         const planificacionLegacy = obtenerPlanificacionLegacy(mes);
 
-        if (Array.isArray(planificacionLegacy) && planificacionLegacy.length > 0) {
+        if (
+          Array.isArray(planificacionLegacy) &&
+          planificacionLegacy.length > 0
+        ) {
           setObras(planificacionLegacy);
 
           return false;
@@ -477,6 +490,19 @@ function PlanificacionProduccion() {
         Array.isArray(respuesta.obras) && respuesta.obras.length > 0
           ? respuesta.obras
           : crearFilasIniciales(),
+      );
+
+      const consultaGuardada =
+        respuesta?.consultaHetmo && typeof respuesta.consultaHetmo === "object"
+          ? respuesta.consultaHetmo
+          : null;
+
+      setConsultaHetmoResultado(consultaGuardada);
+      setConsultaHetmoObraVersion(String(consultaGuardada?.obraVersion || ""));
+      setConsultaHetmoFase(
+        consultaGuardada?.fase === undefined || consultaGuardada?.fase === null
+          ? ""
+          : String(consultaGuardada.fase),
       );
 
       return true;
@@ -1125,6 +1151,71 @@ function PlanificacionProduccion() {
     }
   };
 
+  const registrarResultadoConsultaHetmo = (respuesta, obraVersion, fase) => {
+    const resultado = {
+      obraVersion: String(respuesta?.obraVersion || obraVersion || "")
+        .trim()
+        .replace(",", "."),
+      fase: Number(respuesta?.fase ?? fase),
+      fechaConsulta: new Date().toISOString(),
+      materialesHetmo: Array.isArray(respuesta?.materialesHetmo)
+        ? respuesta.materialesHetmo
+        : [],
+      mecanizadoHetmo: Array.isArray(respuesta?.mecanizadoHetmo)
+        ? respuesta.mecanizadoHetmo
+        : [],
+    };
+
+    setConsultaHetmoResultado(resultado);
+    setConsultaHetmoObraVersion(resultado.obraVersion);
+    setConsultaHetmoFase(
+      Number.isInteger(resultado.fase) ? String(resultado.fase) : "",
+    );
+  };
+
+  const consultarHetmoManual = async () => {
+    const obraVersion = String(consultaHetmoObraVersion || "")
+      .trim()
+      .replace(",", ".");
+    const fase = Number(String(consultaHetmoFase || "").trim());
+
+    if (!obraVersion || !obraVersion.includes(".")) {
+      window.alert(
+        "Ingrese Obra/Versión con el formato OBRA.VERSION, por ejemplo 12345.2.",
+      );
+      return;
+    }
+
+    if (!Number.isInteger(fase)) {
+      window.alert("La fase debe ser un número entero.");
+      return;
+    }
+
+    try {
+      setConsultandoHetmo(true);
+      setErrorGeneral("");
+
+      const respuesta = await solicitarJson(
+        `${API_PLANIFICACION}/calcular-materiales`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            obraVersion,
+            fase,
+          }),
+        },
+      );
+
+      registrarResultadoConsultaHetmo(respuesta, obraVersion, fase);
+    } catch (error) {
+      console.error("Error consultando materiales HETMO:", error);
+      setErrorGeneral(error.message);
+      window.alert(error.message);
+    } finally {
+      setConsultandoHetmo(false);
+    }
+  };
+
   const cargarOperacionesDeFila = async (filaOrigen) => {
     const obraVersion = String(filaOrigen.obra || "")
       .trim()
@@ -1182,6 +1273,8 @@ function PlanificacionProduccion() {
           }),
         },
       );
+
+      registrarResultadoConsultaHetmo(respuesta, obraVersion, fase);
 
       const operacionesRespuesta = Array.isArray(respuesta?.operaciones)
         ? respuesta.operaciones.filter((operacion) =>
@@ -1277,6 +1370,10 @@ function PlanificacionProduccion() {
       setExportandoOrdenes(true);
       setErrorGeneral("");
 
+      // ============================================================
+      // 1. ARMAR LAS OT DESDE LA PLANIFICACIÓN
+      // ============================================================
+
       const agrupadas = new Map();
 
       for (const obra of obras) {
@@ -1285,6 +1382,7 @@ function PlanificacionProduccion() {
           .replace(",", ".");
 
         const fase = Number(obra.fase);
+
         const sector = sectoresPorId[String(obra.sectorId)];
 
         for (const [fecha, cantidadRaw] of Object.entries(
@@ -1316,7 +1414,11 @@ function PlanificacionProduccion() {
             );
           }
 
-          const clave = `${fecha}|${obraVersion.toUpperCase()}|${fase}|${sector.id}`;
+          const clave =
+            `${fecha}|` +
+            `${obraVersion.toUpperCase()}|` +
+            `${fase}|` +
+            `${sector.id}`;
 
           const actual = agrupadas.get(clave) || {
             fecha_planificada: fecha,
@@ -1328,6 +1430,7 @@ function PlanificacionProduccion() {
           };
 
           actual.cantidad_pedida += cantidad;
+
           agrupadas.set(clave, actual);
         }
       }
@@ -1341,11 +1444,11 @@ function PlanificacionProduccion() {
         return;
       }
 
-      /*
-       * La planificación actualmente vive en el frontend.
-       * Para obtener materiales usamos la misma API que ya utiliza
-       * el botón Cargar, una sola vez por Obra/Versión + Fase.
-       */
+      // ============================================================
+      // 2. CONSULTAR HETMO
+      //    Una sola vez por Obra/Versión + Fase
+      // ============================================================
+
       const calculosPorObraFase = new Map();
 
       const clavesCalculo = [
@@ -1359,12 +1462,14 @@ function PlanificacionProduccion() {
       await Promise.all(
         clavesCalculo.map(async (clave) => {
           const [obraVersion, faseTexto] = clave.split("|");
+
           const fase = Number(faseTexto);
 
           const respuesta = await solicitarJson(
             `${API_PLANIFICACION}/calcular-materiales`,
             {
               method: "POST",
+
               body: JSON.stringify({
                 obraVersion,
                 fase,
@@ -1376,55 +1481,72 @@ function PlanificacionProduccion() {
         }),
       );
 
+      // ============================================================
+      // 3. ASIGNAR LOS MATERIALES A CADA OT
+      //
+      // IMPORTANTE:
+      // YA NO SE PRORRATEA LA CANTIDAD HETMO.
+      //
+      // material.cantidad contiene directamente UDS de HETMO.
+      // ============================================================
+
       const ordenesConMateriales = ordenesBase.map((orden) => {
         const clave = `${orden.obra_version.toUpperCase()}|${orden.fase}`;
 
         const calculo = calculosPorObraFase.get(clave) || {};
 
-        const operacionCalculada = Array.isArray(calculo.operaciones)
-          ? calculo.operaciones.find(
-              (operacion) =>
-                Number(operacion.id_operacion) === Number(orden.id_operacion),
-            )
-          : null;
-
-        const cantidadOperacionCompleta = convertirNumero(
-          operacionCalculada?.cantidad,
-        );
-
-        /*
-         * Si se planificó sólo una parte de la operación para ese día,
-         * los materiales se prorratean en la misma proporción.
-         */
-        const proporcion =
-          cantidadOperacionCompleta > 0
-            ? orden.cantidad_pedida / cantidadOperacionCompleta
-            : 1;
-
         const materiales = Array.isArray(calculo.materiales)
           ? calculo.materiales
               .filter((material) => {
+                // --------------------------------------------
+                // Material excluido manualmente
+                // --------------------------------------------
+
                 if (material?.excluido) {
                   return false;
                 }
 
-                return Array.isArray(material?.operaciones)
-                  ? material.operaciones.some(
-                      (operacionMaterial) =>
-                        Number(operacionMaterial.id_operacion) ===
-                        Number(orden.id_operacion),
-                    )
-                  : false;
+                // --------------------------------------------
+                // Solamente materiales correspondientes
+                // a esta operación
+                // --------------------------------------------
+
+                if (!Array.isArray(material?.operaciones)) {
+                  return false;
+                }
+
+                return material.operaciones.some(
+                  (operacionMaterial) =>
+                    Number(operacionMaterial.id_operacion) ===
+                    Number(orden.id_operacion),
+                );
               })
-              .map((material) => ({
-                id_articulo: Number(material.id_articulo) || null,
-                codigo: material.codigo || "",
-                descripcion: material.descripcion || "",
-                tipo: material.tipo || "",
-                cantidad: Number(
-                  (convertirNumero(material.cantidad) * proporcion).toFixed(4),
-                ),
-              }))
+
+              .map((material) => {
+                /*
+                 * IMPORTANTE
+                 *
+                 * Esta es directamente la cantidad calculada
+                 * desde fila.UDS de HETMO.
+                 *
+                 * NO se multiplica por ninguna proporción.
+                 */
+
+                const cantidadHetmo = convertirNumero(material.cantidad);
+
+                return {
+                  id_articulo: Number(material.id_articulo) || null,
+
+                  codigo: material.codigo || "",
+
+                  descripcion: material.descripcion || "",
+
+                  tipo: material.tipo || "",
+
+                  cantidad: Number(cantidadHetmo.toFixed(4)),
+                };
+              })
+
               .filter(
                 (material) =>
                   Number.isFinite(material.cantidad) && material.cantidad > 0,
@@ -1433,14 +1555,49 @@ function PlanificacionProduccion() {
 
         return {
           ...orden,
+
           cantidad_pedida: Number(orden.cantidad_pedida.toFixed(4)),
+
           materiales,
         };
       });
 
+      // ============================================================
+      // 4. DEBUG
+      //
+      // Esto nos permite ver exactamente qué estamos mandando
+      // al backend antes de crear las OT.
+      // ============================================================
+
+      console.log("ORDENES A EXPORTAR:", ordenesConMateriales);
+
+      for (const orden of ordenesConMateriales) {
+        console.log(
+          "OT:",
+          orden.obra_version,
+          orden.fase,
+          orden.operacion,
+          orden.fecha_planificada,
+          "Cantidad OT:",
+          orden.cantidad_pedida,
+          "Materiales:",
+          orden.materiales,
+        );
+      }
+
+      // ============================================================
+      // 5. EXPORTAR
+      // ============================================================
+
       const resultado = await solicitarJson("/api/ordenes-trabajo/exportar", {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+
+        headers: token
+          ? {
+              Authorization: `Bearer ${token}`,
+            }
+          : {},
+
         body: JSON.stringify({
           fecha_inicio: fechaInicioExportar,
           fecha_fin: fechaFinExportar,
@@ -1460,6 +1617,7 @@ function PlanificacionProduccion() {
       console.error("Error exportando órdenes de trabajo:", error);
 
       setErrorGeneral(error.message);
+
       window.alert(error.message);
     } finally {
       setExportandoOrdenes(false);
@@ -1483,6 +1641,7 @@ function PlanificacionProduccion() {
           body: JSON.stringify({
             mes: mesSeleccionado,
             obras,
+            consultaHetmo: consultaHetmoResultado,
           }),
         },
       );
@@ -1676,10 +1835,7 @@ function PlanificacionProduccion() {
           </button>
         </div>
 
-        <div
-          className="planificacion-scroll"
-          style={estiloScrollTablaObras}
-        >
+        <div className="planificacion-scroll" style={estiloScrollTablaObras}>
           <table
             className="tabla-planificacion tabla-obras"
             onKeyDown={manejarEnterTablaObras}
@@ -1777,10 +1933,7 @@ function PlanificacionProduccion() {
                     </button>
                   </td>
 
-                  <td
-                    className="columna-fija-obra"
-                    style={estiloCeldaObra}
-                  >
+                  <td className="columna-fija-obra" style={estiloCeldaObra}>
                     <input
                       type="text"
                       value={obra.obra}
@@ -1818,7 +1971,6 @@ function PlanificacionProduccion() {
                       ))}
                     </select>
                   </td>
-
 
                   <td>
                     <input
@@ -1868,7 +2020,6 @@ function PlanificacionProduccion() {
                       className="campo-calculado"
                     />
                   </td>
-
 
                   {diasHabiles.map((fecha, indice) => {
                     const claveFecha = crearClaveFecha(fecha);
@@ -1925,6 +2076,177 @@ function PlanificacionProduccion() {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="planificacion-bloque">
+        <div
+          style={{
+            display: "flex",
+            alignItems: "end",
+            gap: "12px",
+            flexWrap: "wrap",
+            marginBottom: "14px",
+          }}
+        >
+          <label
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "5px",
+              minWidth: "220px",
+            }}
+          >
+            <span style={{ fontWeight: 600 }}>Obra/Versión HETMO</span>
+            <input
+              type="text"
+              value={consultaHetmoObraVersion}
+              placeholder="Ej. 12345.2"
+              onChange={(event) =>
+                setConsultaHetmoObraVersion(event.target.value)
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  consultarHetmoManual();
+                }
+              }}
+              disabled={consultandoHetmo}
+            />
+          </label>
+
+          <label
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "5px",
+              width: "110px",
+            }}
+          >
+            <span style={{ fontWeight: 600 }}>Fase</span>
+            <input
+              type="number"
+              step="1"
+              value={consultaHetmoFase}
+              placeholder="1"
+              onChange={(event) => setConsultaHetmoFase(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  consultarHetmoManual();
+                }
+              }}
+              disabled={consultandoHetmo}
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={consultarHetmoManual}
+            disabled={consultandoHetmo}
+          >
+            {consultandoHetmo ? "Consultando..." : "Consultar HETMO"}
+          </button>
+
+          {consultaHetmoResultado && (
+            <div style={{ fontSize: "0.9rem", color: "#475569" }}>
+              Última consulta: {consultaHetmoResultado.obraVersion} · Fase{" "}
+              {consultaHetmoResultado.fase}
+            </div>
+          )}
+        </div>
+
+        <h3 style={{ margin: "8px 0 10px" }}>Materiales HETMO</h3>
+
+        <div
+          className="planificacion-scroll"
+          style={{ maxHeight: "340px", overflow: "auto" }}
+        >
+          <table className="tabla-planificacion">
+            <thead>
+              <tr>
+                <th>Referencia</th>
+                <th>Descripción</th>
+                <th>UDS</th>
+                <th>Pedido mínimo</th>
+                <th>Acabado</th>
+                <th>Proveedor</th>
+                <th>UDS almacén</th>
+                <th>UDS faltan</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {!consultaHetmoResultado?.materialesHetmo?.length && (
+                <tr>
+                  <td colSpan={8} className="tabla-vacia">
+                    Ingrese Obra/Versión y Fase para consultar los materiales de
+                    HETMO.
+                  </td>
+                </tr>
+              )}
+
+              {(consultaHetmoResultado?.materialesHetmo || []).map(
+                (material, indice) => (
+                  <tr
+                    key={`${material.REFERENCIA || "material"}-${material.CODIGO_INTERNO || ""}-${indice}`}
+                  >
+                    <td>{material.REFERENCIA || ""}</td>
+                    <td>{material.DESCRIPCION || ""}</td>
+                    <td>{material.UDS ?? ""}</td>
+                    <td>{material.UDS_PEDIDO_MINIMO ?? ""}</td>
+                    <td>{material.ACABADO || ""}</td>
+                    <td>{material.PROVEEDOR || ""}</td>
+                    <td>{material.UDS_EN_ALMACEN ?? ""}</td>
+                    <td>{material.UDS_FALTAN ?? ""}</td>
+                  </tr>
+                ),
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style={{ margin: "22px 0 10px" }}>Mecanizado HETMO</h3>
+
+        <div
+          className="planificacion-scroll"
+          style={{ maxHeight: "340px", overflow: "auto" }}
+        >
+          <table className="tabla-planificacion">
+            <thead>
+              <tr>
+                <th>Código artículo</th>
+                <th>Descripción</th>
+                <th>Acabado</th>
+                <th>Nº cortes</th>
+                <th>Cant. barras</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {!consultaHetmoResultado?.mecanizadoHetmo?.length && (
+                <tr>
+                  <td colSpan={5} className="tabla-vacia">
+                    No hay datos de mecanizado para la consulta seleccionada.
+                  </td>
+                </tr>
+              )}
+
+              {(consultaHetmoResultado?.mecanizadoHetmo || []).map(
+                (material, indice) => (
+                  <tr
+                    key={`${material.COD_ART || "mecanizado"}-${material.ACABADO || ""}-${indice}`}
+                  >
+                    <td>{material.COD_ART || ""}</td>
+                    <td>{material.DESCRIPCION || ""}</td>
+                    <td>{material.ACABADO || ""}</td>
+                    <td>{material.RES_NUMERO_CORTES ?? ""}</td>
+                    <td>{material.CANT_BARRAS ?? ""}</td>
+                  </tr>
+                ),
+              )}
             </tbody>
           </table>
         </div>

@@ -1344,27 +1344,43 @@ exports.calcularMaterialesObra = async (req, res) => {
       });
 
     return res.json({
-      obraVersion,
-      obra: obraTexto,
-      version: versionTexto,
-      fase,
-      operaciones,
-      materiales: calculoGeneral.materiales,
-      mecanizado: detalleMecanizado,
-      materialesIgnorados: [
-        ...calculoGeneral.materialesIgnorados,
-        ...ignoradosMecanizado,
-      ],
-      materialesExcluidos: [
-        ...calculoGeneral.materialesExcluidos,
-        ...excluidosMecanizado,
-      ],
-      resumen: {
-        filasMaterialesHetmo: materialesHetmo.length,
-        filasMecanizadoHetmo: filasMecanizado.length,
-        operacionesGeneradas: operaciones.length,
-      },
-    });
+  obraVersion,
+  obra: obraTexto,
+  version: versionTexto,
+  fase,
+
+  // ==========================================================
+  // DATOS CRUDOS DEVUELTOS POR HETMO
+  // Se usan para mostrarlos debajo de la planificación.
+  // ==========================================================
+  materialesHetmo,
+  mecanizadoHetmo: filasMecanizado,
+
+  // ==========================================================
+  // DATOS PROCESADOS PARA PLANIFICACIÓN
+  // ==========================================================
+  operaciones,
+
+  materiales: calculoGeneral.materiales,
+
+  mecanizado: detalleMecanizado,
+
+  materialesIgnorados: [
+    ...calculoGeneral.materialesIgnorados,
+    ...ignoradosMecanizado,
+  ],
+
+  materialesExcluidos: [
+    ...calculoGeneral.materialesExcluidos,
+    ...excluidosMecanizado,
+  ],
+
+  resumen: {
+    filasMaterialesHetmo: materialesHetmo.length,
+    filasMecanizadoHetmo: filasMecanizado.length,
+    operacionesGeneradas: operaciones.length,
+  },
+});
   } catch (error) {
     console.error("calcularMaterialesObra:", error);
 
@@ -1419,34 +1435,61 @@ exports.getPlanificacionCompartida = async (req, res) => {
         existe: false,
         mes,
         obras: [],
+        consultaHetmo: null,
         usuario_modificacion: null,
         fecha_modificacion: null,
       });
     }
 
     const fila = result.recordset[0];
+
     let contenido = {};
 
     try {
-      contenido = JSON.parse(String(fila.contenido_json || "{}"));
+      contenido = JSON.parse(
+        String(fila.contenido_json || "{}")
+      );
     } catch {
       contenido = {};
     }
 
+    const consultaHetmo =
+      contenido?.consultaHetmo &&
+      typeof contenido.consultaHetmo === "object"
+        ? contenido.consultaHetmo
+        : null;
+
     return res.json({
       existe: true,
       mes: fila.mes,
-      obras: Array.isArray(contenido?.obras) ? contenido.obras : [],
-      usuario_creacion: fila.usuario_creacion || null,
-      fecha_creacion: fila.fecha_creacion || null,
-      usuario_modificacion: fila.usuario_modificacion || null,
-      fecha_modificacion: fila.fecha_modificacion || null,
+
+      obras: Array.isArray(contenido?.obras)
+        ? contenido.obras
+        : [],
+
+      consultaHetmo,
+
+      usuario_creacion:
+        fila.usuario_creacion || null,
+
+      fecha_creacion:
+        fila.fecha_creacion || null,
+
+      usuario_modificacion:
+        fila.usuario_modificacion || null,
+
+      fecha_modificacion:
+        fila.fecha_modificacion || null,
     });
   } catch (error) {
-    console.error("getPlanificacionCompartida:", error);
+    console.error(
+      "getPlanificacionCompartida:",
+      error
+    );
 
     return res.status(500).json({
-      error: "Error al obtener la planificación compartida",
+      error:
+        "Error al obtener la planificación compartida",
       detalle: error.message,
     });
   }
@@ -1455,23 +1498,37 @@ exports.getPlanificacionCompartida = async (req, res) => {
 exports.savePlanificacionCompartida = async (req, res) => {
   try {
     const mes = String(req.body?.mes || "").trim();
-    const obras = Array.isArray(req.body?.obras) ? req.body.obras : null;
+
+    const obras = Array.isArray(req.body?.obras)
+      ? req.body.obras
+      : null;
+
+    const consultaHetmo =
+      req.body?.consultaHetmo &&
+      typeof req.body.consultaHetmo === "object"
+        ? req.body.consultaHetmo
+        : null;
 
     if (!mesPlanificacionValido(mes)) {
       return res.status(400).json({
-        error: "Debe indicar un mes válido con formato AAAA-MM",
+        error:
+          "Debe indicar un mes válido con formato AAAA-MM",
       });
     }
 
     if (!obras) {
       return res.status(400).json({
-        error: "La planificación debe contener un arreglo de filas",
+        error:
+          "La planificación debe contener un arreglo de filas",
       });
     }
 
     const contenidoJson = JSON.stringify({
       mes,
       obras,
+
+      // Se guarda la última consulta visible de HETMO
+      consultaHetmo,
     });
 
     const usuario = usuarioAuditoria(req);
@@ -1482,19 +1539,31 @@ exports.savePlanificacionCompartida = async (req, res) => {
     const result = await pool
       .request()
       .input("mes", sql.Char(7), mes)
-      .input("contenido_json", sql.NVarChar(sql.MAX), contenidoJson)
-      .input("usuario", sql.NVarChar(150), usuario)
+      .input(
+        "contenido_json",
+        sql.NVarChar(sql.MAX),
+        contenidoJson
+      )
+      .input(
+        "usuario",
+        sql.NVarChar(150),
+        usuario
+      )
       .query(`
         MERGE dbo.planificacion_produccion_mensual AS destino
+
         USING (
           SELECT @mes AS mes
         ) AS origen
+
           ON destino.mes = origen.mes
+
         WHEN MATCHED THEN
           UPDATE SET
             contenido_json = @contenido_json,
             usuario_modificacion = @usuario,
             fecha_modificacion = SYSDATETIME()
+
         WHEN NOT MATCHED THEN
           INSERT (
             mes,
@@ -1521,14 +1590,21 @@ exports.savePlanificacionCompartida = async (req, res) => {
 
     return res.json({
       ok: true,
-      message: `Planificación ${mes} guardada para todos los usuarios`,
+
+      message:
+        `Planificación ${mes} guardada para todos los usuarios`,
+
       ...(result.recordset?.[0] || {}),
     });
   } catch (error) {
-    console.error("savePlanificacionCompartida:", error);
+    console.error(
+      "savePlanificacionCompartida:",
+      error
+    );
 
     return res.status(500).json({
-      error: "Error al guardar la planificación compartida",
+      error:
+        "Error al guardar la planificación compartida",
       detalle: error.message,
     });
   }
